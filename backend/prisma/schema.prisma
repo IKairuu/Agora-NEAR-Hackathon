@@ -1,0 +1,799 @@
+// Prisma schema for AGORA.
+// Docs: https://pris.ly/d/prisma-schema
+//
+// Connection URLs are NOT set here in Prisma 7:
+//   - the CLI (migrations) reads DIRECT_URL via prisma.config.ts
+//   - the app at runtime reads DATABASE_URL via PrismaService (src/prisma)
+//
+// Naming: models and fields are PascalCase / camelCase in TypeScript, but
+// @map / @@map keep the real Postgres names snake_case, matching the
+// Supabase SQL schema.
+//
+// What stays in raw SQL (Prisma cannot express it, so write it in a
+// migration file or the Supabase SQL editor):
+//   - Row Level Security policies on every table
+//   - triggers (e.g. updated_at, syncing on-chain copies)
+//   - the FK from profiles.id to auth.users(id) (auth schema is Supabase's)
+//   - the job_ref_seq sequence used by jobs.ref
+//   - jobs.search as a GENERATED tsvector column, and its GIN index
+//   - the pgvector extension and the index on jobs.embedding
+//   - CHECK constraints (ratings.stars 1-5, negotiation_messages.round 0-3)
+
+generator client {
+  provider     = "prisma-client"
+  // Generated inside src/ so Nest's build (rootDir: src) compiles it.
+  // This folder is gitignored; recreate it with `npm run prisma:generate`.
+  output       = "../src/generated/prisma"
+  moduleFormat = "cjs"
+}
+
+datasource db {
+  provider = "postgresql"
+  // job_limits lives in the `private` schema, so Prisma needs to know about
+  // both. Every model must then say which schema it belongs to (@@schema).
+  schemas  = ["public", "private"]
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Enums
+// ─────────────────────────────────────────────────────────────────────────
+
+enum PartyKind {
+  human
+  agent
+
+  @@map("party_kind")
+  @@schema("public")
+}
+
+enum AgentRole {
+  spec_writer
+  buyer
+  bidding
+  transaction
+  guardian
+  reviewer
+  fraud_lure
+  price_check
+
+  @@map("agent_role")
+  @@schema("public")
+}
+
+enum AgentStatus {
+  active
+  paused
+  revoked
+
+  @@map("agent_status")
+  @@schema("public")
+}
+
+enum JobStatus {
+  draft
+  open
+  negotiating
+  funded
+  in_progress
+  settled
+  refunded
+  disputed
+  cancelled
+
+  @@map("job_status")
+  @@schema("public")
+}
+
+enum BidStatus {
+  pending_check
+  live
+  held
+  shortlisted
+  accepted
+  rejected
+  withdrawn
+
+  @@map("bid_status")
+  @@schema("public")
+}
+
+enum PriceCheckResult {
+  cleared
+  held
+  unverified
+
+  @@map("price_check_result")
+  @@schema("public")
+}
+
+enum MilestoneStatus {
+  pending
+  funded
+  delivered
+  in_review
+  released
+  disputed
+  refunded
+  split
+
+  @@map("milestone_status")
+  @@schema("public")
+}
+
+enum ReleaseReason {
+  two_approvals
+  timeout_no_votes
+  dao_ruling
+
+  @@map("release_reason")
+  @@schema("public")
+}
+
+enum DeliveryStatus {
+  submitted
+  reviewing
+  approved
+  rejected
+
+  @@map("delivery_status")
+  @@schema("public")
+}
+
+enum CheckWeight {
+  required
+  advisory
+
+  @@map("check_weight")
+  @@schema("public")
+}
+
+enum DisputeStatus {
+  open
+  voting
+  resolved
+
+  @@map("dispute_status")
+  @@schema("public")
+}
+
+enum DisputeRuling {
+  release
+  refund
+  split
+
+  @@map("dispute_ruling")
+  @@schema("public")
+}
+
+enum EventSeverity {
+  info
+  ok
+  hold
+  block
+
+  @@map("event_severity")
+  @@schema("public")
+}
+
+enum TxStatus {
+  pending
+  success
+  rejected
+
+  @@map("tx_status")
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 1. Identity
+// ─────────────────────────────────────────────────────────────────────────
+
+model Category {
+  slug    String  @id
+  name    String
+  enabled Boolean @default(true)
+
+  jobs Job[]
+
+  @@map("categories")
+  @@schema("public")
+}
+
+/// One row per Supabase auth user. `id` equals auth.users.id; that FK is
+/// added in raw SQL because Prisma does not manage the auth schema.
+model Profile {
+  id              String  @id @db.Uuid
+  displayName     String? @map("display_name")
+  nearAccountId   String? @unique @map("near_account_id")
+  agentsAccountId String? @unique @map("agents_account_id")
+  isBusiness      Boolean @default(false) @map("is_business")
+  location        String?
+  bio             String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  agents          Agent[]
+  sellers         Seller[]
+  mandate         Mandate?
+  approvedSellers ApprovedSeller[]
+  balances        Balance[]
+  jobsPosted      Job[]
+  ratingsGiven    Rating[]
+  chainTxs        ChainTx[]
+  agentEvents     AgentEvent[]
+  guardianAlerts  GuardianAlert[]
+  disputesOpened  Dispute[]
+
+  @@map("profiles")
+  @@schema("public")
+}
+
+/// An AI agent with its own NEAR access key. owner_id null = shared/platform agent.
+model Agent {
+  id             String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId        String?     @map("owner_id") @db.Uuid
+  role           AgentRole
+  label          String
+  nearAccountId  String      @map("near_account_id")
+  publicKey      String?     @map("public_key")
+  allowedMethods String[]    @default([]) @map("allowed_methods")
+  model          String?
+  n8nWorkflowId  String?     @map("n8n_workflow_id")
+  status         AgentStatus @default(active)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  owner               Profile?             @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  sellers             Seller[]
+  bidsPlaced          Bid[]
+  riskAssessments     RiskAssessment[]
+  negotiationMessages NegotiationMessage[]
+  reviewerVotes       ReviewerVote[]
+  events              AgentEvent[]
+
+  @@index([ownerId])
+  @@map("agents")
+  @@schema("public")
+}
+
+/// Someone who takes jobs: a human, or an agent acting as a seller.
+model Seller {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId           String    @map("owner_id") @db.Uuid
+  kind              PartyKind
+  agentId           String?   @map("agent_id") @db.Uuid
+  nearAccountId     String    @unique @map("near_account_id")
+  displayName       String    @map("display_name")
+  headline          String?
+  skills            String[]  @default([])
+  /// Category slugs. Plain array, so no FK to categories.
+  categories        String[]  @default([])
+  priceFloor        Decimal?  @map("price_floor") @db.Decimal(20, 6)
+  maxConcurrentJobs Int       @default(1) @map("max_concurrent_jobs")
+  deliveryTerms     String?   @map("delivery_terms")
+  payoutChain       String?   @map("payout_chain")
+  payoutAddress     String?   @map("payout_address")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  owner             Profile            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  agent             Agent?             @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  approvedBy        ApprovedSeller[]
+  jobsWon           Job[]
+  bids              Bid[]
+  deliveries        Delivery[]
+  completionRecords CompletionRecord[]
+
+  @@index([ownerId])
+  @@map("sellers")
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 2. Copies of on-chain data (the contract is the source of truth;
+//    these rows are synced by the indexer)
+// ─────────────────────────────────────────────────────────────────────────
+
+/// A buyer's spending rules, mirrored from the contract.
+model Mandate {
+  ownerId           String    @id @map("owner_id") @db.Uuid
+  perJobCap         Decimal   @map("per_job_cap") @db.Decimal(20, 6)
+  dailyCap          Decimal   @map("daily_cap") @db.Decimal(20, 6)
+  newSellerCap      Decimal   @map("new_seller_cap") @db.Decimal(20, 6)
+  reviewWindowHours Int       @map("review_window_hours")
+  allowedCategories String[]  @default([]) @map("allowed_categories")
+  strictSellers     Boolean   @default(false) @map("strict_sellers")
+  paused            Boolean   @default(false)
+  pausedBy          String?   @map("paused_by")
+  pausedAt          DateTime? @map("paused_at") @db.Timestamptz(6)
+  lastTxHash        String?   @map("last_tx_hash")
+  syncedAt          DateTime? @map("synced_at") @db.Timestamptz(6)
+
+  owner Profile @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@map("mandates")
+  @@schema("public")
+}
+
+/// Sellers a buyer has allow-listed (used when strict_sellers is on).
+model ApprovedSeller {
+  ownerId  String    @map("owner_id") @db.Uuid
+  sellerId String    @map("seller_id") @db.Uuid
+  addedTx  String?   @map("added_tx")
+  addedAt  DateTime? @map("added_at") @db.Timestamptz(6)
+
+  owner  Profile @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  seller Seller  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@id([ownerId, sellerId])
+  @@map("approved_sellers")
+  @@schema("public")
+}
+
+/// USDC balance per NEAR account.
+model Balance {
+  accountId  String    @id @map("account_id")
+  profileId  String?   @map("profile_id") @db.Uuid
+  available  Decimal   @default(0) @db.Decimal(20, 6)
+  escrowed   Decimal   @default(0) @db.Decimal(20, 6)
+  spentToday Decimal   @default(0) @map("spent_today") @db.Decimal(20, 6)
+  dayStarted DateTime? @map("day_started") @db.Timestamptz(6)
+  syncedAt   DateTime? @map("synced_at") @db.Timestamptz(6)
+
+  profile Profile? @relation(fields: [profileId], references: [id], onDelete: SetNull)
+
+  @@index([profileId])
+  @@map("balances")
+  @@schema("public")
+}
+
+/// Seller reputation per NEAR account.
+model Reputation {
+  accountId        String    @id @map("account_id")
+  settledJobs      Int       @default(0) @map("settled_jobs")
+  refundedJobs     Int       @default(0) @map("refunded_jobs")
+  disputedJobs     Int       @default(0) @map("disputed_jobs")
+  settledVolume    Decimal   @default(0) @map("settled_volume") @db.Decimal(20, 6)
+  distinctBuyers   Int       @default(0) @map("distinct_buyers")
+  firstTryPassRate Decimal?  @map("first_try_pass_rate") @db.Decimal(5, 2)
+  syncedAt         DateTime? @map("synced_at") @db.Timestamptz(6)
+
+  @@map("reputation")
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 3. Jobs
+// ─────────────────────────────────────────────────────────────────────────
+
+model Job {
+  id              String                       @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  /// Human-friendly ref like J-1000. job_ref_seq is created in raw SQL.
+  ref             String                       @unique @default(dbgenerated("('J-'::text || nextval('job_ref_seq'::regclass))"))
+  onchainId       BigInt?                      @unique @map("onchain_id")
+  buyerId         String                       @map("buyer_id") @db.Uuid
+  title           String
+  description     String
+  category        String
+  repoUrl         String?                      @map("repo_url")
+  baseCommit      String?                      @map("base_commit")
+  budgetLabel     String?                      @map("budget_label")
+  budgetMaxPublic Decimal?                     @map("budget_max_public") @db.Decimal(20, 6)
+  /// Postgres interval (e.g. '3 days'). Unsupported: write it with $executeRaw.
+  deliverWithin   Unsupported("interval")?     @map("deliver_within")
+  status          JobStatus                    @default(draft)
+  acceptedBidId   String?                      @unique @map("accepted_bid_id") @db.Uuid
+  sellerId        String?                      @map("seller_id") @db.Uuid
+  agreedPrice     Decimal?                     @map("agreed_price") @db.Decimal(20, 6)
+  postedTx        String?                      @map("posted_tx")
+  postedAt        DateTime?                    @map("posted_at") @db.Timestamptz(6)
+  /// GENERATED tsvector column (full-text search). Defined in raw SQL;
+  /// Prisma can't read or write it, it's only listed so migrations keep it.
+  search          Unsupported("tsvector")?
+  /// pgvector embedding for semantic search. Query it with $queryRaw.
+  embedding       Unsupported("vector(1536)")?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  buyer               Profile              @relation(fields: [buyerId], references: [id], onDelete: Cascade)
+  categoryRef         Category             @relation(fields: [category], references: [slug])
+  seller              Seller?              @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+  // Job <-> Bid has two relations (all bids vs. the accepted one), so each
+  // needs a name to tell them apart.
+  acceptedBid         Bid?                 @relation("JobAcceptedBid", fields: [acceptedBidId], references: [id], onDelete: SetNull)
+  bids                Bid[]                @relation("JobBids")
+  limits              JobLimit?
+  acceptanceSpecs     AcceptanceSpec[]
+  negotiationMessages NegotiationMessage[]
+  milestones          Milestone[]
+  ratings             Rating[]
+  completionRecords   CompletionRecord[]
+  chainTxs            ChainTx[]
+  agentEvents         AgentEvent[]
+
+  @@index([buyerId])
+  @@index([status])
+  @@index([category])
+  @@map("jobs")
+  @@schema("public")
+}
+
+/// The buyer's private max price, encrypted. Lives in the `private` schema
+/// so it is never exposed through Supabase's public API.
+model JobLimit {
+  jobId              String @id @map("job_id") @db.Uuid
+  maxPriceCiphertext String @map("max_price_ciphertext")
+  keyRef             String @map("key_ref")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@map("job_limits")
+  @@schema("private")
+}
+
+/// Versioned acceptance tests for a job. Locked once funded.
+model AcceptanceSpec {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId        String    @map("job_id") @db.Uuid
+  version      Int       @default(1)
+  testCommand  String    @map("test_command")
+  buildCommand String?   @map("build_command")
+  failingTests String[]  @default([]) @map("failing_tests")
+  allowedPaths String[]  @default([]) @map("allowed_paths")
+  testFiles    Json?     @map("test_files") @db.JsonB
+  specHash     String?   @map("spec_hash")
+  approvedAt   DateTime? @map("approved_at") @db.Timestamptz(6)
+  lockedAt     DateTime? @map("locked_at") @db.Timestamptz(6)
+  lockTx       String?   @map("lock_tx")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job    Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  checks SpecCheck[]
+
+  @@unique([jobId, version])
+  @@map("acceptance_specs")
+  @@schema("public")
+}
+
+model SpecCheck {
+  id          String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  specId      String      @map("spec_id") @db.Uuid
+  position    Int         @db.SmallInt
+  name        String
+  howVerified String      @map("how_verified")
+  weight      CheckWeight @default(required)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  spec AcceptanceSpec @relation(fields: [specId], references: [id], onDelete: Cascade)
+
+  @@unique([specId, position])
+  @@map("spec_checks")
+  @@schema("public")
+}
+
+model Bid {
+  id                  String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId               String                   @map("job_id") @db.Uuid
+  sellerId            String                   @map("seller_id") @db.Uuid
+  placedByAgentId     String?                  @map("placed_by_agent_id") @db.Uuid
+  price               Decimal                  @db.Decimal(20, 6)
+  /// Postgres interval. Unsupported: write it with $executeRaw.
+  deliveryEta         Unsupported("interval")? @map("delivery_eta")
+  note                String?
+  proposedMilestones  Json?                    @map("proposed_milestones") @db.JsonB
+  status              BidStatus                @default(pending_check)
+  priceCheck          PriceCheckResult?        @map("price_check")
+  referenceMedian     Decimal?                 @map("reference_median") @db.Decimal(20, 6)
+  referenceSampleSize Int?                     @map("reference_sample_size")
+  fraudScore          Int?                     @map("fraud_score") @db.SmallInt
+  holdReason          String?                  @map("hold_reason")
+  sellerExplanation   String?                  @map("seller_explanation")
+  ownerApprovedRisk   Boolean                  @default(false) @map("owner_approved_risk")
+  onchainTx           String?                  @map("onchain_tx")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  job                 Job                  @relation("JobBids", fields: [jobId], references: [id], onDelete: Cascade)
+  acceptedFor         Job?                 @relation("JobAcceptedBid")
+  seller              Seller               @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  placedByAgent       Agent?               @relation(fields: [placedByAgentId], references: [id], onDelete: SetNull)
+  negotiationMessages NegotiationMessage[]
+
+  @@unique([jobId, sellerId])
+  @@index([sellerId])
+  @@map("bids")
+  @@schema("public")
+}
+
+/// Fraud/risk score for any subject (bid, seller, job...). Polymorphic, so
+/// subject_id has no FK.
+model RiskAssessment {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  subjectType String  @map("subject_type")
+  subjectId   String  @map("subject_id")
+  score       Int     @db.SmallInt
+  reasons     Json?   @db.JsonB
+  agentId     String? @map("agent_id") @db.Uuid
+  flagTx      String? @map("flag_tx")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  agent Agent? @relation(fields: [agentId], references: [id], onDelete: SetNull)
+
+  @@index([subjectType, subjectId])
+  @@map("risk_assessments")
+  @@schema("public")
+}
+
+/// Buyer/seller agent negotiation, max 3 rounds after the opening bid.
+model NegotiationMessage {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId         String   @map("job_id") @db.Uuid
+  bidId         String?  @map("bid_id") @db.Uuid
+  /// 0 to 3 (CHECK constraint in raw SQL)
+  round         Int      @db.SmallInt
+  sender        String
+  senderAgentId String?  @map("sender_agent_id") @db.Uuid
+  body          String
+  offeredPrice  Decimal? @map("offered_price") @db.Decimal(20, 6)
+  attestation   String?
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job         Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  bid         Bid?   @relation(fields: [bidId], references: [id], onDelete: Cascade)
+  senderAgent Agent? @relation(fields: [senderAgentId], references: [id], onDelete: SetNull)
+
+  @@index([jobId])
+  @@index([bidId])
+  @@map("negotiation_messages")
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 4. Escrow and review
+// ─────────────────────────────────────────────────────────────────────────
+
+model Milestone {
+  id             String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId          String          @map("job_id") @db.Uuid
+  idx            Int             @db.SmallInt
+  amount         Decimal         @db.Decimal(20, 6)
+  description    String?
+  status         MilestoneStatus @default(pending)
+  fundedTx       String?         @map("funded_tx")
+  fundedAt       DateTime?       @map("funded_at") @db.Timestamptz(6)
+  reviewDeadline DateTime?       @map("review_deadline") @db.Timestamptz(6)
+  releaseReason  ReleaseReason?  @map("release_reason")
+  releasedTx     String?         @map("released_tx")
+  releasedAt     DateTime?       @map("released_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job        Job        @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  deliveries Delivery[]
+  disputes   Dispute[]
+
+  @@unique([jobId, idx])
+  @@map("milestones")
+  @@schema("public")
+}
+
+model Delivery {
+  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  milestoneId String         @map("milestone_id") @db.Uuid
+  attempt     Int            @default(1) @db.SmallInt
+  sellerId    String         @map("seller_id") @db.Uuid
+  commitSha   String         @map("commit_sha")
+  repoUrl     String         @map("repo_url")
+  status      DeliveryStatus @default(submitted)
+  diffStats   Json?          @map("diff_stats") @db.JsonB
+  submitTx    String?        @map("submit_tx")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  milestone Milestone      @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  seller    Seller         @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  votes     ReviewerVote[]
+
+  @@unique([milestoneId, attempt])
+  @@map("deliveries")
+  @@schema("public")
+}
+
+/// One reviewer agent's verdict on a delivery (two approvals release funds).
+model ReviewerVote {
+  id              String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deliveryId      String  @map("delivery_id") @db.Uuid
+  reviewerAgentId String  @map("reviewer_agent_id") @db.Uuid
+  approve         Boolean
+  checkResults    Json?   @map("check_results") @db.JsonB
+  logHash         String? @map("log_hash")
+  logPath         String? @map("log_path")
+  attestationHash String? @map("attestation_hash")
+  model           String?
+  durationMs      Int?    @map("duration_ms")
+  voteTx          String? @map("vote_tx")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  delivery      Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  reviewerAgent Agent    @relation(fields: [reviewerAgentId], references: [id])
+
+  @@unique([deliveryId, reviewerAgentId])
+  @@map("reviewer_votes")
+  @@schema("public")
+}
+
+model Dispute {
+  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  milestoneId   String         @map("milestone_id") @db.Uuid
+  openedBy      String         @map("opened_by") @db.Uuid
+  reason        String
+  status        DisputeStatus  @default(open)
+  evidenceHash  String?        @map("evidence_hash")
+  daoProposalId BigInt?        @map("dao_proposal_id")
+  ruling        DisputeRuling?
+  sellerAmount  Decimal?       @map("seller_amount") @db.Decimal(20, 6)
+  buyerAmount   Decimal?       @map("buyer_amount") @db.Decimal(20, 6)
+  resolveTx     String?        @map("resolve_tx")
+  openedAt      DateTime       @default(now()) @map("opened_at") @db.Timestamptz(6)
+  resolvedAt    DateTime?      @map("resolved_at") @db.Timestamptz(6)
+
+  milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  opener    Profile   @relation(fields: [openedBy], references: [id])
+
+  @@index([milestoneId])
+  @@map("disputes")
+  @@schema("public")
+}
+
+model Rating {
+  id           String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId        String  @map("job_id") @db.Uuid
+  raterId      String  @map("rater_id") @db.Uuid
+  rateeAccount String  @map("ratee_account")
+  /// 1 to 5 (CHECK constraint in raw SQL)
+  stars        Int     @db.SmallInt
+  comment      String?
+  ratingTx     String? @map("rating_tx")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  job   Job     @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  rater Profile @relation(fields: [raterId], references: [id], onDelete: Cascade)
+
+  @@unique([jobId, raterId])
+  @@map("ratings")
+  @@schema("public")
+}
+
+/// NFT minted when a job settles.
+model CompletionRecord {
+  tokenId  String    @id @map("token_id")
+  jobId    String    @map("job_id") @db.Uuid
+  sellerId String    @map("seller_id") @db.Uuid
+  amount   Decimal   @db.Decimal(20, 6)
+  mintTx   String?   @map("mint_tx")
+  mintedAt DateTime? @map("minted_at") @db.Timestamptz(6)
+
+  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([sellerId])
+  @@map("completion_records")
+  @@schema("public")
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// 5. Monitoring
+// ─────────────────────────────────────────────────────────────────────────
+
+/// Every NEAR transaction the platform sends or sees.
+model ChainTx {
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  txHash          String?  @unique @map("tx_hash")
+  blockHeight     BigInt?  @map("block_height")
+  ownerId         String?  @map("owner_id") @db.Uuid
+  signerAccount   String   @map("signer_account")
+  signerPublicKey String?  @map("signer_public_key")
+  method          String
+  args            Json?    @db.JsonB
+  amount          Decimal? @db.Decimal(20, 6)
+  jobId           String?  @map("job_id") @db.Uuid
+  status          TxStatus @default(pending)
+  error           String?
+  rejectedBy      String?  @map("rejected_by")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  owner Profile? @relation(fields: [ownerId], references: [id], onDelete: SetNull)
+  job   Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId])
+  @@index([jobId])
+  @@map("chain_txs")
+  @@schema("public")
+}
+
+/// Activity feed of what agents did.
+model AgentEvent {
+  id         BigInt        @id @default(autoincrement())
+  ownerId    String?       @map("owner_id") @db.Uuid
+  agentId    String?       @map("agent_id") @db.Uuid
+  jobId      String?       @map("job_id") @db.Uuid
+  actorLabel String        @map("actor_label")
+  message    String
+  severity   EventSeverity @default(info)
+  data       Json?         @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  owner Profile? @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  agent Agent?   @relation(fields: [agentId], references: [id], onDelete: SetNull)
+  job   Job?     @relation(fields: [jobId], references: [id], onDelete: SetNull)
+
+  @@index([ownerId, createdAt])
+  @@index([jobId])
+  @@map("agent_events")
+  @@schema("public")
+}
+
+/// Raised when the guardian agent pauses a mandate.
+model GuardianAlert {
+  id         String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  ownerId    String    @map("owner_id") @db.Uuid
+  trigger    String
+  details    Json?     @db.JsonB
+  pauseTx    String?   @map("pause_tx")
+  resolvedAt DateTime? @map("resolved_at") @db.Timestamptz(6)
+  unpauseTx  String?   @map("unpause_tx")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  owner Profile @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+
+  @@index([ownerId])
+  @@map("guardian_alerts")
+  @@schema("public")
+}
+
+/// Results of the P1-P8 evaluation runs.
+model EvalResult {
+  id          String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  runId       String  @map("run_id")
+  /// P1 to P8
+  passMark    String  @map("pass_mark")
+  caseId      String  @map("case_id")
+  expected    String?
+  actual      String?
+  passed      Boolean
+  txHash      String? @map("tx_hash")
+  explorerUrl String? @map("explorer_url")
+  details     Json?   @db.JsonB
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([runId, passMark, caseId])
+  @@map("eval_results")
+  @@schema("public")
+}
+
+/// Last block the indexer processed, per contract.
+model IndexerCursor {
+  contractId String @id @map("contract_id")
+  lastBlock  BigInt @map("last_block")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@map("indexer_cursor")
+  @@schema("public")
+}
