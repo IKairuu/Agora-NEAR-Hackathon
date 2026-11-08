@@ -1,5 +1,6 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
+import { IndexerService } from '../indexer/indexer.service';
 import { InternalRepository } from './internal.repository';
 import { decideBid, InternalService, judgeRun } from './internal.service';
 
@@ -9,13 +10,15 @@ const BID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
 describe('InternalService', () => {
     let repo: jest.Mocked<InternalRepository>;
     let service: InternalService;
+    let indexer: jest.Mocked<IndexerService>;
 
     beforeEach(() => {
         repo = {
             getJob: jest.fn().mockResolvedValue({ id: JOB, ref: 'J-1042', title: 'Split fix', buyerId: 'buyer', seller: { ownerId: 'seller' } }),
             getBid: jest.fn(), getReviewRun: jest.fn(), saveRunResult: jest.fn().mockResolvedValue(1), getVoteTally: jest.fn(), settleDelivery: jest.fn().mockResolvedValue(1), setBidStatus: jest.fn().mockResolvedValue(1), createNotifications: jest.fn(async (n: unknown[]) => n.length),
         } as unknown as jest.Mocked<InternalRepository>;
-        service = new InternalService(repo);
+        indexer = { onMockRelease: jest.fn().mockResolvedValue({ jobId: JOB, payout: 31.36, fee: 0.64 }) } as unknown as jest.Mocked<IndexerService>;
+        service = new InternalService(repo, indexer);
     });
 
     const bid = (extra: object) => ({ id: BID, status: 'pending_check', price: 36, priceCheck: 'cleared', fraudScore: 6, holdReason: null, job: { id: JOB, ref: 'J-1042', buyerId: 'buyer' }, seller: { displayName: 'patchsmith', ownerId: 'seller' }, ...extra });
@@ -93,13 +96,15 @@ describe('InternalService', () => {
         repo.getVoteTally.mockResolvedValue({ id: 'd1', status: 'reviewing', attempt: 1, milestoneId: 'm0', votes: [{ approve: true }, { approve: true }], milestone: { job: { id: JOB } } } as never);
         const res = await service.agentNotify({ role: 'reviewer', ok: true, jobId: JOB, result: { deliveryId: 'd1', reviewer: 2, approve: true } });
         expect(repo.settleDelivery.mock.calls[0]).toEqual(['d1', 'm0', JOB, true]);
-        expect(res.actions).toContain('delivery approved');
+        expect(res.actions).toEqual(expect.arrayContaining(['delivery approved', 'released']));
+        expect(indexer.onMockRelease.mock.calls[0]?.[0]).toBe(JOB);
     });
 
     it('reopens the job at two rejections', async () => {
         repo.getVoteTally.mockResolvedValue({ id: 'd1', status: 'reviewing', attempt: 1, milestoneId: 'm0', votes: [{ approve: false }, { approve: true }, { approve: false }], milestone: { job: { id: JOB } } } as never);
         await service.agentNotify({ role: 'reviewer', ok: true, jobId: JOB, result: { deliveryId: 'd1', reviewer: 3, approve: false } });
         expect(repo.settleDelivery.mock.calls[0]).toEqual(['d1', 'm0', JOB, false]);
+        expect(indexer.onMockRelease.mock.calls).toHaveLength(0);
         expect(repo.createNotifications.mock.calls[0]![0]).toEqual(expect.arrayContaining([expect.objectContaining({ title: 'Delivery 1 on J-1042 rejected by 2 of 3 reviewers', body: '2 attempts left.' })]));
     });
 

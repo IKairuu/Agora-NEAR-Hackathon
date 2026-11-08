@@ -1,26 +1,32 @@
 import { Test, TestingModule } from '@nestjs/testing';
+import { IndexerService } from '../indexer/indexer.service';
 import { ChainService } from './chain.service';
 
 describe('ChainService (mock mode)', () => {
     let service: ChainService;
+    let onMockCall: jest.Mock;
 
     beforeEach(async () => {
         process.env['AGORA_CHAIN_MODE'] = 'mock';
+        onMockCall = jest.fn().mockResolvedValue(null);
         const module: TestingModule = await Test.createTestingModule({
-            providers: [ChainService],
+            providers: [ChainService, { provide: IndexerService, useValue: { onMockCall } }],
         }).compile();
         service = module.get<ChainService>(ChainService);
     });
 
     it('returns a mock tx hash and explorer link for a call', async () => {
         const res = await service.callAs('transaction_agent', 'agents.lumen.testnet', 'fund_job', { job_id: '1' });
-        expect(res.tx_hash).toBe('mock-fund_job-1');
-        expect(res.explorer_url).toBe('https://testnet.nearblocks.io/txns/mock-fund_job-1');
+        expect(res.tx_hash).toMatch(/^mock-fund_job-\d+$/);
+        expect(res.explorer_url).toBe(`https://testnet.nearblocks.io/txns/${res.tx_hash}`);
+        expect(onMockCall).toHaveBeenCalledWith({ signer: 'agents.lumen.testnet', method: 'fund_job', args: { job_id: '1' }, txHash: res.tx_hash });
     });
 
     it('returns a new id for post_job', async () => {
         const res = await service.callAs('transaction_agent', 'agents.lumen.testnet', 'post_job', { category: 'rust' });
-        expect(res.result).toBe('1');
+        const next = await service.callAs('transaction_agent', 'agents.lumen.testnet', 'post_job', { category: 'rust' });
+        expect(Number(res.result)).toBeGreaterThan(1_700_000_000);
+        expect(Number(next.result)).toBe(Number(res.result) + 1);
     });
 
     it('returns the mandate defaults from view', async () => {

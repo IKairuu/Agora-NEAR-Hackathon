@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
+import { IndexerService } from '../indexer/indexer.service.js';
 import { InternalRepository, NotificationInput } from './internal.repository.js';
 
 export const agentNotifySchema = z.object({
@@ -69,7 +70,10 @@ const text = (v: unknown): string | null => (typeof v === 'string' && v.length >
 
 @Injectable()
 export class InternalService {
-    constructor(private readonly internalRepository: InternalRepository) {}
+    constructor(
+        private readonly internalRepository: InternalRepository,
+        private readonly indexer: IndexerService,
+    ) {}
 
     async agentNotify(raw: unknown) {
         const parsed = agentNotifySchema.safeParse(raw);
@@ -116,6 +120,10 @@ export class InternalService {
                     const count = await this.internalRepository.settleDelivery(tally.id, tally.milestoneId, tally.milestone.job.id, approved);
                     if (count > 0) {
                         actions.push(`delivery ${approved ? 'approved' : 'rejected'}`);
+                        if (approved && (process.env['AGORA_CHAIN_MODE'] ?? 'mock') === 'mock') {
+                            const released = await this.indexer.onMockRelease(tally.milestone.job.id, `mock-release-${Date.now()}`);
+                            if (released) actions.push('released');
+                        }
                         const outcome = approved
                             ? `Delivery ${tally.attempt} on ${job.ref} approved by ${approvals} of 3 reviewers`
                             : `Delivery ${tally.attempt} on ${job.ref} rejected by ${rejections} of 3 reviewers`;

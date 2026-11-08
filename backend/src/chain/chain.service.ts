@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { IndexerService } from '../indexer/indexer.service.js';
 import { mockIdMethods, mockViews } from './mock-state';
 
 export type ChainRole = 'owner' | 'transaction_agent' | 'guardian' | 'fraud_oracle' | 'reviewer' | 'platform';
@@ -23,9 +24,11 @@ export class ChainService {
     private readonly mode = process.env['AGORA_CHAIN_MODE'] ?? 'mock';
     private readonly network = process.env['NEAR_NETWORK'] ?? 'testnet';
     private readonly contractId = process.env['AGORA_CONTRACT_ID'] ?? 'agora-market.agora-testnet.testnet';
-    private counter = 0;
+    private counter = Math.floor(Date.now() / 1000);
 
-    async callAs(role: ChainRole, accountId: string, method: string, args: Record<string, unknown>, deposit = '0'): Promise<ChainCallResult> {
+    constructor(private readonly indexer: IndexerService) {}
+
+    async callAs(role: ChainRole, accountId: string, method: string, args: Record<string, unknown>, _deposit = '0'): Promise<ChainCallResult> {
         this.requireMock();
         if (!accountId) {
             throw new BadRequestException(`No account to sign ${method} as ${role}`);
@@ -33,6 +36,7 @@ export class ChainService {
         this.counter += 1;
         const txHash = `mock-${method}-${this.counter}`;
         const result = mockIdMethods.includes(method) ? String(this.counter) : null;
+        await this.indexer.onMockCall({ signer: accountId, method, args, txHash });
         return { tx_hash: txHash, explorer_url: this.explorerTxUrl(txHash), result };
     }
 
