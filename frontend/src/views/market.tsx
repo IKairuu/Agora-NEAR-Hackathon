@@ -1,7 +1,8 @@
 import { useRef, type ChangeEvent, type ReactNode } from 'react';
 import { CATS, COUNTRIES, gigBy, GIGS, ME, PAYOUTS, SELL_STEPS, sellerDir, SKILLS, usd } from '../data/sample';
 import { act } from '../store/actions';
-import { setState, toast, useApp, type State } from '../store/store';
+import { isLive, liveSaveSellStep } from '../lib/live';
+import { getState, setState, toast, useApp, type State } from '../store/store';
 import { Icon, Tile, type IconName } from '../ui/icons';
 import { Gate, Head, levelClass, Review, RLink, SignInButton, T, Thumb } from '../ui/parts';
 import { Shell } from '../ui/Shell';
@@ -57,7 +58,7 @@ export function Profile() {
 }
 
 /* ---------------- become a seller ---------------- */
-const goStep = (n: number) => { setState({ sellStep: Math.max(0, Math.min(5, n)) }); window.scrollTo(0, 0); };
+const goStep = (n: number) => { if (isLive()) liveSaveSellStep(getState().sellStep); setState({ sellStep: Math.max(0, Math.min(5, n)) }); window.scrollTo(0, 0); };
 
 /** Reads an image file into the store as a data URL (prototype: preview only, nothing is uploaded). */
 function readImage(key: 'coverImg' | 'avatarImg') {

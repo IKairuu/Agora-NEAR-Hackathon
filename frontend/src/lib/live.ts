@@ -269,3 +269,75 @@ export async function liveReadNotes(): Promise<void> {
   await api('/notifications/v1/read', { body: {} }).catch(() => null);
   await loadNotes().catch(() => undefined);
 }
+
+interface SellProfileView {
+  id: string | null; step: number; published: boolean; skills: string[]; categories: string[];
+  coder: 'me' | 'agent'; payoutChain: string;
+}
+
+const fieldValue = (id: string): string | undefined => {
+  const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+  return el ? el.value.trim() : undefined;
+};
+const numberOf = (text: string | undefined): number | undefined => {
+  const n = Number((text ?? '').replace(/[^\d.]/g, ''));
+  return n > 0 ? n : undefined;
+};
+const picked = (rec: Record<string, boolean>) => Object.keys(rec).filter((k) => rec[k]);
+let sellSave: Promise<unknown> = Promise.resolve();
+
+/** Fills the wizard's toggles from the saved seller profile. */
+export async function liveLoadSellProfile(): Promise<void> {
+  const p = await api<SellProfileView>('/seller-profile/v1', { quiet: true }).catch(() => null);
+  if (!p?.id) return;
+  setState((s) => ({
+    sellCoder: p.coder,
+    sellPay: p.payoutChain,
+    skills: p.skills.length ? Object.fromEntries(p.skills.map((k) => [k, true])) : s.skills,
+    cats: p.categories.length ? { ...Object.fromEntries(Object.keys(s.cats).map((k) => [k, false])), ...Object.fromEntries(p.categories.map((k) => [k, true])) } : s.cats,
+  }));
+}
+
+/** Saves the wizard step being left. Reads the inputs now, before they unmount. */
+export function liveSaveSellStep(step: number): void {
+  const s = getState();
+  let body: Record<string, unknown> | null = null;
+  if (step === 1) {
+    const langs = fieldValue('sl-lang');
+    body = {
+      display_name: fieldValue('sl-name') || undefined,
+      headline: fieldValue('sl-title') || undefined,
+      country: fieldValue('sl-country') || undefined,
+      langs: langs === undefined ? undefined : langs.split(',').map((l) => l.trim()).filter(Boolean),
+      coder: s.sellCoder,
+      agent_name: s.sellCoder === 'agent' ? fieldValue('sl-ag')?.toLowerCase() || undefined : undefined,
+      agent_model: s.sellCoder === 'agent' ? fieldValue('sl-model') || undefined : undefined,
+    };
+  } else if (step === 2) {
+    body = { about: fieldValue('sl-bio') || undefined };
+  } else if (step === 3) {
+    const max = numberOf(fieldValue('sl-max'));
+    body = {
+      skills: picked(s.skills),
+      categories: picked(s.cats),
+      price_from: numberOf(fieldValue('sl-floor')),
+      max_jobs: max === undefined ? undefined : Math.round(max),
+      delivery_terms: fieldValue('sl-terms') || undefined,
+    };
+  } else if (step === 4) {
+    body = { payout_chain: s.sellPay, payout_address: s.sellPay === 'near' ? undefined : fieldValue('sl-addr') || undefined };
+  }
+  if (!body) return;
+  sellSave = api('/seller-profile/v1', { method: 'PATCH', body: { step, ...body } }).catch(() => null);
+}
+
+/** Publishes the seller profile once the last save has landed. */
+export async function livePublishSeller(): Promise<boolean> {
+  await sellSave;
+  const res = await api<{ message: string; acct: string }>('/seller-profile/v1/publish', { method: 'POST' }).catch(() => null);
+  if (!res) return false;
+  setState({ seller: true });
+  toast(`${res.message}. Selling as ${res.acct}.`);
+  await refreshAll(false);
+  return true;
+}

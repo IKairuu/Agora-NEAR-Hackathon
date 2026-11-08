@@ -1046,6 +1046,14 @@ model SellerProfile {
   categories     String[]  @default([])
   priceFrom      Decimal?  @map("price_from") @db.Decimal(20, 6)
   days           Int?      @db.SmallInt
+  headline       String?
+  coder          String    @default("me")
+  agentName      String?   @map("agent_name")
+  agentModel     String?   @map("agent_model")
+  maxJobs        Int?      @map("max_jobs") @db.SmallInt
+  deliveryTerms  String?   @map("delivery_terms")
+  payoutChain    String?   @map("payout_chain")
+  payoutAddress  String?   @map("payout_address")
   level          String    @default("New seller")
   online         Boolean   @default(false)
   stakeTx        String?   @map("stake_tx")

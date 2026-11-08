@@ -5,14 +5,43 @@ import { CreateSellerProfileExperience } from './CreateSellerProfileExperience.d
 export class CreateSellerProfile {
     @IsNotEmpty({ message: 'Wizard step is required' })
     @IsInt({ message: 'Wizard step must be a whole number' })
-    @Min(0, { message: 'Wizard step must be between 0 and 4' })
-    @Max(4, { message: 'Wizard step must be between 0 and 4' })
+    @Min(0, { message: 'Wizard step must be between 0 and 5' })
+    @Max(5, { message: 'Wizard step must be between 0 and 5' })
     step!: number;
 
     @IsOptional()
     @IsString({ message: 'Display name must be text' })
     @MaxLength(80, { message: 'Display name must be at most 80 characters' })
     display_name!: string;
+
+    @IsOptional()
+    @IsString({ message: 'Professional title must be text' })
+    @MaxLength(120, { message: 'Professional title must be at most 120 characters' })
+    headline!: string;
+
+    @IsOptional()
+    @IsIn(['me', 'agent'], { message: 'Coding must be done by me or agent' })
+    coder!: string;
+
+    @IsOptional()
+    @Matches(/^[a-z0-9][a-z0-9-]{1,31}$/, { message: 'Agent name must be 2 to 32 lowercase letters, numbers or dashes' })
+    agent_name!: string;
+
+    @IsOptional()
+    @IsString({ message: 'Agent model must be text' })
+    @MaxLength(120, { message: 'Agent model must be at most 120 characters' })
+    agent_model!: string;
+
+    @IsOptional()
+    @IsInt({ message: 'Jobs at once must be a whole number' })
+    @Min(1, { message: 'Jobs at once must be at least 1' })
+    @Max(10, { message: 'Jobs at once must be at most 10' })
+    max_jobs!: number;
+
+    @IsOptional()
+    @IsString({ message: 'Delivery terms must be text' })
+    @MaxLength(200, { message: 'Delivery terms must be at most 200 characters' })
+    delivery_terms!: string;
 
     @IsOptional()
     @Matches(/^[A-Z]{1,3}$/, { message: 'Initials must be 1 to 3 capital letters' })

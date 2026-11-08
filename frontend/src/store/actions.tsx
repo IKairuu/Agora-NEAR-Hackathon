@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { goLive, isLive, leaveLive, liveAttachRepo, liveHire, liveKeepWait, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
+import { goLive, isLive, leaveLive, liveAttachRepo, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -351,7 +351,10 @@ export const act = {
   pause: () => { setState((s) => ({ stage: Math.max(s.stage, 8) })); toast('All agents paused. Funding and release calls are stopped.', 'block'); },
   unpause2: () => { setState({ modal: null, stage: 7, attack: null }); toast('Key rotated. Agents are active again.'); },
   savemandate: () => toast('Limits saved on-chain with your full-access key.'),
-  publishseller: () => { setState({ seller: true, sellStep: 0 }); go('seller'); toast('Seller profile published. Your bidding agent is watching matching jobs.'); },
+  publishseller: () => {
+    if (isLive()) { void livePublishSeller().then((ok) => { if (ok) { setState({ sellStep: 0 }); go('seller'); } }); return; }
+    setState({ seller: true, sellStep: 0 }); go('seller'); toast('Seller profile published. Your bidding agent is watching matching jobs.');
+  },
   reqsvc: () => { if (getState().stage < 1) { act.signin(); return; } openModal('reqsvc'); },
   reqsvc2: (what: string) => {
     const s = getState(); const gg = gigBy(s.svc)!; const id = 'J-' + s.nextJob;
@@ -399,7 +402,7 @@ export const act = {
   /** A seller's name anywhere opens their profile. */
   who: (key: string) => { setState({ who: key }); go('profile'); },
   ghconnect: () => { setState({ ghLinked: true }); toast('GitHub connected: 14 public repositories found. Reputation still comes only from settled jobs.'); },
-  sellstart: () => { setState({ sellStep: 1 }); window.scrollTo(0, 0); },
+  sellstart: () => { if (isLive()) void liveLoadSellProfile(); setState({ sellStep: 1 }); window.scrollTo(0, 0); },
   theme: () => {
     const r = document.documentElement;
     const cur = r.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
