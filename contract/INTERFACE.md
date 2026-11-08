@@ -2,7 +2,7 @@
 
 Owner: Member A. This file is the contract between the Rust contract, A's `chain/` module, the indexer, and Members B, C and D. Method names, arguments and event names change only with notice to the whole team.
 
-Status: Phase 0 draft, 2026-11-08. Implemented so far: setup and config, balances, deposit, `withdraw`, mandate, `pause`, `unpause`, `register_seller`, `post_job`, `place_bid`, `set_bid_flags`, `accept_offer`, `fund_job` with the nine checks, `submit_delivery`, `vote` with 2-of-3 release and the 2% fee, `refund_expired`, and their views. Phase 1 complete.
+Status: Phase 0 draft, 2026-11-08. Implemented so far: setup and config, balances, deposit, `withdraw`, mandate, `pause`, `unpause`, `register_seller`, `post_job`, `place_bid`, `set_bid_flags`, `accept_offer`, `fund_job` with the nine checks, `submit_delivery`, `vote` with 2-of-3 release and the 2% fee, `refund_expired`, and their views. Phase 1 complete. Phase 4 added 2026-11-09: disputes with the free re-check, bonded escalation to Sputnik and the 72-hour default, `rerun_review`, `refund_milestone`, `grant_attempt`, `rate`, the starter stake and the NEP-171 completion record.
 
 ## 1. Basics
 
@@ -45,8 +45,10 @@ The contract maps `agents.<owner>` to `<owner>`: a call from `agents.alice.testn
 | `new` (init) | `owner_id, usdc_token, dao_account` | Contract account | Once only |
 | `set_reviewers` | `reviewers: [AccountId; 3]` | Config owner | 1y |
 | `set_fraud_oracle` | `oracle_id` | Config owner | 1y |
+| `set_proposal_bond` | `proposal_bond` (yoctoNEAR) | Config owner | 1y. The NEAR the contract attaches to each Sputnik `add_proposal`. Default 0.1 NEAR |
 | `register_seller` | `account_id` | Config owner (the platform, after C's seller onboarding) | 1y. Only registered sellers can bid |
-| `ft_on_transfer` | `sender_id, amount, msg` | USDC contract only | `msg`: `"deposit"`, `"dispute_bond:<job_id>"` or `"starter_stake"`. Credits the sender's free balance. Returns `"0"` (keeps all) |
+| `ft_on_transfer` | `sender_id, amount, msg` | USDC contract only | `msg`: `"deposit"` credits the free balance. `"dispute_bond:<job_id>"` escalates that dispute (see Disputes). `"starter_stake"` adds to a registered seller's stake. Returns `"0"` (keeps all). A refused message panics, so the USDC goes back to the sender |
+| `return_stake` | none | Seller | Pays the stake into the seller's free balance after 3 settled jobs with no disputes. Emits `stake_returned` |
 | `withdraw` | `amount` | Owner | 1y. Only free balance. Sends USDC with `ft_transfer` |
 
 ### Mandate and pause
@@ -77,17 +79,28 @@ Mandate defaults (from the prototype Limits page): per-job cap 50 USDC, daily ca
 
 | Method | Arguments | Caller | Rules |
 |---|---|---|---|
-| `rerun_review` | `job_id` | Anyone, after 12 h or a split vote | Fresh reviewers, moves no money |
-| `refund_milestone` | `job_id` | Buyer, after the last attempt fails | Emits `milestone_refunded` |
-| `grant_attempt` | `job_id` | Buyer, after the last attempt fails | Adds one attempt |
-| `open_dispute` | `job_id, reason` | Buyer or seller | Freezes the job. Emits `dispute_opened` |
-| `escalate` | `job_id` | Buyer or seller | Needs a 5% bond (min 1 USDC) paid through `ft_on_transfer`. Opens a Sputnik proposal |
-| `resolve_dispute` | `job_id, outcome: "release" or "refund" or "split", seller_share_bps` | DAO account only | Returns or forfeits the bond. Emits `dispute_resolved` |
-| `finalize_default` | `job_id` | Anyone, 72 h after escalation | The re-check result stands |
+| `rerun_review` | `job_id` | Anyone, after a split vote (1 approve, 1 reject) or the buyer's review timeout | Same three reviewers, votes cleared, round + 1. Moves no money. Emits `review_rerun` |
+| `refund_milestone` | `job_id` | Buyer or buyer's agent, after the last attempt fails | Escrow back to the buyer's free balance. Emits `milestone_refunded` (`reason: "failed"`) |
+| `grant_attempt` | `job_id` | Buyer or buyer's agent, after the last attempt fails | Adds one attempt. Emits `attempt_granted` |
+| `open_dispute` | `job_id, reason` (max 500 chars) | Buyer or seller, while reviewers vote or after a failed attempt | One per job. Freezes the job as `Disputed`, starts a free re-check by the reviewers, adds 1 to the seller's disputes. Emits `dispute_opened` |
+| (re-check) | `vote` as usual | Assigned reviewers | At 2 of 3 the result (`release` or `refund`) is recorded; no money moves yet. Emits `recheck_decided` |
+| escalate | `ft_transfer_call` of USDC with `msg: "dispute_bond:<job_id>"` | Buyer or seller who lost the re-check, within 72 h of it | Bond at least 5% of the price, min 1 USDC. The claim is `refund` for the buyer, `release` for the seller. The contract pays the Sputnik proposal bond and calls `add_proposal` with a `FunctionCall` to `resolve_dispute` carrying the claim. Emits `dispute_escalated`, then `proposal_added` or `proposal_failed` |
+| `resolve_dispute` | `job_id, outcome: "release" or "refund" or "split", seller_share_bps` | DAO account only, escalated disputes only | Settles the job (a split pays the fee on the seller's share). The bond goes back to the escalator if the outcome is the claim or a split, otherwise to the DAO. Emits `dispute_resolved` |
+| `finalize_default` | `job_id` | Anyone, 72 h after the re-check result (not escalated) or 72 h after escalation | The re-check result stands. An escalation bond goes to the DAO. Emits `dispute_resolved` (`by: "default"`) |
+
+There is no separate `escalate` method: paying the bond is the escalation, so it can't be started without the money.
+
+### Reputation, stake and completion record
+
+| Method | Arguments | Caller | Rules |
+|---|---|---|---|
+| `rate` | `job_id, stars: 1..5` | Buyer or seller of a `Released` job | One rating per side, added to the other side's reputation. Emits `rated` and `reputation_updated` |
+| Starter stake | `ft_transfer_call` with `msg: "starter_stake"` | Registered seller | A stake of 10 USDC or more raises that seller's new-seller cap to at least 60 USDC (check 8). Emits `stake_added` |
+| NEP-171 record | minted by the contract | — | One non-transferable token per settled job (release or split), owned by the seller. `nft_transfer` and `nft_transfer_call` always panic. Mint logs a standard `nep171` `nft_mint` event |
 
 ### Views (free, no signature)
 
-`get_config()`, `is_seller(account_id)`, `is_paused(account_id)`, `get_balance(account_id) -> { free, escrowed }`, `get_mandate(account_id)`, `get_used_today(account_id)`, `get_job(job_id)`, `get_bids(job_id)`, `get_votes(job_id)`, `get_reputation(account_id) -> { settled, disputes, rating_sum, rating_count }`.
+`get_config()`, `is_seller(account_id)`, `is_paused(account_id)`, `get_balance(account_id) -> { free, escrowed }`, `get_mandate(account_id)`, `get_used_today(account_id)`, `get_job(job_id)`, `get_bids(job_id)`, `get_votes(job_id)`, `get_reputation(account_id) -> { settled, disputes, rating_sum, rating_count }`, `get_dispute(job_id)`, `get_stake(account_id)`, and the NEP-171 views `nft_metadata()`, `nft_token(token_id)`, `nft_tokens_for_owner(account_id, from_index, limit)`, `nft_supply_for_owner(account_id)`, `nft_total_supply()`.
 
 ## 4. The nine funding checks (`fund_job`)
 
@@ -123,14 +136,25 @@ Every state change logs one line: `EVENT_JSON:{"standard":"agora","version":"1.0
 | `job_funded` | `job_id, buyer, amount, used_today` |
 | `delivery_submitted` | `job_id, attempt, commit_hash, reviewers` |
 | `vote_cast` | `job_id, reviewer, approve, log_hash, attestation_hash` |
-| | `attempt_failed` | `job_id, attempt, attempts_left` (2 of 3 reviewers rejected; the job goes back to `Funded` so the seller can deliver again if attempts are left) |
+| `attempt_failed` | `job_id, attempt, attempts_left` (2 of 3 reviewers rejected; the job goes back to `Funded` so the seller can deliver again if attempts are left) |
 | `milestone_released` | `job_id, seller, amount, fee` (`amount` is what the seller gets, after the fee) |
 | `milestone_refunded` | `job_id, buyer, amount, reason` |
+| `review_rerun` | `job_id, round, reason` (`split` or `timeout`) |
+| `attempt_granted` | `job_id, attempts_left` |
+| `milestone_split` | `job_id, seller, seller_amount, buyer_amount, fee` |
 | `dispute_opened` | `job_id, opener, reason` |
-| `dispute_resolved` | `job_id, outcome, seller_amount, buyer_amount` |
+| `recheck_decided` | `job_id, result` (`release` or `refund`) |
+| `dispute_escalated` | `job_id, by, claim, bond` |
+| `proposal_added` | `job_id, proposal_id` |
+| `proposal_failed` | `job_id` (the dispute stays escalated; `finalize_default` still works after 72 h) |
+| `dispute_resolved` | `job_id, outcome, seller_amount, buyer_amount, seller_share_bps, by` (`dao` or `default`), `bond_returned` |
+| `rated` | `job_id, by, account_id, stars` |
+| `stake_added` | `account_id, amount, stake` |
+| `stake_returned` | `account_id, amount` |
 | `reputation_updated` | `account_id, settled, disputes, rating_avg` |
 | `paused` | `account_id, by` |
 | `unpaused` | `account_id` |
+| `nft_mint` (standard `nep171`) | `owner_id, token_ids, memo` |
 | `mandate_set` | `account_id, per_job_cap, daily_cap, new_seller_cap, categories, strict` |
 
 ## 6. `chain/` module exports (backend, for B, C and D)

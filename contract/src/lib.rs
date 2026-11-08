@@ -1,9 +1,9 @@
-use near_sdk::json_types::{U128, U64};
+use near_sdk::json_types::{Base64VecU8, U128, U64};
 use near_sdk::serde_json::{json, Value};
 use near_sdk::store::{LookupMap, LookupSet};
 use near_sdk::{
     assert_one_yocto, env, ext_contract, near, require, AccountId, BorshStorageKey, Gas,
-    NearToken, PanicOnDefault, PromiseError, PromiseOrValue,
+    NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue,
 };
 
 const USDC: u128 = 1_000_000;
@@ -14,6 +14,17 @@ const NEW_SELLER_SETTLED_JOBS: u32 = 3;
 const NANOS_PER_DAY: u64 = 86_400_000_000_000;
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(10);
 const GAS_FOR_WITHDRAW_CALLBACK: Gas = Gas::from_tgas(10);
+const GAS_FOR_ADD_PROPOSAL: Gas = Gas::from_tgas(30);
+const GAS_FOR_PROPOSAL_CALLBACK: Gas = Gas::from_tgas(10);
+const GAS_FOR_RESOLVE: u64 = 50_000_000_000_000;
+const NANOS_PER_HOUR: u64 = 3_600_000_000_000;
+const ESCALATION_WINDOW: u64 = 72 * NANOS_PER_HOUR;
+const BOND_BPS: u128 = 500;
+const MIN_BOND: u128 = USDC;
+const STARTER_STAKE: u128 = 10 * USDC;
+const STAKED_SELLER_CAP: u128 = 60 * USDC;
+const MAX_REASON_LEN: usize = 500;
+const DEFAULT_PROPOSAL_BOND: u128 = 100_000_000_000_000_000_000_000;
 
 #[ext_contract(ext_ft)]
 pub trait FungibleToken {
@@ -31,6 +42,10 @@ enum StorageKey {
     Bids,
     UsedToday,
     Reputations,
+    Disputes,
+    Stakes,
+    Records,
+    RecordsOf,
 }
 
 #[near(serializers = [json, borsh])]
@@ -42,6 +57,7 @@ pub struct Config {
     pub fee_bps: u16,
     pub fraud_oracle: Option<AccountId>,
     pub reviewers: Vec<AccountId>,
+    pub proposal_bond: U128,
 }
 
 #[near(serializers = [json, borsh])]
@@ -53,6 +69,7 @@ pub enum JobStage {
     Delivered,
     Released,
     Refunded,
+    Disputed,
 }
 
 #[near(serializers = [json, borsh])]
@@ -75,6 +92,59 @@ pub struct Job {
     pub commit_hash: Option<String>,
     pub reviewers: Vec<AccountId>,
     pub votes: Vec<Vote>,
+    pub delivered_at: U64,
+    pub review_round: u8,
+    pub buyer_rated: bool,
+    pub seller_rated: bool,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
+pub struct Dispute {
+    pub job_id: U64,
+    pub opened_by: AccountId,
+    pub reason: String,
+    pub opened_at: U64,
+    pub recheck: Option<String>,
+    pub recheck_at: Option<U64>,
+    pub escalated_by: Option<AccountId>,
+    pub escalated_at: Option<U64>,
+    pub claim: Option<String>,
+    pub bond: U128,
+    pub proposal_id: Option<U64>,
+    pub outcome: Option<String>,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
+pub struct Record {
+    pub token_id: String,
+    pub owner_id: AccountId,
+    pub job_id: U64,
+    pub amount: U128,
+    pub issued_at: U64,
+}
+
+#[near(serializers = [json])]
+pub struct TokenMetadata {
+    pub title: String,
+    pub description: String,
+    pub issued_at: String,
+    pub extra: String,
+}
+
+#[near(serializers = [json])]
+pub struct Token {
+    pub token_id: String,
+    pub owner_id: AccountId,
+    pub metadata: TokenMetadata,
+}
+
+#[near(serializers = [json])]
+pub struct ContractMetadata {
+    pub spec: String,
+    pub name: String,
+    pub symbol: String,
 }
 
 #[near(serializers = [json, borsh])]
@@ -157,6 +227,11 @@ pub struct Contract {
     next_bid_id: u64,
     used_today: LookupMap<AccountId, (u64, u128)>,
     reputations: LookupMap<AccountId, Reputation>,
+    disputes: LookupMap<u64, Dispute>,
+    stakes: LookupMap<AccountId, u128>,
+    records: LookupMap<String, Record>,
+    records_of: LookupMap<AccountId, Vec<String>>,
+    next_record_id: u64,
 }
 
 pub fn is_agent(account_id: &AccountId) -> bool {
@@ -188,6 +263,7 @@ impl Contract {
         let dao = self.config.dao_account.clone();
         self.credit(&dao, fee);
         job.stage = JobStage::Released;
+        self.mint_record(&seller, job.job_id, price - fee);
         let mut rep = self.get_reputation(seller.clone());
         rep.settled += 1;
         self.reputations.insert(seller.clone(), rep.clone());
@@ -230,6 +306,7 @@ impl Contract {
                 fee_bps: 200,
                 fraud_oracle: None,
                 reviewers: vec![],
+                proposal_bond: U128(DEFAULT_PROPOSAL_BOND),
             },
             balances: LookupMap::new(StorageKey::Balances),
             mandates: LookupMap::new(StorageKey::Mandates),
@@ -241,6 +318,11 @@ impl Contract {
             next_bid_id: 1,
             used_today: LookupMap::new(StorageKey::UsedToday),
             reputations: LookupMap::new(StorageKey::Reputations),
+            disputes: LookupMap::new(StorageKey::Disputes),
+            stakes: LookupMap::new(StorageKey::Stakes),
+            records: LookupMap::new(StorageKey::Records),
+            records_of: LookupMap::new(StorageKey::RecordsOf),
+            next_record_id: 1,
         }
     }
 
@@ -384,6 +466,10 @@ impl Contract {
             commit_hash: None,
             reviewers: vec![],
             votes: vec![],
+            delivered_at: U64(0),
+            review_round: 0,
+            buyer_rated: false,
+            seller_rated: false,
         };
         self.jobs.insert(job_id, job);
         emit(
@@ -546,8 +632,13 @@ impl Contract {
         require!(bid.fraud_score < HIGH_FRAUD_SCORE, "Bid flagged");
         require!(!bid.held, "Bid held by price check");
         let settled = self.get_reputation(seller.clone()).settled;
+        let new_seller_cap = if self.get_stake(seller.clone()).0 >= STARTER_STAKE {
+            mandate.new_seller_cap.0.max(STAKED_SELLER_CAP)
+        } else {
+            mandate.new_seller_cap.0
+        };
         require!(
-            settled >= NEW_SELLER_SETTLED_JOBS || price <= mandate.new_seller_cap.0,
+            settled >= NEW_SELLER_SETTLED_JOBS || price <= new_seller_cap,
             "Over new-seller cap"
         );
         let mut balance = self.get_balance(buyer.clone());
@@ -584,6 +675,8 @@ impl Contract {
         job.reviewers = self.config.reviewers.clone();
         job.votes = vec![];
         job.stage = JobStage::Delivered;
+        job.delivered_at = U64(env::block_timestamp());
+        job.review_round += 1;
         let attempt = job.attempt;
         let reviewers = job.reviewers.clone();
         self.jobs.insert(job_id.0, job);
@@ -596,7 +689,9 @@ impl Contract {
     pub fn vote(&mut self, job_id: U64, approve: bool, log_hash: String, attestation_hash: String) {
         let reviewer = env::predecessor_account_id();
         let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
-        require!(job.stage == JobStage::Delivered, "Job is not under review");
+        let rechecking = job.stage == JobStage::Disputed
+            && self.disputes.get(&job_id.0).is_some_and(|d| d.recheck.is_none() && d.escalated_at.is_none());
+        require!(job.stage == JobStage::Delivered || rechecking, "Job is not under review");
         require!(job.reviewers.contains(&reviewer), "Not an assigned reviewer");
         require!(!job.votes.iter().any(|v| v.reviewer == reviewer), "Reviewer already voted");
         job.votes.push(Vote {
@@ -617,7 +712,16 @@ impl Contract {
         );
         let approvals = job.votes.iter().filter(|v| v.approve).count();
         let rejections = job.votes.len() - approvals;
-        if approvals >= 2 {
+        if rechecking {
+            if approvals >= 2 || rejections >= 2 {
+                let result = if approvals >= 2 { "release" } else { "refund" };
+                let mut dispute = self.disputes.get(&job_id.0).cloned().unwrap();
+                dispute.recheck = Some(result.to_string());
+                dispute.recheck_at = Some(U64(env::block_timestamp()));
+                self.disputes.insert(job_id.0, dispute);
+                emit("recheck_decided", json!({ "job_id": job_id, "result": result }));
+            }
+        } else if approvals >= 2 {
             self.release(&mut job);
         } else if rejections >= 2 {
             job.stage = JobStage::Funded;
@@ -660,6 +764,13 @@ impl Contract {
             "Only the USDC token can deposit"
         );
         require!(amount.0 > 0, "Amount must be positive");
+        if msg == "starter_stake" {
+            return self.add_stake(sender_id, amount);
+        }
+        if let Some(job_id) = msg.strip_prefix("dispute_bond:") {
+            let job_id = job_id.parse::<u64>().unwrap_or_else(|_| env::panic_str("Bad job id in dispute bond"));
+            return self.escalate(sender_id, U64(job_id), amount);
+        }
         require!(msg == "deposit" || msg.is_empty(), "Unsupported deposit message");
         let mut balance = self.get_balance(sender_id.clone());
         balance.free = U128(balance.free.0 + amount.0);
@@ -713,6 +824,442 @@ impl Contract {
             json!({ "account_id": account_id, "amount": amount, "free": balance.free }),
         );
         false
+    }
+}
+
+impl Contract {
+    fn mint_record(&mut self, owner_id: &AccountId, job_id: U64, amount: u128) {
+        let token_id = self.next_record_id.to_string();
+        self.next_record_id += 1;
+        self.records.insert(
+            token_id.clone(),
+            Record {
+                token_id: token_id.clone(),
+                owner_id: owner_id.clone(),
+                job_id,
+                amount: U128(amount),
+                issued_at: U64(env::block_timestamp()),
+            },
+        );
+        let mut owned = self.records_of.get(owner_id).cloned().unwrap_or_default();
+        owned.push(token_id.clone());
+        self.records_of.insert(owner_id.clone(), owned);
+        let line = json!({
+            "standard": "nep171",
+            "version": "1.0.0",
+            "event": "nft_mint",
+            "data": [{ "owner_id": owner_id, "token_ids": [token_id], "memo": format!("Completion record for job {}", job_id.0) }],
+        });
+        env::log_str(&format!("EVENT_JSON:{}", line));
+    }
+
+    fn refund_to_buyer(&mut self, job: &mut Job, reason: &str) {
+        let price = job.price.0;
+        let mut balance = self.get_balance(job.buyer.clone());
+        balance.escrowed = U128(balance.escrowed.0 - price);
+        balance.free = U128(balance.free.0 + price);
+        self.balances.insert(job.buyer.clone(), balance);
+        job.stage = JobStage::Refunded;
+        emit(
+            "milestone_refunded",
+            json!({ "job_id": job.job_id, "buyer": job.buyer, "amount": U128(price), "reason": reason }),
+        );
+    }
+
+    fn split(&mut self, job: &mut Job, seller_share_bps: u16) {
+        let price = job.price.0;
+        let gross = price * seller_share_bps as u128 / 10_000;
+        let fee = gross * self.config.fee_bps as u128 / 10_000;
+        let seller = job.seller.clone().unwrap();
+        let mut buyer_balance = self.get_balance(job.buyer.clone());
+        buyer_balance.escrowed = U128(buyer_balance.escrowed.0 - price);
+        buyer_balance.free = U128(buyer_balance.free.0 + price - gross);
+        self.balances.insert(job.buyer.clone(), buyer_balance);
+        self.credit(&seller, gross - fee);
+        let dao = self.config.dao_account.clone();
+        self.credit(&dao, fee);
+        job.stage = JobStage::Released;
+        let mut rep = self.get_reputation(seller.clone());
+        rep.settled += 1;
+        self.reputations.insert(seller.clone(), rep);
+        self.mint_record(&seller, job.job_id, gross - fee);
+        emit(
+            "milestone_split",
+            json!({
+                "job_id": job.job_id,
+                "seller": seller,
+                "seller_amount": U128(gross - fee),
+                "buyer_amount": U128(price - gross),
+                "fee": U128(fee),
+            }),
+        );
+    }
+
+    fn settle_dispute(&mut self, job_id: U64, outcome: &str, seller_share_bps: u16, by: &str) {
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap();
+        let mut dispute = self.disputes.get(&job_id.0).cloned().unwrap();
+        let price = job.price.0;
+        let gross = price * seller_share_bps as u128 / 10_000;
+        let seller_amount = gross - gross * self.config.fee_bps as u128 / 10_000;
+        let buyer_amount = price - gross;
+        match outcome {
+            "release" => self.release(&mut job),
+            "refund" => self.refund_to_buyer(&mut job, "dispute"),
+            _ => self.split(&mut job, seller_share_bps),
+        }
+        let claim_held = dispute.claim.as_deref() == Some(outcome) || outcome == "split";
+        let bond = dispute.bond.0;
+        if bond > 0 {
+            let to = if claim_held && by == "dao" {
+                dispute.escalated_by.clone().unwrap()
+            } else {
+                self.config.dao_account.clone()
+            };
+            self.credit(&to, bond);
+        }
+        dispute.outcome = Some(outcome.to_string());
+        self.disputes.insert(job_id.0, dispute);
+        self.jobs.insert(job_id.0, job);
+        emit(
+            "dispute_resolved",
+            json!({
+                "job_id": job_id,
+                "outcome": outcome,
+                "seller_amount": U128(seller_amount),
+                "buyer_amount": U128(buyer_amount),
+                "seller_share_bps": seller_share_bps,
+                "by": by,
+                "bond_returned": bond > 0 && claim_held && by == "dao",
+            }),
+        );
+    }
+
+    fn reassign_reviewers(&self, job: &mut Job) {
+        job.reviewers = self.config.reviewers.clone();
+        job.votes = vec![];
+        job.delivered_at = U64(env::block_timestamp());
+        job.review_round += 1;
+    }
+
+    fn add_stake(&mut self, sender_id: AccountId, amount: U128) -> PromiseOrValue<U128> {
+        require!(self.sellers.contains(&sender_id), "Only a registered seller can stake");
+        let total = self.get_stake(sender_id.clone()).0 + amount.0;
+        self.stakes.insert(sender_id.clone(), total);
+        emit("stake_added", json!({ "account_id": sender_id, "amount": amount, "stake": U128(total) }));
+        PromiseOrValue::Value(U128(0))
+    }
+
+    fn escalate(&mut self, sender_id: AccountId, job_id: U64, amount: U128) -> PromiseOrValue<U128> {
+        let job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.stage == JobStage::Disputed, "Job is not disputed");
+        let party = owner_of(&sender_id);
+        let claim = if party == job.buyer {
+            "refund"
+        } else if job.seller.as_ref() == Some(&party) {
+            "release"
+        } else {
+            env::panic_str("Only the buyer or seller can escalate")
+        };
+        let mut dispute = self.disputes.get(&job_id.0).cloned().unwrap();
+        require!(dispute.escalated_at.is_none(), "Dispute is already escalated");
+        let recheck = dispute.recheck.clone().unwrap_or_else(|| env::panic_str("Wait for the re-check result"));
+        require!(
+            env::block_timestamp() < dispute.recheck_at.unwrap().0 + ESCALATION_WINDOW,
+            "The escalation window has closed"
+        );
+        require!(recheck != claim, "The re-check already agrees with you");
+        let needed = (job.price.0 * BOND_BPS / 10_000).max(MIN_BOND);
+        require!(amount.0 >= needed, "Bond is below 5% of the price (minimum 1 USDC)");
+        dispute.escalated_by = Some(sender_id.clone());
+        dispute.escalated_at = Some(U64(env::block_timestamp()));
+        dispute.claim = Some(claim.to_string());
+        dispute.bond = amount;
+        self.disputes.insert(job_id.0, dispute);
+        emit(
+            "dispute_escalated",
+            json!({ "job_id": job_id, "by": sender_id, "claim": claim, "bond": amount }),
+        );
+        let args = json!({
+            "job_id": job_id,
+            "outcome": claim,
+            "seller_share_bps": if claim == "release" { 10_000 } else { 0 },
+        });
+        let proposal = json!({
+            "proposal": {
+                "description": format!("AGORA dispute on job {}: {} asks for {}", job_id.0, sender_id, claim),
+                "kind": {
+                    "FunctionCall": {
+                        "receiver_id": env::current_account_id(),
+                        "actions": [{
+                            "method_name": "resolve_dispute",
+                            "args": Base64VecU8::from(args.to_string().into_bytes()),
+                            "deposit": "0",
+                            "gas": U64(GAS_FOR_RESOLVE),
+                        }],
+                    }
+                }
+            }
+        });
+        let _ = Promise::new(self.config.dao_account.clone())
+            .function_call(
+                "add_proposal".to_string(),
+                proposal.to_string().into_bytes(),
+                NearToken::from_yoctonear(self.config.proposal_bond.0),
+                GAS_FOR_ADD_PROPOSAL,
+            )
+            .then(
+                Self::ext(env::current_account_id())
+                    .with_static_gas(GAS_FOR_PROPOSAL_CALLBACK)
+                    .on_proposal_added(job_id),
+            );
+        PromiseOrValue::Value(U128(0))
+    }
+}
+
+#[near]
+impl Contract {
+    #[payable]
+    pub fn set_proposal_bond(&mut self, proposal_bond: U128) {
+        assert_one_yocto();
+        self.require_config_owner();
+        self.config.proposal_bond = proposal_bond;
+    }
+
+    pub fn rerun_review(&mut self, job_id: U64) {
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let rechecking = job.stage == JobStage::Disputed
+            && self.disputes.get(&job_id.0).is_some_and(|d| d.recheck.is_none() && d.escalated_at.is_none());
+        require!(job.stage == JobStage::Delivered || rechecking, "Job is not under review");
+        let approvals = job.votes.iter().filter(|v| v.approve).count();
+        let rejections = job.votes.len() - approvals;
+        let split = approvals == 1 && rejections == 1;
+        let timeout = self.get_mandate(job.buyer.clone()).review_timeout_hours as u64 * NANOS_PER_HOUR;
+        let stalled = env::block_timestamp() >= job.delivered_at.0 + timeout;
+        require!(split || stalled, "A rerun needs a split vote or the review timeout");
+        self.reassign_reviewers(&mut job);
+        let round = job.review_round;
+        self.jobs.insert(job_id.0, job);
+        emit(
+            "review_rerun",
+            json!({ "job_id": job_id, "round": round, "reason": if split { "split" } else { "timeout" } }),
+        );
+    }
+
+    pub fn refund_milestone(&mut self, job_id: U64) {
+        let caller = owner_of(&env::predecessor_account_id());
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.buyer == caller, "Only the buyer can refund");
+        require!(
+            job.stage == JobStage::Funded && job.attempt > 0 && job.attempts_left == 0,
+            "Refund is allowed after the last attempt fails"
+        );
+        self.refund_to_buyer(&mut job, "failed");
+        self.jobs.insert(job_id.0, job);
+    }
+
+    pub fn grant_attempt(&mut self, job_id: U64) {
+        let caller = owner_of(&env::predecessor_account_id());
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.buyer == caller, "Only the buyer can grant an attempt");
+        require!(
+            job.stage == JobStage::Funded && job.attempt > 0 && job.attempts_left == 0,
+            "An extra attempt is allowed after the last attempt fails"
+        );
+        job.attempts_left = 1;
+        self.jobs.insert(job_id.0, job);
+        emit("attempt_granted", json!({ "job_id": job_id, "attempts_left": 1 }));
+    }
+
+    pub fn open_dispute(&mut self, job_id: U64, reason: String) {
+        let caller = owner_of(&env::predecessor_account_id());
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(
+            job.buyer == caller || job.seller.as_ref() == Some(&caller),
+            "Only the buyer or seller can open a dispute"
+        );
+        require!(
+            job.stage == JobStage::Delivered || (job.stage == JobStage::Funded && job.attempt > 0),
+            "Only a delivered job can be disputed"
+        );
+        require!(!reason.trim().is_empty(), "Reason is required");
+        require!(reason.len() <= MAX_REASON_LEN, "Reason is too long");
+        require!(self.disputes.get(&job_id.0).is_none(), "This job was already disputed");
+        require!(self.config.reviewers.len() == 3, "Reviewers are not set");
+        self.disputes.insert(
+            job_id.0,
+            Dispute {
+                job_id,
+                opened_by: caller.clone(),
+                reason: reason.clone(),
+                opened_at: U64(env::block_timestamp()),
+                recheck: None,
+                recheck_at: None,
+                escalated_by: None,
+                escalated_at: None,
+                claim: None,
+                bond: U128(0),
+                proposal_id: None,
+                outcome: None,
+            },
+        );
+        job.stage = JobStage::Disputed;
+        self.reassign_reviewers(&mut job);
+        let seller = job.seller.clone().unwrap();
+        self.jobs.insert(job_id.0, job);
+        let mut rep = self.get_reputation(seller.clone());
+        rep.disputes += 1;
+        self.reputations.insert(seller, rep);
+        emit("dispute_opened", json!({ "job_id": job_id, "opener": caller, "reason": reason }));
+    }
+
+    pub fn resolve_dispute(&mut self, job_id: U64, outcome: String, seller_share_bps: u16) {
+        require!(env::predecessor_account_id() == self.config.dao_account, "Only the DAO can resolve a dispute");
+        let job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.stage == JobStage::Disputed, "Job is not disputed");
+        let dispute = self.disputes.get(&job_id.0).cloned().unwrap();
+        require!(dispute.escalated_at.is_some(), "The dispute was not escalated");
+        let bps = match outcome.as_str() {
+            "release" => 10_000,
+            "refund" => 0,
+            "split" => {
+                require!(seller_share_bps > 0 && seller_share_bps < 10_000, "A split needs a share between 1 and 9999");
+                seller_share_bps
+            }
+            _ => env::panic_str("Outcome must be release, refund or split"),
+        };
+        self.settle_dispute(job_id, outcome.as_str(), bps, "dao");
+    }
+
+    pub fn finalize_default(&mut self, job_id: U64) {
+        let job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.stage == JobStage::Disputed, "Job is not disputed");
+        let dispute = self.disputes.get(&job_id.0).cloned().unwrap();
+        let recheck = dispute.recheck.clone().unwrap_or_else(|| env::panic_str("The re-check has no result yet"));
+        let since = dispute.escalated_at.or(dispute.recheck_at).unwrap().0;
+        require!(env::block_timestamp() >= since + ESCALATION_WINDOW, "Wait 72 hours before finalizing");
+        let bps = if recheck == "release" { 10_000 } else { 0 };
+        self.settle_dispute(job_id, recheck.as_str(), bps, "default");
+    }
+
+    #[private]
+    pub fn on_proposal_added(&mut self, job_id: U64, #[callback_result] result: Result<U64, PromiseError>) {
+        match result {
+            Ok(id) => {
+                if let Some(mut dispute) = self.disputes.get(&job_id.0).cloned() {
+                    dispute.proposal_id = Some(id);
+                    self.disputes.insert(job_id.0, dispute);
+                }
+                emit("proposal_added", json!({ "job_id": job_id, "proposal_id": id }));
+            }
+            Err(_) => emit("proposal_failed", json!({ "job_id": job_id })),
+        }
+    }
+
+    pub fn rate(&mut self, job_id: U64, stars: u8) {
+        let caller = owner_of(&env::predecessor_account_id());
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.stage == JobStage::Released, "Only a paid job can be rated");
+        require!((1..=5).contains(&stars), "Stars must be between 1 and 5");
+        let seller = job.seller.clone().unwrap();
+        let ratee = if caller == job.buyer {
+            require!(!job.buyer_rated, "You already rated this job");
+            job.buyer_rated = true;
+            seller
+        } else if caller == seller {
+            require!(!job.seller_rated, "You already rated this job");
+            job.seller_rated = true;
+            job.buyer.clone()
+        } else {
+            env::panic_str("Only the buyer or seller can rate")
+        };
+        self.jobs.insert(job_id.0, job);
+        let mut rep = self.get_reputation(ratee.clone());
+        rep.rating_sum += stars as u32;
+        rep.rating_count += 1;
+        self.reputations.insert(ratee.clone(), rep.clone());
+        emit("rated", json!({ "job_id": job_id, "by": caller, "account_id": ratee, "stars": stars }));
+        let rating_avg = rep.rating_sum as f64 / rep.rating_count as f64;
+        emit(
+            "reputation_updated",
+            json!({ "account_id": ratee, "settled": rep.settled, "disputes": rep.disputes, "rating_avg": rating_avg }),
+        );
+    }
+
+    pub fn return_stake(&mut self) {
+        let caller = env::predecessor_account_id();
+        let stake = self.get_stake(caller.clone()).0;
+        require!(stake > 0, "Nothing staked");
+        let rep = self.get_reputation(caller.clone());
+        require!(
+            rep.settled >= NEW_SELLER_SETTLED_JOBS && rep.disputes == 0,
+            "The stake comes back after 3 settled jobs with no disputes"
+        );
+        self.stakes.remove(&caller);
+        self.credit(&caller, stake);
+        emit("stake_returned", json!({ "account_id": caller, "amount": U128(stake) }));
+    }
+
+    pub fn get_dispute(&self, job_id: U64) -> Option<Dispute> {
+        self.disputes.get(&job_id.0).cloned()
+    }
+
+    pub fn get_stake(&self, account_id: AccountId) -> U128 {
+        U128(self.stakes.get(&account_id).copied().unwrap_or(0))
+    }
+
+    pub fn nft_metadata(&self) -> ContractMetadata {
+        ContractMetadata {
+            spec: "nft-1.0.0".to_string(),
+            name: "AGORA completion record".to_string(),
+            symbol: "AGORA-DONE".to_string(),
+        }
+    }
+
+    pub fn nft_token(&self, token_id: String) -> Option<Token> {
+        self.records.get(&token_id).map(|r| Token {
+            token_id: r.token_id.clone(),
+            owner_id: r.owner_id.clone(),
+            metadata: TokenMetadata {
+                title: format!("Completed job {}", r.job_id.0),
+                description: "Non-transferable record of a settled AGORA job".to_string(),
+                issued_at: r.issued_at.0.to_string(),
+                extra: json!({ "job_id": r.job_id, "amount": r.amount }).to_string(),
+            },
+        })
+    }
+
+    pub fn nft_total_supply(&self) -> U128 {
+        U128((self.next_record_id - 1) as u128)
+    }
+
+    pub fn nft_supply_for_owner(&self, account_id: AccountId) -> U128 {
+        U128(self.records_of.get(&account_id).map(|v| v.len()).unwrap_or(0) as u128)
+    }
+
+    pub fn nft_tokens_for_owner(&self, account_id: AccountId, from_index: Option<U128>, limit: Option<u64>) -> Vec<Token> {
+        let ids = self.records_of.get(&account_id).cloned().unwrap_or_default();
+        let start = from_index.map(|i| i.0 as usize).unwrap_or(0);
+        let take = limit.unwrap_or(50).min(100) as usize;
+        ids.iter().skip(start).take(take).filter_map(|id| self.nft_token(id.clone())).collect()
+    }
+
+    #[payable]
+    pub fn nft_transfer(&mut self, receiver_id: AccountId, token_id: String, approval_id: Option<u64>, memo: Option<String>) {
+        let _ = (receiver_id, token_id, approval_id, memo);
+        env::panic_str("Completion records are non-transferable")
+    }
+
+    #[payable]
+    pub fn nft_transfer_call(
+        &mut self,
+        receiver_id: AccountId,
+        token_id: String,
+        approval_id: Option<u64>,
+        memo: Option<String>,
+        msg: String,
+    ) -> PromiseOrValue<bool> {
+        let _ = (receiver_id, token_id, approval_id, memo, msg);
+        env::panic_str("Completion records are non-transferable")
     }
 }
 
@@ -1297,5 +1844,374 @@ mod tests {
         deposit(&mut contract, "alice.testnet", 5_000_000);
         call_from("alice.testnet", 1);
         let _ = contract.withdraw(U128(6_000_000));
+    }
+
+    const HOUR: u64 = 3_600_000_000_000;
+
+    fn fail_attempt(contract: &mut Contract, job_id: U64) {
+        vote_as(contract, job_id, "r1.testnet", false);
+        vote_as(contract, job_id, "r2.testnet", false);
+    }
+
+    fn redeliver(contract: &mut Contract, job_id: U64, commit: &str) {
+        call_at("agents.veteran.testnet", 0, 0);
+        contract.submit_delivery(job_id, commit.to_string());
+    }
+
+    fn disputed_with_recheck(contract: &mut Contract, approve: bool) -> U64 {
+        let job_id = delivered_job(contract);
+        call_at("alice.testnet", 0, 0);
+        contract.open_dispute(job_id, "The fix hard-codes the test values".to_string());
+        vote_as(contract, job_id, "r1.testnet", approve);
+        vote_as(contract, job_id, "r2.testnet", approve);
+        job_id
+    }
+
+    fn bond(contract: &mut Contract, from: &str, job_id: U64, amount: u128, at: u64) {
+        call_at("usdc.testnet", 0, at);
+        let _ = contract.ft_on_transfer(acc(from), U128(amount), format!("dispute_bond:{}", job_id.0));
+    }
+
+    fn released_job(contract: &mut Contract) -> U64 {
+        let job_id = delivered_job(contract);
+        vote_as(contract, job_id, "r1.testnet", true);
+        vote_as(contract, job_id, "r2.testnet", true);
+        job_id
+    }
+
+    #[test]
+    fn rerun_after_split_vote_clears_votes() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        vote_as(&mut contract, job_id, "r1.testnet", true);
+        vote_as(&mut contract, job_id, "r2.testnet", false);
+        call_at("anyone.testnet", 0, 0);
+        contract.rerun_review(job_id);
+        let job = contract.get_job(job_id).unwrap();
+        assert_eq!(job.stage, JobStage::Delivered);
+        assert_eq!(job.review_round, 2);
+        assert!(job.votes.is_empty());
+    }
+
+    #[test]
+    #[should_panic(expected = "A rerun needs a split vote or the review timeout")]
+    fn rerun_too_early_fails() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        call_at("anyone.testnet", 0, 11 * HOUR);
+        contract.rerun_review(job_id);
+    }
+
+    #[test]
+    fn rerun_after_review_timeout() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        call_at("anyone.testnet", 0, 12 * HOUR);
+        contract.rerun_review(job_id);
+        assert_eq!(contract.get_job(job_id).unwrap().review_round, 2);
+    }
+
+    #[test]
+    fn refund_after_last_attempt_fails() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        fail_attempt(&mut contract, job_id);
+        redeliver(&mut contract, job_id, "commit-2");
+        fail_attempt(&mut contract, job_id);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.refund_milestone(job_id);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Refunded);
+        let buyer = contract.get_balance(acc("alice.testnet"));
+        assert_eq!(buyer.free.0, 200_000_000);
+        assert_eq!(buyer.escrowed.0, 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Refund is allowed after the last attempt fails")]
+    fn refund_with_attempts_left_fails() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        fail_attempt(&mut contract, job_id);
+        call_at("alice.testnet", 0, 0);
+        contract.refund_milestone(job_id);
+    }
+
+    #[test]
+    fn grant_attempt_lets_the_seller_try_again() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        fail_attempt(&mut contract, job_id);
+        redeliver(&mut contract, job_id, "commit-2");
+        fail_attempt(&mut contract, job_id);
+        call_at("alice.testnet", 0, 0);
+        contract.grant_attempt(job_id);
+        assert_eq!(contract.get_job(job_id).unwrap().attempts_left, 1);
+        redeliver(&mut contract, job_id, "commit-3");
+        assert_eq!(contract.get_job(job_id).unwrap().attempt, 3);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the buyer can grant an attempt")]
+    fn seller_cannot_grant_an_attempt() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        call_at("veteran.testnet", 0, 0);
+        contract.grant_attempt(job_id);
+    }
+
+    #[test]
+    fn dispute_freezes_job_and_starts_free_recheck() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        vote_as(&mut contract, job_id, "r1.testnet", true);
+        call_at("alice.testnet", 0, 0);
+        contract.open_dispute(job_id, "Tests pass on a hard-coded value".to_string());
+        let job = contract.get_job(job_id).unwrap();
+        assert_eq!(job.stage, JobStage::Disputed);
+        assert!(job.votes.is_empty());
+        assert_eq!(contract.get_reputation(acc("veteran.testnet")).disputes, 1);
+        assert_eq!(contract.get_dispute(job_id).unwrap().opened_by, acc("alice.testnet"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Only a delivered job can be disputed")]
+    fn released_job_cannot_be_disputed() {
+        let mut contract = funded_setup();
+        let job_id = released_job(&mut contract);
+        call_at("alice.testnet", 0, 0);
+        contract.open_dispute(job_id, "late".to_string());
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the buyer or seller can open a dispute")]
+    fn stranger_cannot_dispute() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        call_at("mallory.testnet", 0, 0);
+        contract.open_dispute(job_id, "no".to_string());
+    }
+
+    #[test]
+    fn recheck_result_stands_after_72_hours() {
+        let mut contract = funded_setup();
+        let job_id = disputed_with_recheck(&mut contract, true);
+        assert_eq!(contract.get_dispute(job_id).unwrap().recheck, Some("release".to_string()));
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Disputed);
+        call_at("anyone.testnet", 0, 72 * HOUR);
+        contract.finalize_default(job_id);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Released);
+        assert_eq!(contract.get_balance(acc("veteran.testnet")).free.0, 31_360_000);
+        assert_eq!(contract.get_dispute(job_id).unwrap().outcome, Some("release".to_string()));
+    }
+
+    #[test]
+    #[should_panic(expected = "Wait 72 hours before finalizing")]
+    fn finalize_too_early_fails() {
+        let mut contract = funded_setup();
+        let job_id = disputed_with_recheck(&mut contract, true);
+        call_at("anyone.testnet", 0, 71 * HOUR);
+        contract.finalize_default(job_id);
+    }
+
+    #[test]
+    fn dao_upholds_buyer_claim_and_returns_bond() {
+        let mut contract = funded_setup();
+        let job_id = disputed_with_recheck(&mut contract, true);
+        bond(&mut contract, "alice.testnet", job_id, 1_600_000, HOUR);
+        let dispute = contract.get_dispute(job_id).unwrap();
+        assert_eq!(dispute.claim, Some("refund".to_string()));
+        assert_eq!(dispute.bond.0, 1_600_000);
+        call_at("dao.testnet", 0, 2 * HOUR);
+        contract.resolve_dispute(job_id, "refund".to_string(), 0);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Refunded);
+        let buyer = contract.get_balance(acc("alice.testnet"));
+        assert_eq!(buyer.free.0, 201_600_000);
+        assert_eq!(buyer.escrowed.0, 0);
+    }
+
+    #[test]
+    fn unanswered_escalation_falls_back_and_forfeits_bond() {
+        let mut contract = funded_setup();
+        let job_id = disputed_with_recheck(&mut contract, true);
+        bond(&mut contract, "alice.testnet", job_id, 1_600_000, HOUR);
+        call_at("anyone.testnet", 0, 73 * HOUR);
+        contract.finalize_default(job_id);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Released);
+        assert_eq!(contract.get_balance(acc("dao.testnet")).free.0, 640_000 + 1_600_000);
+    }
+
+    #[test]
+    fn dao_splits_the_payment() {
+        let mut contract = funded_setup();
+        let job_id = disputed_with_recheck(&mut contract, false);
+        bond(&mut contract, "veteran.testnet", job_id, 1_600_000, HOUR);
+        call_at("dao.testnet", 0, 2 * HOUR);
+        contract.resolve_dispute(job_id, "split".to_string(), 7_000);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Released);
+        assert_eq!(contract.get_balance(acc("veteran.testnet")).free.0, 21_952_000 + 1_600_000);
+        assert_eq!(contract.get_balance(acc("dao.testnet")).free.0, 448_000);
+        assert_eq!(contract.get_balance(acc("alice.testnet")).free.0, 168_000_000 + 9_600_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Bond is below 5% of the price (minimum 1 USDC)")]
+    fn small_bond_fails() {
+        let mut contract = funded_setup();
+        let job_id = disputed_with_recheck(&mut contract, true);
+        bond(&mut contract, "alice.testnet", job_id, 1_500_000, HOUR);
+    }
+
+    #[test]
+    #[should_panic(expected = "The re-check already agrees with you")]
+    fn winner_cannot_escalate() {
+        let mut contract = funded_setup();
+        let job_id = disputed_with_recheck(&mut contract, true);
+        bond(&mut contract, "veteran.testnet", job_id, 2_000_000, HOUR);
+    }
+
+    #[test]
+    #[should_panic(expected = "Wait for the re-check result")]
+    fn escalate_before_recheck_fails() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        call_at("alice.testnet", 0, 0);
+        contract.open_dispute(job_id, "bad".to_string());
+        bond(&mut contract, "alice.testnet", job_id, 2_000_000, HOUR);
+    }
+
+    #[test]
+    #[should_panic(expected = "The escalation window has closed")]
+    fn escalate_after_window_fails() {
+        let mut contract = funded_setup();
+        let job_id = disputed_with_recheck(&mut contract, true);
+        bond(&mut contract, "alice.testnet", job_id, 2_000_000, 72 * HOUR);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the DAO can resolve a dispute")]
+    fn only_dao_resolves() {
+        let mut contract = funded_setup();
+        let job_id = disputed_with_recheck(&mut contract, true);
+        bond(&mut contract, "alice.testnet", job_id, 1_600_000, HOUR);
+        call_at("alice.testnet", 0, 2 * HOUR);
+        contract.resolve_dispute(job_id, "refund".to_string(), 0);
+    }
+
+    #[test]
+    #[should_panic(expected = "Job is not under review")]
+    fn no_votes_after_escalation() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        call_at("alice.testnet", 0, 0);
+        contract.open_dispute(job_id, "bad".to_string());
+        vote_as(&mut contract, job_id, "r1.testnet", true);
+        vote_as(&mut contract, job_id, "r2.testnet", true);
+        vote_as(&mut contract, job_id, "r3.testnet", true);
+    }
+
+    #[test]
+    fn each_side_rates_once() {
+        let mut contract = funded_setup();
+        let job_id = released_job(&mut contract);
+        call_at("alice.testnet", 0, 0);
+        contract.rate(job_id, 5);
+        let seller = contract.get_reputation(acc("veteran.testnet"));
+        assert_eq!((seller.rating_sum, seller.rating_count), (30, 6));
+        call_at("veteran.testnet", 0, 0);
+        contract.rate(job_id, 4);
+        let buyer = contract.get_reputation(acc("alice.testnet"));
+        assert_eq!((buyer.rating_sum, buyer.rating_count), (4, 1));
+    }
+
+    #[test]
+    #[should_panic(expected = "You already rated this job")]
+    fn rating_twice_fails() {
+        let mut contract = funded_setup();
+        let job_id = released_job(&mut contract);
+        call_at("alice.testnet", 0, 0);
+        contract.rate(job_id, 5);
+        contract.rate(job_id, 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only a paid job can be rated")]
+    fn unpaid_job_cannot_be_rated() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        call_at("alice.testnet", 0, 0);
+        contract.rate(job_id, 5);
+    }
+
+    #[test]
+    fn starter_stake_lifts_the_new_seller_cap() {
+        let mut contract = admin_setup();
+        deposit(&mut contract, "alice.testnet", 200_000_000);
+        call_at("usdc.testnet", 0, 0);
+        let _ = contract.ft_on_transfer(acc("seller.testnet"), U128(10_000_000), "starter_stake".to_string());
+        assert_eq!(contract.get_stake(acc("seller.testnet")).0, 10_000_000);
+        let job_id = hired_job(&mut contract, 40_000_000, "seller.testnet", 0);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Funded);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only a registered seller can stake")]
+    fn unregistered_account_cannot_stake() {
+        let mut contract = admin_setup();
+        call_at("usdc.testnet", 0, 0);
+        let _ = contract.ft_on_transfer(acc("nobody.testnet"), U128(10_000_000), "starter_stake".to_string());
+    }
+
+    #[test]
+    fn stake_returns_after_three_clean_jobs() {
+        let mut contract = admin_setup();
+        call_at("usdc.testnet", 0, 0);
+        let _ = contract.ft_on_transfer(acc("seller.testnet"), U128(10_000_000), "starter_stake".to_string());
+        contract.reputations.insert(acc("seller.testnet"), Reputation { settled: 3, disputes: 0, rating_sum: 0, rating_count: 0 });
+        call_at("seller.testnet", 0, 0);
+        contract.return_stake();
+        assert_eq!(contract.get_stake(acc("seller.testnet")).0, 0);
+        assert_eq!(contract.get_balance(acc("seller.testnet")).free.0, 10_000_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "The stake comes back after 3 settled jobs with no disputes")]
+    fn stake_stays_before_three_jobs() {
+        let mut contract = admin_setup();
+        call_at("usdc.testnet", 0, 0);
+        let _ = contract.ft_on_transfer(acc("seller.testnet"), U128(10_000_000), "starter_stake".to_string());
+        call_at("seller.testnet", 0, 0);
+        contract.return_stake();
+    }
+
+    #[test]
+    fn release_mints_a_completion_record() {
+        let mut contract = funded_setup();
+        let job_id = released_job(&mut contract);
+        assert_eq!(contract.nft_total_supply().0, 1);
+        assert_eq!(contract.nft_supply_for_owner(acc("veteran.testnet")).0, 1);
+        let token = contract.nft_token("1".to_string()).unwrap();
+        assert_eq!(token.owner_id, acc("veteran.testnet"));
+        assert_eq!(token.metadata.title, format!("Completed job {}", job_id.0));
+        assert_eq!(contract.nft_tokens_for_owner(acc("veteran.testnet"), None, None).len(), 1);
+        assert_eq!(contract.nft_metadata().spec, "nft-1.0.0");
+    }
+
+    #[test]
+    #[should_panic(expected = "Completion records are non-transferable")]
+    fn completion_record_cannot_move() {
+        let mut contract = funded_setup();
+        released_job(&mut contract);
+        call_at("veteran.testnet", 1, 0);
+        contract.nft_transfer(acc("buyer.testnet"), "1".to_string(), None, None);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the config owner")]
+    fn only_owner_sets_proposal_bond() {
+        let mut contract = setup();
+        call_from("alice.testnet", 1);
+        contract.set_proposal_bond(U128(1));
     }
 }
