@@ -1,5 +1,6 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
 import type { AuthUser } from '../lib/auth';
+import type { Thread } from './actions';
 import { BIDS, ORDERS, type Bid, type FilterKey, type Order, type OtherJob } from '../data/sample';
 
 /*
@@ -11,6 +12,7 @@ export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text:
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
   | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick';
+export interface LiveNote { id: string; kind: string; text: string; link: string | null; time: string; read: boolean }
 export interface State {
   stage: number;
   tour: number; tourMin: boolean;
@@ -34,6 +36,12 @@ export interface State {
   stars: number; dReason: string; mail: string; walletLinked: boolean;
   /** The real signed-in account from Google or GitHub; null in the simulated demo. */
   user: AuthUser | null;
+  /** True when a real account is signed in and the API answered; screens then show API data. */
+  live: boolean;
+  /** The job the New request, chat and room screens follow in live mode. */
+  liveJob: { id: string; ref: string } | null;
+  liveThreads: Thread[];
+  notes: { unread: number; items: LiveNote[] };
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
 }
 
@@ -62,6 +70,7 @@ let state: State = {
   who: 'patchsmith', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: null,
+  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] },
   modal: null,
 };
 

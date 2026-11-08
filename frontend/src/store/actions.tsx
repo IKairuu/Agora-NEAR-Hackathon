@@ -3,6 +3,7 @@ import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
+import { goLive, isLive, leaveLive, liveAttachRepo, liveHire, liveKeepWait, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -58,6 +59,7 @@ const threadLog = (k: string, seed?: [ChatMsg['from'], string][]): ChatMsg[] =>
   getState().tLog[k] ?? (seed ?? T_MSGS[k] ?? []).map(([from, text]) => ({ from, text }));
 export function threads(): Thread[] {
   const s = getState();
+  if (s.live) return s.liveThreads;
   const out: Thread[] = [];
   if (s.stage >= 5 || (s.stage >= 4 && s.offerSt)) {
     const b = hb(s); const log = s.stage >= 5 ? chatLog(b.key) : []; const last = log[log.length - 1];
@@ -81,6 +83,7 @@ export function threads(): Thread[] {
 export function sendThread(raw: string) {
   const v = raw.trim(); const k = getState().thread;
   if (!v || !k) return;
+  if (isLive()) { void liveSendThread(k, v); return; }
   const cur = threads().find((t) => t.k === k); if (!cur) return;
   const log: ChatMsg[] = [...cur.msgs, { from: 'me', text: v }];
   if (OFF_PLATFORM.test(v)) log.push({ from: 'sys', text: 'The fraud and lure agent flagged this message. Payment outside escrow is not protected.' });
@@ -92,13 +95,15 @@ export function sendThread(raw: string) {
 const patchOrder = (id: string, p: Partial<Order>) => setState((s) => ({ orders: s.orders.map((o) => (o.id === id ? { ...o, ...p } : o)) }));
 export const orderAct = {
   offer: (id: string) => openModal('offer', { id }),
-  decline: (id: string) => { setState((s) => ({ orders: s.orders.filter((o) => o.id !== id) })); toast('Request declined. The buyer can pick another seller.'); },
+  decline: (id: string) => { if (isLive()) { void liveOrderDecline(id); return; } setState((s) => ({ orders: s.orders.filter((o) => o.id !== id) })); toast('Request declined. The buyer can pick another seller.'); },
   accept: (id: string) => {
+    if (isLive()) { void liveOrderAccept(id); return; }
     const o = getState().orders.find((x) => x.id === id)!;
     patchOrder(id, { st: 2, note: 'Buyer accepted. Tests locked, ' + o.price + ' USDC moved into Protected payment.' });
     toast(id + ' accepted. Payment protected, you can start.');
   },
   deliver: (id: string) => {
+    if (isLive()) { toast('Delivering through the test runner is not connected yet. It comes with the deliveries module.', 'hold'); return; }
     const o = getState().orders.find((x) => x.id === id)!;
     patchOrder(id, { st: 3, note: 'Delivered commit a41c9e2. Reviewers are running the locked tests.' });
     toast('Delivery submitted. 3 reviewers are running the locked tests.');
@@ -109,6 +114,7 @@ export const orderAct = {
   },
   /** The Send an offer form. */
   sendOffer: (id: string, priceText: string, days: string) => {
+    if (isLive()) { void liveSendOffer(id, priceText, days).then((ok) => { if (ok) setState({ modal: null, oTab: 'active' }); }); return; }
     const o = getState().orders.find((x) => x.id === id); if (!o) return;
     const p = (priceText.match(/[\d.]+/) || ['42'])[0];
     const price = (+p).toFixed(2);
@@ -139,6 +145,7 @@ export const TOUR: TourStep[] = [
   { r: 'wallet', st: 8, t: 'A wallet that stays simple', p: 'One balance, four actions. Buyers can add funds from other chains through NEAR Intents, and agents can never withdraw.', d: <>That's the full loop. Press <b>Finish</b>.</> },
 ];
 export function tourGo(i: number) {
+  if (isLive()) { leaveLive(); toast('The demo tour uses sample data. Sign in again afterwards to see your own jobs.', 'hold'); }
   const s = TOUR[i];
   setState((st) => ({ tour: i, stage: s.st, attack: null, voting: false, role: s.st >= 1 && !st.role ? 'hire' : st.role, tourMin: false, modal: null }));
   s.act?.();
@@ -152,6 +159,7 @@ export const tourStep = (from: number, to: number) => { if (getState().tour === 
 export function hire(key: string) {
   const s = getState();
   if (s.stage < 3) return;
+  if (s.live) { void liveHire(key).then((ok) => { if (ok) go('chat'); }); return; }
   setState({ preNeg: s.stage === 3 ? true : s.preNeg, stage: Math.max(s.stage, 4), hire: key, offerSt: 'wait', thread: 'demo', inboxF: 'buy' });
   go('chat');
   toast(`Your agent sent the hire offer to ${sellerBy(key)!.name}.`);
@@ -215,12 +223,14 @@ export const act = {
     const r = getState().rolePick; if (!r) return;
     setState({ role: r, after: null, modal: null });
     remember({ role: r });
+    if (isLive()) void liveRole(r);
     goRole(r);
   },
   roleskip: () => { setState((s) => ({ role: s.role || 'hire', modal: null })); go('ask'); },
-  signout: () => { signOutRemote(); setState({ stage: 0, role: null, tour: -1, user: null, signVia: '' }); go('home'); toast('Signed out.'); },
+  signout: () => { leaveLive(); signOutRemote(); setState({ stage: 0, role: null, tour: -1, user: null, signVia: '' }); go('home'); toast('Signed out.'); },
   /** Approve and lock the tests: offers then arrive one by one, lowest price first. */
   lockspec: () => {
+    if (isLive()) { void liveLockSpec().then(() => tourStep(2, 3)); acScroll(); return; }
     const id = getState().streamId + 1;
     setState((s) => ({ stage: Math.max(s.stage, 2), bidsShown: 0, preNeg: false, streamId: id }));
     acScroll();
@@ -241,7 +251,7 @@ export const act = {
     setTimeout(tick, 700);
   },
   editspec: () => { const t = document.getElementById('ask-in') as HTMLTextAreaElement | null; if (t) { t.placeholder = 'Tell the spec writer what to change'; t.focus(); } },
-  postpublic: () => toast('J-1042 is now also on Open jobs. New offers join this list, lowest first.'),
+  postpublic: () => isLive() ? void livePostPublic() : toast('J-1042 is now also on Open jobs. New offers join this list, lowest first.'),
   postpublic2: (xid: string) => {
     const s = getState(); const x = s.extra.find((e) => e.id === xid); if (!x) return;
     setState({
@@ -250,21 +260,23 @@ export const act = {
     });
     acScroll(); toast(`${x.id} posted on Open jobs.`);
   },
-  keepwait: () => toast('Your agent keeps the job private and checks again in 30 minutes.'),
+  keepwait: () => isLive() ? void liveKeepWait() : toast('Your agent keeps the job private and checks again in 30 minutes.'),
   heroask: () => { const s = getState(); setState({ draft: s.q || '' }); if (s.stage >= 1) { go('ask'); return; } setState({ after: 'ask' }); act.signin(); },
   selleraccept: () => {
+    if (isLive()) { toast('The seller accepts from their own Orders page. This screen updates when they answer.', 'hold'); return; }
     setState((s) => ({ offerSt: 'accepted', stage: Math.max(s.stage, 5) })); scrollMsgs();
     toast(<><b>{hb(getState()).name} accepted.</b> {hAmt()} USDC is now in Protected payment.</>);
     tourStep(5, 6);
   },
   sellerdecline: () => {
+    if (isLive()) { toast('The seller answers from their own Orders page. This screen updates when they do.', 'hold'); return; }
     const s = getState();
     setState({ declined: s.declined.includes(s.hire) ? s.declined : [...s.declined, s.hire], offerSt: 'declined' }); scrollMsgs();
     toast(`${hb(s).name} declined. Nothing was locked.`, 'hold');
   },
-  attachrepo: () => toast('In the prototype the repository is github.com/lumen-labs/payroll-vault at a41c9e2.'),
-  bids: () => { setState((s) => ({ stage: Math.max(s.stage, 3), jobTab: 'bids' })); toast('2 offers held by the fraud and lure agent.', 'hold'); },
-  negotiate: () => { setState((s) => ({ stage: Math.max(s.stage, 4), jobTab: 'neg' })); toast('Your agent negotiated patchsmith down to 32.00 USDC. Choose any offer to hire.'); },
+  attachrepo: () => isLive() ? void liveAttachRepo() : toast('In the prototype the repository is github.com/lumen-labs/payroll-vault at a41c9e2.'),
+  bids: () => { if (isLive()) { setState({ jobTab: 'bids' }); return; } setState((s) => ({ stage: Math.max(s.stage, 3), jobTab: 'bids' })); toast('2 offers held by the fraud and lure agent.', 'hold'); },
+  negotiate: () => { if (isLive()) { setState({ jobTab: 'neg' }); toast('Pick an offer and your buyer agent sends the counter-offer in its chat.', 'hold'); return; } setState((s) => ({ stage: Math.max(s.stage, 4), jobTab: 'neg' })); toast('Your agent negotiated patchsmith down to 32.00 USDC. Choose any offer to hire.'); },
   fund: () => hire(getState().hire || 'patchsmith'),
   send: () => openModal('send'),
   receive: () => openModal('receive'),
@@ -297,6 +309,7 @@ export const act = {
   },
   placebid: () => {
     if (!getState().seller) { toast('Set up your seller profile first. It takes about 5 minutes.', 'hold'); go('sell'); return; }
+    if (isLive()) { void livePlaceBid(); return; }
     toast('Bid sent. Your bidding agent priced it inside your rules: 3 attempts, delivery in 3 days.');
   },
   rate: () => {
@@ -343,6 +356,7 @@ export const act = {
   reqsvc2: (what: string) => {
     const s = getState(); const gg = gigBy(s.svc)!; const id = 'J-' + s.nextJob;
     const title = what || gg.prompt;
+    if (s.live) { void liveRequestService(title).then((ok) => { if (ok) { setState({ modal: null }); go('jobs'); } }); return; }
     setState({
       nextJob: s.nextJob + 1, modal: null,
       newJobs: [{ id, title: title.length > 70 ? title.slice(0, 68) + '…' : title, cat: gg.cat, budget: gg.from + '.00', status: ['info', 'Offered to ' + gg.seller], who: gg.seller, note: 'Waiting for the seller to accept. Escrow funds when they do.' }, ...s.newJobs],
@@ -412,6 +426,7 @@ export const act = {
     const s = getState();
     if (s.stage < 1) { setState({ draft: v, after: 'ask' }); act.signin(); return; }
     setState({ draft: '' });
+    if (s.live) { void liveSubmitAsk(v).then(() => acScroll()); return; }
     if (!s.asked && s.stage < 2) { setState({ asked: true, askText: v }); acScroll(); tourStep(1, 2); return; }
     if (s.stage < 2) { toast('The spec writer will fold that into the tests before you lock them.'); return; }
     setState({ nextJob: s.nextJob + 1, extra: [...s.extra, { id: 'J-' + s.nextJob, text: v, t: clock(), posted: false }] });
@@ -437,7 +452,7 @@ export function initAuth(): () => void {
   if (urlError) { takePending(); toast(`Sign-in was not completed: ${urlError}`, 'block'); }
   if (!supabase) return () => {};
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
-    if (event === 'SIGNED_OUT') { setState({ user: null }); return; }
+    if (event === 'SIGNED_OUT') { leaveLive(); setState({ user: null }); return; }
     if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;
     const user = userOf(session);
     setTimeout(() => {
@@ -445,9 +460,11 @@ export function initAuth(): () => void {
       if (pending) {
         setState({ user, signVia: pending.via, after: pending.after, rolePick: pending.rolePick, tour: pending.tour, draft: pending.draft });
         if (user.onboarding.wallet) act.signin2(); else act.walletstep();
+        void goLive();
         return;
       }
       setState((s) => ({ user, signVia: s.signVia || user.via, stage: Math.max(s.stage, 1), role: s.role || user.onboarding.role || null }));
+      if (getState().tour < 0) void goLive();
     }, 0);
   });
   return () => data.subscription.unsubscribe();

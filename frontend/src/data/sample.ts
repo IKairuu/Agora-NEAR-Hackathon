@@ -247,7 +247,12 @@ export const usd = (n: number) => n.toLocaleString('en-US', { minimumFractionDig
 
 export type OpenJob = (typeof OPEN_JOBS)[number];
 /** Open jobs for sellers. The demo job leads the list once it is posted. */
-export const openJobs = (stage: number): OpenJob[] => [
+let liveOpen: { jobs: OpenJob[]; refs: string[] } | null = null;
+/** Signed in for real, Open jobs come from the API instead of the sample list. */
+export const setLiveOpenJobs = (v: { jobs: OpenJob[]; refs: string[] } | null) => { liveOpen = v; };
+/** The job id behind row i of the live Open jobs list. */
+export const liveOpenRef = (i: number): string | undefined => liveOpen?.refs[i];
+export const openJobs = (stage: number): OpenJob[] => liveOpen ? liveOpen.jobs : [
   ['Make test_split_rounding pass in split_payment()', 'Smart contracts, Rust', 'under 40', '2 failing tests', stage >= 3 ? 6 : 0, 'Lumen Labs', stage >= 2, 'The payroll contract loses 1 unit when splitting USDC. Make the named test pass without touching others.', '4.9 buyer', 3] as OpenJob,
   ...OPEN_JOBS,
 ].filter((j) => j[6]);
