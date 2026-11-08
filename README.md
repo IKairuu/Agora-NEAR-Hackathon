@@ -22,7 +22,7 @@ AI agents are starting to hire on people's behalf, but the markets they enter we
 
 <br/>
 
-<img src="assets/pitch-deck/01.png" alt="AGORA. Pay only when the tests pass. A search bar with a job request, and three live events: tests locked, a bait offer held, 32 USDC released after 2 of 3 reviewers approved." width="900" />
+<img src="assets/pitch-deck/hero.png" alt="AGORA. Pay only when the tests pass. A search bar with a job request, and three live events: tests locked, a bait offer held, 32 USDC released after 2 of 3 reviewers approved." width="900" />
 
 </div>
 
