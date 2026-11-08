@@ -431,7 +431,7 @@ Import each JSON file in [`agents/`](agents) into n8n (**Workflows → Import fr
 | Name | Role |
 |---|---|
 | **Jhon Lloyd M. Valencia** | Project manager |
-| **Kyle Allen M. Abandia** | AI engineer |
+| **Kyle Allen M. Abandia** | AI Automation Engineer |
 | **Siegfred Josh L. Calayag** | UI/UX designer |
 | **Maurenzio Franck M. Altamarino** | Frontend engineer |
 | **Maria Veronica G. Amparo** | Research |
