@@ -1,6 +1,7 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
 import { AuthService } from '../auth/auth.service';
+import { ChainService } from '../chain/chain.service';
 import { BidContext, NegotiationsRepository, OfferRow } from './negotiations.repository';
 import { agreedPriceOf, NegotiationsService } from './negotiations.service';
 
@@ -21,13 +22,14 @@ const ctx = (overrides: Partial<BidContext> = {}): BidContext => ({
 
 const offer = (overrides: Partial<OfferRow> = {}): OfferRow => ({
     id: OFFER, status: 'sent', price: 32 as never, bidId: BID, jobId: JOB, createdAt: new Date(),
-    job: { ref: 'J-1042', buyerId: BUYER, status: 'negotiating' },
+    job: { ref: 'J-1042', buyerId: BUYER, status: 'negotiating', onchainId: null, buyer: { nearAccountId: 'lumen.testnet', agentsAccountId: 'agents.lumen.testnet' } },
     seller: { id: SELLER, ownerId: SELLER_USER, displayName: 'patchsmith' },
     ...overrides,
 }) as OfferRow;
 
 describe('NegotiationsService', () => {
     let repo: jest.Mocked<NegotiationsRepository>;
+    let chain: jest.Mocked<ChainService>;
     let service: NegotiationsService;
     let caller = BUYER;
 
@@ -35,9 +37,13 @@ describe('NegotiationsService', () => {
         caller = BUYER;
         repo = {
             getBidContext: jest.fn(), createNegotiation: jest.fn().mockResolvedValue({ id: 'm1' }), getNegotiations: jest.fn(),
-            getOpenOffer: jest.fn(), createOffer: jest.fn(), getOffer: jest.fn(), getJobOffer: jest.fn(), acceptOffer: jest.fn(), declineOffer: jest.fn(),
+            getOpenOffer: jest.fn(), createOffer: jest.fn(), getOffer: jest.fn(), getJobOffer: jest.fn(), acceptOffer: jest.fn(), declineOffer: jest.fn(), setBuyerAccounts: jest.fn(),
         } as unknown as jest.Mocked<NegotiationsRepository>;
-        service = new NegotiationsService(repo, { verifySessionToken: jest.fn(async () => caller) } as unknown as AuthService);
+        chain = {
+            createAccount: jest.fn().mockResolvedValue({ account_id: 'agora-buyer.testnet', agents_account_id: 'agents.agora-buyer.testnet' }),
+            callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-fund_job-1', explorer_url: '', result: null }),
+        } as unknown as jest.Mocked<ChainService>;
+        service = new NegotiationsService(repo, { verifySessionToken: jest.fn(async () => caller) } as unknown as AuthService, chain);
     });
 
     it('opens round 1 for the buyer and moves the job to negotiating', async () => {
@@ -86,7 +92,28 @@ describe('NegotiationsService', () => {
         caller = SELLER_USER;
         repo.getOffer.mockResolvedValue(offer());
         repo.acceptOffer.mockResolvedValue(1);
-        await expect(service.acceptOffer('Bearer t', OFFER)).resolves.toEqual({ message: 'Hire Offer Successfully Accepted', id: OFFER, offerSt: 'accepted' });
+        await expect(service.acceptOffer('Bearer t', OFFER)).resolves.toEqual({
+            message: 'Hire Offer Successfully Accepted', id: OFFER, offerSt: 'accepted', funded: true, fundTx: 'mock-fund_job-1', fundError: null,
+        });
+        expect(chain.callAs.mock.calls[0]).toEqual(['transaction_agent', 'agents.lumen.testnet', 'fund_job', { job_id: 'J-1042' }]);
+        expect(chain.createAccount.mock.calls).toHaveLength(0);
+    });
+
+    it('creates the buyer account before funding when there is none', async () => {
+        caller = SELLER_USER;
+        repo.getOffer.mockResolvedValue(offer({ job: { ref: 'J-1042', buyerId: BUYER, status: 'negotiating', onchainId: 7n, buyer: { nearAccountId: null, agentsAccountId: null } } } as never));
+        repo.acceptOffer.mockResolvedValue(1);
+        await service.acceptOffer('Bearer t', OFFER);
+        expect(repo.setBuyerAccounts.mock.calls[0]).toEqual([BUYER, 'agora-buyer.testnet', 'agents.agora-buyer.testnet']);
+        expect(chain.callAs.mock.calls[0]).toEqual(['transaction_agent', 'agents.agora-buyer.testnet', 'fund_job', { job_id: '7' }]);
+    });
+
+    it('keeps the accept when funding is refused', async () => {
+        caller = SELLER_USER;
+        repo.getOffer.mockResolvedValue(offer());
+        repo.acceptOffer.mockResolvedValue(1);
+        chain.callAs.mockRejectedValue(new Error('Over per-job cap'));
+        await expect(service.acceptOffer('Bearer t', OFFER)).resolves.toMatchObject({ offerSt: 'accepted', funded: false, fundError: 'Over per-job cap' });
     });
 
     it('reports the offer state for a job', async () => {

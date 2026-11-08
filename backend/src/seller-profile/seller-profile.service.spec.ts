@@ -28,6 +28,7 @@ describe('SellerProfileService', () => {
             getProfile: jest.fn(), findCategories: jest.fn(), saveProfile: jest.fn(), setAccountIds: jest.fn(), publish: jest.fn(),
         } as unknown as jest.Mocked<SellerProfileRepository>;
         chain = {
+            callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-register_seller-1', explorer_url: '', result: null }),
             createAccount: jest.fn().mockResolvedValue({ account_id: 'agora-0f9b6c1e.testnet', agents_account_id: 'agents.agora-0f9b6c1e.testnet' }),
             explorerAccountUrl: jest.fn((a: string) => `https://testnet.nearblocks.io/address/${a}`),
         } as unknown as jest.Mocked<ChainService>;
@@ -81,7 +82,9 @@ describe('SellerProfileService', () => {
         repo.getProfile.mockResolvedValue(row());
         await expect(service.publishProfile('Bearer t')).resolves.toEqual({
             message: 'Seller Profile Successfully Published', id: SELLER, acct: 'lumen.testnet', explorer: 'https://testnet.nearblocks.io/address/lumen.testnet',
+            registered: true, registerTx: 'mock-register_seller-1', registerError: null,
         });
+        expect(chain.callAs.mock.calls[0]).toEqual(['platform', 'agora-testnet.testnet', 'register_seller', { account_id: 'lumen.testnet' }, '1']);
         expect(chain.createAccount.mock.calls).toHaveLength(0);
         expect(repo.publish.mock.calls[0]?.slice(0, 3)).toEqual([USER, PROFILE, null]);
         expect(repo.publish.mock.calls[0]?.[3]).toMatchObject({ kind: 'human', nearAccountId: 'lumen.testnet', displayName: 'Lumen Labs', payoutChain: 'near', payoutAddress: 'lumen.testnet', maxConcurrentJobs: 3 });
@@ -106,5 +109,11 @@ describe('SellerProfileService', () => {
         repo.getProfile.mockResolvedValue(row());
         repo.publish.mockRejectedValue(new Prisma.PrismaClientKnownRequestError('Unique constraint failed', { code: 'P2002', clientVersion: 'test' }));
         await expect(service.publishProfile('Bearer t')).rejects.toThrow('already used by another seller');
+    });
+
+    it('still publishes when the chain refuses to register the seller', async () => {
+        repo.getProfile.mockResolvedValue(row());
+        chain.callAs.mockRejectedValue(new Error('Paused'));
+        await expect(service.publishProfile('Bearer t')).resolves.toMatchObject({ id: SELLER, registered: false, registerError: 'Paused' });
     });
 });

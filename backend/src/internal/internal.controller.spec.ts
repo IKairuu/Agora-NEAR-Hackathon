@@ -2,7 +2,10 @@ import { ExecutionContext, UnauthorizedException } from '@nestjs/common';
 
 jest.mock('../prisma', () => ({ prisma: {} }));
 
+import { Test } from '@nestjs/testing';
 import { InternalKeyGuard } from './internal-key.guard';
+import { InternalController } from './internal.controller';
+import { InternalService } from './internal.service';
 
 const ctx = (key?: string) => ({ switchToHttp: () => ({ getRequest: () => ({ headers: key ? { 'x-internal-key': key } : {} }) }) }) as unknown as ExecutionContext;
 
@@ -21,9 +24,6 @@ describe('InternalKeyGuard', () => {
 
 describe('InternalController', () => {
     it('passes agent and runner results through to the service', async () => {
-        const { Test } = await import('@nestjs/testing');
-        const { InternalController } = await import('./internal.controller');
-        const { InternalService } = await import('./internal.service');
         const service = { agentNotify: jest.fn().mockResolvedValue({}), runnerResult: jest.fn().mockResolvedValue({}) };
         const module = await Test.createTestingModule({
             controllers: [InternalController],

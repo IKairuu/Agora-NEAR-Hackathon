@@ -237,8 +237,11 @@ const orderOf = (id: string) => getState().orders.find((o) => o.id === id) as Li
 export async function liveOrderAccept(id: string): Promise<void> {
   const o = orderOf(id);
   if (!o?.hireOfferId) { toast('Only a hire offer can be accepted here.', 'hold'); return; }
-  const res = await api(`/negotiations/v1/${o.hireOfferId}/accept`, { body: {} }).catch(() => null);
-  if (res) { toast(`${id} accepted. The buyer can now protect the payment.`); await refreshAll(false); }
+  const res = await api<{ funded?: boolean; fundError?: string | null }>(`/negotiations/v1/${o.hireOfferId}/accept`, { body: {} }).catch(() => null);
+  if (!res) return;
+  if (res.funded) toast(`${id} accepted. The buyer's agent called fund_job, so the payment is being protected.`);
+  else toast(`${id} accepted, but funding did not go through${res.fundError ? `: ${res.fundError}` : ''}.`, 'hold');
+  await refreshAll(false);
 }
 
 export async function liveOrderDecline(id: string): Promise<void> {

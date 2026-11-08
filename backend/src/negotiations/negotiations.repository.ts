@@ -23,7 +23,7 @@ const offerSelect = {
     bidId: true,
     jobId: true,
     createdAt: true,
-    job: { select: { ref: true, buyerId: true, status: true } },
+    job: { select: { ref: true, buyerId: true, status: true, onchainId: true, buyer: { select: { nearAccountId: true, agentsAccountId: true } } } },
     seller: { select: { id: true, ownerId: true, displayName: true } },
 } satisfies Prisma.HireOfferSelect;
 
@@ -115,5 +115,11 @@ export class NegotiationsRepository {
             });
             return updated.count;
         });
+    }
+
+    async setBuyerAccounts(buyerId: string, nearAccountId: string, agentsAccountId: string) {
+        return prisma.$transaction(async (tx) =>
+            tx.profile.update({ where: { id: buyerId }, data: { nearAccountId, agentsAccountId }, select: { id: true } }),
+        );
     }
 }

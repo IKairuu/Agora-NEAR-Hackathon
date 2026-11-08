@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { AuthService } from '../auth/auth.service.js';
+import { ChainService } from '../chain/chain.service.js';
 import { CreateNegotiation } from './dto/CreateNegotiation.dto.js';
 import { CreateNegotiationBulk } from './dto/CreateNegotiationBulk.dto.js';
 import { HireSeller } from './dto/HireSeller.dto.js';
@@ -39,6 +40,7 @@ export class NegotiationsService {
     constructor(
         private readonly negotiationsRepository: NegotiationsRepository,
         private readonly authService: AuthService,
+        private readonly chainService: ChainService,
     ) {}
 
     async createNegotiation(token: string, body: CreateNegotiation) {
@@ -109,7 +111,23 @@ export class NegotiationsService {
         if (!NEGOTIABLE_JOB.includes(offer.job.status)) throw new BadRequestException('This job already has a seller');
         const count = await this.negotiationsRepository.acceptOffer(authId, offer);
         if (count === 0) throw new ConflictException('This hire offer was already answered');
-        return { message: 'Hire Offer Successfully Accepted', id, offerSt: 'accepted' };
+        const funding = await this.fundJob(offer);
+        return { message: 'Hire Offer Successfully Accepted', id, offerSt: 'accepted', ...funding };
+    }
+
+    private async fundJob(offer: OfferRow): Promise<{ funded: boolean; fundTx: string | null; fundError: string | null }> {
+        try {
+            let agents = offer.job.buyer.agentsAccountId;
+            if (!agents) {
+                const created = await this.chainService.createAccount(offer.job.buyerId);
+                agents = created.agents_account_id;
+                await this.negotiationsRepository.setBuyerAccounts(offer.job.buyerId, offer.job.buyer.nearAccountId ?? created.account_id, agents);
+            }
+            const tx = await this.chainService.callAs('transaction_agent', agents, 'fund_job', { job_id: offer.job.onchainId?.toString() ?? offer.job.ref });
+            return { funded: true, fundTx: tx.tx_hash, fundError: null };
+        } catch (e) {
+            return { funded: false, fundTx: null, fundError: e instanceof Error ? e.message : 'Funding failed' };
+        }
     }
 
     async declineOffer(token: string, id: string) {

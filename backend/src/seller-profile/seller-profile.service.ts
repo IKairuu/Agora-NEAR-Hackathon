@@ -106,8 +106,10 @@ export class SellerProfileService {
                 payoutChain,
                 payoutAddress: payoutChain === 'near' ? sellerAcct : row.payoutAddress!,
             });
+            const registered = await this.registerSeller(seller.nearAccountId);
             return {
                 message: row.sellerId ? 'Seller Profile Successfully Updated' : 'Seller Profile Successfully Published',
+                ...registered,
                 id: seller.id,
                 acct: seller.nearAccountId,
                 explorer: this.chainService.explorerAccountUrl(seller.nearAccountId),
@@ -117,6 +119,16 @@ export class SellerProfileService {
                 throw new ConflictException('That NEAR account is already used by another seller');
             }
             throw e;
+        }
+    }
+
+    private async registerSeller(accountId: string): Promise<{ registered: boolean; registerTx: string | null; registerError: string | null }> {
+        try {
+            const platform = process.env['AGORA_PLATFORM_ACCOUNT'] ?? 'agora-testnet.testnet';
+            const tx = await this.chainService.callAs('platform', platform, 'register_seller', { account_id: accountId }, '1');
+            return { registered: true, registerTx: tx.tx_hash, registerError: null };
+        } catch (e) {
+            return { registered: false, registerTx: null, registerError: e instanceof Error ? e.message : 'Seller registration failed' };
         }
     }
 }
