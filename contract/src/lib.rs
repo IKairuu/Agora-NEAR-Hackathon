@@ -6,6 +6,7 @@ use near_sdk::{
     NearToken, PanicOnDefault, PromiseError, PromiseOrValue,
 };
 
+const USDC: u128 = 1_000_000;
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(10);
 const GAS_FOR_WITHDRAW_CALLBACK: Gas = Gas::from_tgas(10);
 
@@ -18,6 +19,7 @@ pub trait FungibleToken {
 #[derive(BorshStorageKey)]
 enum StorageKey {
     Balances,
+    Mandates,
 }
 
 #[near(serializers = [json, borsh])]
@@ -36,12 +38,51 @@ pub struct Balance {
     pub escrowed: U128,
 }
 
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
+pub struct Mandate {
+    pub per_job_cap: U128,
+    pub daily_cap: U128,
+    pub new_seller_cap: U128,
+    pub review_timeout_hours: u32,
+    pub categories: Vec<String>,
+    pub strict: bool,
+    pub approved_sellers: Vec<AccountId>,
+    pub paused: bool,
+}
+
+impl Default for Mandate {
+    fn default() -> Self {
+        Self {
+            per_job_cap: U128(50 * USDC),
+            daily_cap: U128(120 * USDC),
+            new_seller_cap: U128(25 * USDC),
+            review_timeout_hours: 12,
+            categories: vec!["rust".to_string(), "fe".to_string(), "tests".to_string()],
+            strict: false,
+            approved_sellers: vec![],
+            paused: false,
+        }
+    }
+}
+
 #[near(contract_state)]
 #[derive(PanicOnDefault)]
 pub struct Contract {
     config: Config,
-    paused: bool,
     balances: LookupMap<AccountId, Balance>,
+    mandates: LookupMap<AccountId, Mandate>,
+}
+
+pub fn is_agent(account_id: &AccountId) -> bool {
+    account_id.as_str().starts_with("agents.")
+}
+
+pub fn owner_of(account_id: &AccountId) -> AccountId {
+    match account_id.as_str().strip_prefix("agents.") {
+        Some(owner) => owner.parse().unwrap(),
+        None => account_id.clone(),
+    }
 }
 
 fn emit(event: &str, data: Value) {
@@ -66,8 +107,8 @@ impl Contract {
                 dao_account,
                 fee_bps: 200,
             },
-            paused: false,
             balances: LookupMap::new(StorageKey::Balances),
+            mandates: LookupMap::new(StorageKey::Mandates),
         }
     }
 
@@ -75,8 +116,74 @@ impl Contract {
         self.config.clone()
     }
 
-    pub fn is_paused(&self) -> bool {
-        self.paused
+    pub fn get_mandate(&self, account_id: AccountId) -> Mandate {
+        self.mandates.get(&account_id).cloned().unwrap_or_default()
+    }
+
+    pub fn is_paused(&self, account_id: AccountId) -> bool {
+        self.get_mandate(account_id).paused
+    }
+
+    #[payable]
+    pub fn set_mandate(
+        &mut self,
+        per_job_cap: U128,
+        daily_cap: U128,
+        new_seller_cap: U128,
+        review_timeout_hours: u32,
+        categories: Vec<String>,
+        strict: bool,
+        approved_sellers: Vec<AccountId>,
+    ) {
+        assert_one_yocto();
+        let account_id = env::predecessor_account_id();
+        require!(!is_agent(&account_id), "Agents cannot change the mandate");
+        require!(per_job_cap.0 <= daily_cap.0, "Per-job cap cannot exceed daily cap");
+        require!(new_seller_cap.0 <= per_job_cap.0, "New-seller cap cannot exceed per-job cap");
+        require!(review_timeout_hours > 0, "Review timeout must be positive");
+        let paused = self.get_mandate(account_id.clone()).paused;
+        let mandate = Mandate {
+            per_job_cap,
+            daily_cap,
+            new_seller_cap,
+            review_timeout_hours,
+            categories,
+            strict,
+            approved_sellers,
+            paused,
+        };
+        self.mandates.insert(account_id.clone(), mandate.clone());
+        emit(
+            "mandate_set",
+            json!({
+                "account_id": account_id,
+                "per_job_cap": mandate.per_job_cap,
+                "daily_cap": mandate.daily_cap,
+                "new_seller_cap": mandate.new_seller_cap,
+                "categories": mandate.categories,
+                "strict": mandate.strict,
+            }),
+        );
+    }
+
+    pub fn pause(&mut self) {
+        let caller = env::predecessor_account_id();
+        let owner = owner_of(&caller);
+        let mut mandate = self.get_mandate(owner.clone());
+        mandate.paused = true;
+        self.mandates.insert(owner.clone(), mandate);
+        emit("paused", json!({ "account_id": owner, "by": caller }));
+    }
+
+    #[payable]
+    pub fn unpause(&mut self) {
+        assert_one_yocto();
+        let account_id = env::predecessor_account_id();
+        require!(!is_agent(&account_id), "Only the owner can unpause");
+        let mut mandate = self.get_mandate(account_id.clone());
+        mandate.paused = false;
+        self.mandates.insert(account_id.clone(), mandate);
+        emit("unpaused", json!({ "account_id": account_id }));
     }
 
     pub fn get_balance(&self, account_id: AccountId) -> Balance {
@@ -181,7 +288,95 @@ mod tests {
         assert_eq!(config.usdc_token, acc("usdc.testnet"));
         assert_eq!(config.dao_account, acc("dao.testnet"));
         assert_eq!(config.fee_bps, 200);
-        assert!(!contract.is_paused());
+        assert!(!contract.is_paused(acc("alice.testnet")));
+    }
+
+    #[test]
+    fn mandate_defaults_match_limits_page() {
+        let contract = setup();
+        let mandate = contract.get_mandate(acc("alice.testnet"));
+        assert_eq!(mandate.per_job_cap.0, 50_000_000);
+        assert_eq!(mandate.daily_cap.0, 120_000_000);
+        assert_eq!(mandate.new_seller_cap.0, 25_000_000);
+        assert!(!mandate.strict);
+    }
+
+    fn set_caps(contract: &mut Contract, per_job: u128, daily: u128) {
+        contract.set_mandate(
+            U128(per_job),
+            U128(daily),
+            U128(per_job),
+            12,
+            vec!["rust".to_string()],
+            true,
+            vec![acc("seller.testnet")],
+        );
+    }
+
+    #[test]
+    fn owner_sets_mandate() {
+        let mut contract = setup();
+        call_from("alice.testnet", 1);
+        set_caps(&mut contract, 30_000_000, 90_000_000);
+        let mandate = contract.get_mandate(acc("alice.testnet"));
+        assert_eq!(mandate.per_job_cap.0, 30_000_000);
+        assert!(mandate.strict);
+        assert_eq!(mandate.approved_sellers, vec![acc("seller.testnet")]);
+    }
+
+    #[test]
+    #[should_panic(expected = "Requires attached deposit of exactly 1 yoctoNEAR")]
+    fn agent_key_cannot_set_mandate() {
+        let mut contract = setup();
+        call_from("agents.alice.testnet", 0);
+        set_caps(&mut contract, 30_000_000, 90_000_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Agents cannot change the mandate")]
+    fn agent_account_cannot_set_mandate() {
+        let mut contract = setup();
+        call_from("agents.alice.testnet", 1);
+        set_caps(&mut contract, 30_000_000, 90_000_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Per-job cap cannot exceed daily cap")]
+    fn per_job_cap_over_daily_cap_fails() {
+        let mut contract = setup();
+        call_from("alice.testnet", 1);
+        set_caps(&mut contract, 100_000_000, 90_000_000);
+    }
+
+    #[test]
+    fn guardian_pauses_owner() {
+        let mut contract = setup();
+        call_from("agents.alice.testnet", 0);
+        contract.pause();
+        assert!(contract.is_paused(acc("alice.testnet")));
+        assert!(!contract.is_paused(acc("bob.testnet")));
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the owner can unpause")]
+    fn agent_cannot_unpause() {
+        let mut contract = setup();
+        call_from("agents.alice.testnet", 0);
+        contract.pause();
+        call_from("agents.alice.testnet", 1);
+        contract.unpause();
+    }
+
+    #[test]
+    fn owner_unpauses_and_mandate_keeps_pause_state() {
+        let mut contract = setup();
+        call_from("alice.testnet", 0);
+        contract.pause();
+        call_from("alice.testnet", 1);
+        set_caps(&mut contract, 30_000_000, 90_000_000);
+        assert!(contract.is_paused(acc("alice.testnet")));
+        contract.unpause();
+        assert!(!contract.is_paused(acc("alice.testnet")));
     }
 
     #[test]
