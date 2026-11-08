@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, NotFoundException } from '@nestjs/comm
 import { isUUID } from 'class-validator';
 import { AuthService } from '../auth/auth.service.js';
 import { PublishJob } from './dto/PublishJob.dto.js';
-import { JobKey, JobRow, JobsRepository } from './jobs.repository.js';
+import { JobKey, JobRow, JobsRepository, OpenJobRow } from './jobs.repository.js';
 
 type Pill = [string, string];
 
@@ -96,6 +96,25 @@ export const toJob = (row: JobRow) => {
     };
 };
 
+const blurbOf = (text: string): string => (text.length > 180 ? `${text.slice(0, 177).replace(/\s+\S*$/, '')}...` : text);
+
+export const toOpenJob = (row: OpenJobRow, now = new Date()) => {
+    const tests = row.acceptanceSpecs[0]?.failingTests.length ?? 0;
+    return {
+        id: row.ref,
+        title: row.title,
+        cats: row.categoryRef.name,
+        category: row.categoryRef.slug,
+        budget: row.budgetLabel ?? '',
+        check: tests > 0 ? `${tests} failing test${tests === 1 ? '' : 's'}` : 'Locked tests',
+        bids: row._count.bids,
+        buyer: row.buyer.displayName ?? 'Buyer',
+        blurb: blurbOf(row.description),
+        buyerRating: 'New buyer',
+        minutesAgo: Math.max(0, Math.round((now.getTime() - (row.postedAt ?? row.createdAt).getTime()) / 60000)),
+    };
+};
+
 @Injectable()
 export class JobsService {
     constructor(
@@ -126,6 +145,12 @@ export class JobsService {
         const count = await this.jobsRepository.publishJob(authId, row.id);
         if (count === 0) throw new BadRequestException('This job is already past the offers stage');
         return { message: 'Job Successfully Published', id: row.id, ref: row.ref };
+    }
+
+    async getOpenJobs(category?: string, q?: string) {
+        if (category && !['rust', 'fe', 'tests', 'scripts'].includes(category)) throw new BadRequestException('Invalid category');
+        const rows = await this.jobsRepository.getOpenJobs({ category: category || undefined, q: q?.trim().slice(0, 100) || undefined });
+        return rows.map((r) => toOpenJob(r));
     }
 
     private async authId(token: string): Promise<string> {

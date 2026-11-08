@@ -23,6 +23,8 @@ import { SellersModule } from './sellers/sellers.module.js';
 import { ServicesModule } from './services/services.module.js';
 import { SavedModule } from './saved/saved.module.js';
 import { SellerProfileModule } from './seller-profile/seller-profile.module.js';
+import { OrdersModule } from './orders/orders.module.js';
+import { InternalModule } from './internal/internal.module.js';
 
 @Module({
     imports: [
@@ -48,6 +50,8 @@ import { SellerProfileModule } from './seller-profile/seller-profile.module.js';
         ServicesModule,
         SavedModule,
         SellerProfileModule,
+        OrdersModule,
+        InternalModule,
     ],
     controllers: [AppController],
     providers: [AppService],

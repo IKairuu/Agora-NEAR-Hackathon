@@ -59,3 +59,16 @@ describe('JobsService', () => {
         expect(ago(new Date('2026-11-08T12:00:00Z'), now)).toBe('yesterday');
     });
 });
+
+describe('toOpenJob', () => {
+    it('maps a public job to the Open jobs card', () => {
+        const { toOpenJob } = jest.requireActual('./jobs.service') as typeof import('./jobs.service');
+        const now = new Date('2026-11-09T12:00:00Z');
+        const card = toOpenJob({
+            ref: 'J-1042', title: 'Make test_split_rounding pass', description: 'The payroll contract loses 1 unit when splitting USDC.', budgetLabel: 'under 40',
+            postedAt: new Date('2026-11-09T11:57:00Z'), createdAt: now, categoryRef: { slug: 'rust', name: 'Smart contracts' }, buyer: { displayName: 'Lumen Labs' },
+            acceptanceSpecs: [{ failingTests: ['test_split_rounding', 'test_split_dust_to_last'] }], _count: { bids: 6 },
+        } as never, now);
+        expect(card).toMatchObject({ id: 'J-1042', cats: 'Smart contracts', budget: 'under 40', check: '2 failing tests', bids: 6, buyer: 'Lumen Labs', minutesAgo: 3 });
+    });
+});

@@ -34,8 +34,37 @@ const readableJob = (userId: string): Prisma.JobWhereInput => ({
     ],
 });
 
+const openJobSelect = {
+    ref: true,
+    title: true,
+    description: true,
+    budgetLabel: true,
+    postedAt: true,
+    createdAt: true,
+    categoryRef: { select: { slug: true, name: true } },
+    buyer: { select: { displayName: true } },
+    acceptanceSpecs: { where: { lockedAt: { not: null } }, select: { failingTests: true }, orderBy: { version: 'desc' }, take: 1 },
+    _count: { select: { bids: true } },
+} satisfies Prisma.JobSelect;
+
+export type OpenJobRow = Prisma.JobGetPayload<{ select: typeof openJobSelect }>;
+
 @Injectable()
 export class JobsRepository {
+    async getOpenJobs(filter: { category?: string; q?: string }) {
+        return prisma.job.findMany({
+            where: {
+                visibility: 'public',
+                status: { in: ['open', 'negotiating'] },
+                ...(filter.category ? { category: filter.category } : {}),
+                ...(filter.q ? { OR: [{ title: { contains: filter.q, mode: 'insensitive' } }, { description: { contains: filter.q, mode: 'insensitive' } }] } : {}),
+            },
+            orderBy: { postedAt: 'desc' },
+            take: 100,
+            select: openJobSelect,
+        });
+    }
+
     async getJobs(userId: string) {
         return prisma.job.findMany({
             where: { buyerId: userId },
