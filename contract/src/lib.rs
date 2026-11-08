@@ -10,6 +10,8 @@ const USDC: u128 = 1_000_000;
 const MAX_BIDS_PER_JOB: usize = 20;
 const MAX_OPEN_BIDS_PER_SELLER: u32 = 10;
 const HIGH_FRAUD_SCORE: u8 = 70;
+const NEW_SELLER_SETTLED_JOBS: u32 = 3;
+const NANOS_PER_DAY: u64 = 86_400_000_000_000;
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(10);
 const GAS_FOR_WITHDRAW_CALLBACK: Gas = Gas::from_tgas(10);
 
@@ -27,6 +29,8 @@ enum StorageKey {
     OpenBids,
     Jobs,
     Bids,
+    UsedToday,
+    Reputations,
 }
 
 #[near(serializers = [json, borsh])]
@@ -62,6 +66,20 @@ pub struct Job {
     pub deadline: U64,
     pub stage: JobStage,
     pub bid_ids: Vec<U64>,
+    pub accepted_bid: Option<U64>,
+    pub seller: Option<AccountId>,
+    pub price: U128,
+    pub holdout_hash: Option<String>,
+    pub attempts_left: u8,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, Default)]
+pub struct Reputation {
+    pub settled: u32,
+    pub disputes: u32,
+    pub rating_sum: u32,
+    pub rating_count: u32,
 }
 
 #[near(serializers = [json, borsh])]
@@ -124,6 +142,8 @@ pub struct Contract {
     bids: LookupMap<u64, Bid>,
     next_job_id: u64,
     next_bid_id: u64,
+    used_today: LookupMap<AccountId, (u64, u128)>,
+    reputations: LookupMap<AccountId, Reputation>,
 }
 
 pub fn is_agent(account_id: &AccountId) -> bool {
@@ -175,6 +195,8 @@ impl Contract {
             bids: LookupMap::new(StorageKey::Bids),
             next_job_id: 1,
             next_bid_id: 1,
+            used_today: LookupMap::new(StorageKey::UsedToday),
+            reputations: LookupMap::new(StorageKey::Reputations),
         }
     }
 
@@ -309,6 +331,11 @@ impl Contract {
             deadline,
             stage: JobStage::Open,
             bid_ids: vec![],
+            accepted_bid: None,
+            seller: None,
+            price: U128(0),
+            holdout_hash: None,
+            attempts_left: 0,
         };
         self.jobs.insert(job_id, job);
         emit(
@@ -384,6 +411,109 @@ impl Contract {
                 "held": held,
                 "high_fraud": fraud_score >= HIGH_FRAUD_SCORE,
             }),
+        );
+    }
+
+    pub fn get_used_today(&self, account_id: AccountId) -> U128 {
+        let today = env::block_timestamp() / NANOS_PER_DAY;
+        match self.used_today.get(&account_id) {
+            Some((day, used)) if *day == today => U128(*used),
+            _ => U128(0),
+        }
+    }
+
+    pub fn get_reputation(&self, account_id: AccountId) -> Reputation {
+        self.reputations.get(&account_id).cloned().unwrap_or_default()
+    }
+
+    pub fn accept_offer(
+        &mut self,
+        job_id: U64,
+        bid_id: U64,
+        price: U128,
+        spec_hash: String,
+        holdout_hash: String,
+        attempts: u8,
+        deadline: U64,
+    ) {
+        let caller = owner_of(&env::predecessor_account_id());
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.buyer == caller, "Only the buyer can accept an offer");
+        require!(job.stage == JobStage::Open, "Job is not open");
+        let bid = self.bids.get(&bid_id.0).cloned().unwrap_or_else(|| env::panic_str("Bid not found"));
+        require!(bid.job_id == job_id, "Bid is not on this job");
+        require!(owner_of(&bid.seller) != job.buyer, "Self-dealing: seller is the buyer");
+        require!(price.0 > 0 && price.0 <= bid.price.0, "Price must be positive and not above the bid");
+        require!(!spec_hash.is_empty(), "Spec hash is required");
+        require!(!holdout_hash.is_empty(), "Holdout hash is required");
+        require!(attempts >= 1, "At least one attempt");
+        require!(deadline.0 > env::block_timestamp(), "Deadline must be in the future");
+        for id in job.bid_ids.iter() {
+            if let Some(b) = self.bids.get(&id.0) {
+                let seller = b.seller.clone();
+                let open = self.open_bids.get(&seller).copied().unwrap_or(0);
+                self.open_bids.insert(seller, open.saturating_sub(1));
+            }
+        }
+        job.stage = JobStage::Accepted;
+        job.accepted_bid = Some(bid_id);
+        job.seller = Some(bid.seller.clone());
+        job.price = price;
+        job.spec_hash = spec_hash.clone();
+        job.holdout_hash = Some(holdout_hash.clone());
+        job.attempts_left = attempts;
+        job.deadline = deadline;
+        self.jobs.insert(job_id.0, job);
+        emit(
+            "offer_accepted",
+            json!({
+                "job_id": job_id,
+                "bid_id": bid_id,
+                "seller": bid.seller,
+                "price": price,
+                "spec_hash": spec_hash,
+                "holdout_hash": holdout_hash,
+                "attempts": attempts,
+                "deadline": deadline,
+            }),
+        );
+    }
+
+    pub fn fund_job(&mut self, job_id: U64) {
+        let caller = owner_of(&env::predecessor_account_id());
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.buyer == caller, "Only the buyer can fund this job");
+        require!(job.stage == JobStage::Accepted, "Job is not accepted");
+        let buyer = job.buyer.clone();
+        let seller = job.seller.clone().unwrap();
+        let bid = self.bids.get(&job.accepted_bid.unwrap().0).cloned().unwrap();
+        let mandate = self.get_mandate(buyer.clone());
+        let price = job.price.0;
+        let used = self.get_used_today(buyer.clone()).0;
+        require!(!mandate.paused, "Paused");
+        require!(price <= mandate.per_job_cap.0, "Over per-job cap");
+        require!(used + price <= mandate.daily_cap.0, "Over daily cap");
+        require!(mandate.categories.contains(&job.category), "Category not allowed");
+        require!(!mandate.strict || mandate.approved_sellers.contains(&seller), "Seller not approved");
+        require!(bid.fraud_score < HIGH_FRAUD_SCORE, "Bid flagged");
+        require!(!bid.held, "Bid held by price check");
+        let settled = self.get_reputation(seller.clone()).settled;
+        require!(
+            settled >= NEW_SELLER_SETTLED_JOBS || price <= mandate.new_seller_cap.0,
+            "Over new-seller cap"
+        );
+        let mut balance = self.get_balance(buyer.clone());
+        require!(balance.free.0 >= price, "Not enough free balance");
+        balance.free = U128(balance.free.0 - price);
+        balance.escrowed = U128(balance.escrowed.0 + price);
+        self.balances.insert(buyer.clone(), balance);
+        let today = env::block_timestamp() / NANOS_PER_DAY;
+        self.used_today.insert(buyer.clone(), (today, used + price));
+        job.stage = JobStage::Funded;
+        self.jobs.insert(job_id.0, job);
+        emit(
+            "job_funded",
+            json!({ "job_id": job_id, "buyer": buyer, "amount": U128(price), "used_today": U128(used + price) }),
         );
     }
 
@@ -492,6 +622,195 @@ mod tests {
     fn post(contract: &mut Contract, from: &str) -> U64 {
         call_from(from, 0);
         contract.post_job("rust".to_string(), U128(40_000_000), "spec-hash-1".to_string(), U64(10_000))
+    }
+
+    fn call_at(predecessor: &str, deposit: u128, timestamp: u64) {
+        let mut ctx = VMContextBuilder::new();
+        ctx.current_account_id(acc("agora-market.testnet"))
+            .predecessor_account_id(acc(predecessor))
+            .signer_account_id(acc(predecessor))
+            .attached_deposit(NearToken::from_yoctonear(deposit))
+            .block_timestamp(timestamp);
+        testing_env!(ctx.build());
+    }
+
+    const DAY: u64 = 86_400_000_000_000;
+    const FAR: u64 = 30 * 86_400_000_000_000;
+
+    fn hired_job(contract: &mut Contract, price: u128, seller: &str, at: u64) -> U64 {
+        call_at("agents.alice.testnet", 0, at);
+        let job_id = contract.post_job("rust".to_string(), U128(price), "spec".to_string(), U64(FAR));
+        call_at(seller, 0, at);
+        let bid_id = contract.place_bid(job_id, U128(price), 2);
+        call_at("agents.alice.testnet", 0, at);
+        contract.accept_offer(job_id, bid_id, U128(price), "spec".to_string(), "holdout".to_string(), 2, U64(FAR));
+        job_id
+    }
+
+    fn funded_setup() -> Contract {
+        let mut contract = admin_setup();
+        call_from("owner.testnet", 1);
+        contract.register_seller(acc("veteran.testnet"));
+        contract.reputations.insert(
+            acc("veteran.testnet"),
+            Reputation { settled: 5, disputes: 0, rating_sum: 25, rating_count: 5 },
+        );
+        deposit(&mut contract, "alice.testnet", 200_000_000);
+        contract
+    }
+
+    #[test]
+    fn fund_job_moves_free_to_escrow() {
+        let mut contract = funded_setup();
+        let job_id = hired_job(&mut contract, 32_000_000, "veteran.testnet", 0);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+        let balance = contract.get_balance(acc("alice.testnet"));
+        assert_eq!(balance.free.0, 168_000_000);
+        assert_eq!(balance.escrowed.0, 32_000_000);
+        assert_eq!(contract.get_used_today(acc("alice.testnet")).0, 32_000_000);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Funded);
+    }
+
+    #[test]
+    #[should_panic(expected = "Paused")]
+    fn check_1_paused() {
+        let mut contract = funded_setup();
+        let job_id = hired_job(&mut contract, 32_000_000, "veteran.testnet", 0);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.pause();
+        contract.fund_job(job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Over per-job cap")]
+    fn check_2_over_per_job_cap() {
+        let mut contract = funded_setup();
+        let job_id = hired_job(&mut contract, 400_000_000, "veteran.testnet", 0);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Over daily cap")]
+    fn check_3_over_daily_cap() {
+        let mut contract = funded_setup();
+        for _ in 0..3 {
+            let job_id = hired_job(&mut contract, 49_000_000, "veteran.testnet", 0);
+            call_at("agents.alice.testnet", 0, 0);
+            contract.fund_job(job_id);
+        }
+    }
+
+    #[test]
+    fn daily_cap_resets_at_utc_midnight() {
+        let mut contract = funded_setup();
+        let fund_at = |contract: &mut Contract, at: u64| {
+            let job_id = hired_job(contract, 49_000_000, "veteran.testnet", at);
+            call_at("agents.alice.testnet", 0, at);
+            contract.fund_job(job_id);
+        };
+        fund_at(&mut contract, DAY - 2);
+        fund_at(&mut contract, DAY - 1);
+        fund_at(&mut contract, DAY);
+        assert_eq!(contract.get_used_today(acc("alice.testnet")).0, 49_000_000);
+    }
+
+    #[test]
+    #[should_panic(expected = "Category not allowed")]
+    fn check_4_wrong_category() {
+        let mut contract = funded_setup();
+        call_at("agents.alice.testnet", 0, 0);
+        let job_id = contract.post_job("scripts".to_string(), U128(1), "spec".to_string(), U64(FAR));
+        call_at("veteran.testnet", 0, 0);
+        let bid_id = contract.place_bid(job_id, U128(10_000_000), 2);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.accept_offer(job_id, bid_id, U128(10_000_000), "spec".to_string(), "h".to_string(), 2, U64(FAR));
+        contract.fund_job(job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Seller not approved")]
+    fn check_5_strict_mode() {
+        let mut contract = funded_setup();
+        call_from("alice.testnet", 1);
+        contract.set_mandate(
+            U128(50_000_000),
+            U128(120_000_000),
+            U128(25_000_000),
+            12,
+            vec!["rust".to_string()],
+            true,
+            vec![acc("someone-else.testnet")],
+        );
+        let job_id = hired_job(&mut contract, 32_000_000, "veteran.testnet", 0);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Bid flagged")]
+    fn check_6_high_fraud_flag() {
+        let mut contract = funded_setup();
+        let job_id = hired_job(&mut contract, 32_000_000, "veteran.testnet", 0);
+        let bid_id = contract.get_job(job_id).unwrap().accepted_bid.unwrap();
+        call_at("oracle.testnet", 0, 0);
+        contract.set_bid_flags(job_id, bid_id, true, 90, false);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Bid held by price check")]
+    fn check_7_held_bid() {
+        let mut contract = funded_setup();
+        let job_id = hired_job(&mut contract, 32_000_000, "veteran.testnet", 0);
+        let bid_id = contract.get_job(job_id).unwrap().accepted_bid.unwrap();
+        call_at("oracle.testnet", 0, 0);
+        contract.set_bid_flags(job_id, bid_id, false, 10, true);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Over new-seller cap")]
+    fn check_8_new_seller_cap() {
+        let mut contract = funded_setup();
+        let job_id = hired_job(&mut contract, 32_000_000, "seller.testnet", 0);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Not enough free balance")]
+    fn check_9_not_enough_balance() {
+        let mut contract = admin_setup();
+        call_from("owner.testnet", 1);
+        contract.register_seller(acc("veteran.testnet"));
+        contract.reputations.insert(acc("veteran.testnet"), Reputation { settled: 5, ..Default::default() });
+        deposit(&mut contract, "alice.testnet", 10_000_000);
+        let job_id = hired_job(&mut contract, 32_000_000, "veteran.testnet", 0);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the buyer can accept an offer")]
+    fn stranger_cannot_accept() {
+        let mut contract = funded_setup();
+        call_at("agents.alice.testnet", 0, 0);
+        let job_id = contract.post_job("rust".to_string(), U128(1), "spec".to_string(), U64(FAR));
+        call_at("veteran.testnet", 0, 0);
+        let bid_id = contract.place_bid(job_id, U128(10_000_000), 2);
+        call_at("agents.mallory.testnet", 0, 0);
+        contract.accept_offer(job_id, bid_id, U128(10_000_000), "spec".to_string(), "h".to_string(), 2, U64(FAR));
+    }
+
+    #[test]
+    fn accept_frees_open_bid_slots() {
+        let mut contract = funded_setup();
+        hired_job(&mut contract, 10_000_000, "veteran.testnet", 0);
+        assert_eq!(*contract.open_bids.get(&acc("veteran.testnet")).unwrap(), 0);
     }
 
     #[test]
