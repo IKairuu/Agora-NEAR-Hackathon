@@ -79,6 +79,11 @@ enum JobStatus {
   refunded
   disputed
   cancelled
+  agreed
+  delivered
+  reviewed
+  released
+  expired
 
   @@map("job_status")
   @@schema("public")
@@ -184,6 +189,25 @@ enum TxStatus {
   @@schema("public")
 }
 
+enum HireOfferStatus {
+  sent
+  accepted
+  declined
+
+  @@map("hire_offer_status")
+  @@schema("public")
+}
+
+enum MessageSender {
+  agent
+  owner
+  seller
+  system
+
+  @@map("message_sender")
+  @@schema("public")
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // 1. Identity
 // ─────────────────────────────────────────────────────────────────────────
@@ -209,6 +233,9 @@ model Profile {
   isBusiness      Boolean @default(false) @map("is_business")
   location        String?
   bio             String?
+  role            String?
+  mode            String?
+  theme           String?
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -224,6 +251,9 @@ model Profile {
   agentEvents     AgentEvent[]
   guardianAlerts  GuardianAlert[]
   disputesOpened  Dispute[]
+  threadsAsBuyer  Thread[]         @relation("ThreadBuyer")
+  messagesSent    Message[]        @relation("MessageSenderProfile")
+  notifications   Notification[]   @relation("NotificationUser")
 
   @@map("profiles")
   @@schema("public")
@@ -284,6 +314,8 @@ model Seller {
   bids              Bid[]
   deliveries        Delivery[]
   completionRecords CompletionRecord[]
+  hireOffers        HireOffer[]
+  threads           Thread[]
 
   @@index([ownerId])
   @@map("sellers")
@@ -393,6 +425,8 @@ model Job {
   search          Unsupported("tsvector")?
   /// pgvector embedding for semantic search. Query it with $queryRaw.
   embedding       Unsupported("vector(1536)")?
+  visibility      String                       @default("public")
+  serviceId       String?                      @map("service_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -412,6 +446,8 @@ model Job {
   completionRecords   CompletionRecord[]
   chainTxs            ChainTx[]
   agentEvents         AgentEvent[]
+  hireOffers          HireOffer[]
+  threads             Thread[]
 
   @@index([buyerId])
   @@index([status])
@@ -795,5 +831,83 @@ model IndexerCursor {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("indexer_cursor")
+  @@schema("public")
+}
+
+model HireOffer {
+  id       String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId    String          @map("job_id") @db.Uuid
+  bidId    String?         @map("bid_id") @db.Uuid
+  sellerId String          @map("seller_id") @db.Uuid
+  price    Decimal         @db.Decimal(20, 6)
+  status   HireOfferStatus @default(sent)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([sellerId])
+  @@map("hire_offers")
+  @@schema("public")
+}
+
+model Thread {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId         String?   @map("job_id") @db.Uuid
+  buyerId       String    @map("buyer_id") @db.Uuid
+  sellerId      String?   @map("seller_id") @db.Uuid
+  title         String
+  lastMessageAt DateTime? @map("last_message_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  buyer    Profile   @relation("ThreadBuyer", fields: [buyerId], references: [id])
+  seller   Seller?   @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+  messages Message[]
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@map("threads")
+  @@schema("public")
+}
+
+model Message {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  threadId        String        @map("thread_id") @db.Uuid
+  sender          MessageSender
+  senderProfileId String?       @map("sender_profile_id") @db.Uuid
+  body            String
+  cardType        String?       @map("card_type")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  thread        Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  senderProfile Profile? @relation("MessageSenderProfile", fields: [senderProfileId], references: [id], onDelete: SetNull)
+
+  @@index([threadId])
+  @@map("messages")
+  @@schema("public")
+}
+
+model Notification {
+  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String  @map("user_id") @db.Uuid
+  kind   String
+  title  String
+  body   String?
+  link   String?
+  read   Boolean @default(false)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user Profile @relation("NotificationUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
   @@schema("public")
 }

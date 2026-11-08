@@ -4,6 +4,7 @@ import App from './App';
 import { storage } from './store/store';
 import './styles/agora.css';
 import './styles/responsive.css';
+import './styles/filters.css';
 
 // the prototype gates its entrance animations on a .js class, and remembers light or dark per viewer
 document.documentElement.classList.add('js');
