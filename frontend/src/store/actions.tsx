@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
-import { ATTACK, CHATS, gigBy, REPLIES, sellerBy, type ChatFrom } from '../data/sample';
+import { flushSync } from 'react-dom';
+import { ATTACK, CHATS, gigBy, JOB, OTHER_JOBS, O_ST, REPLIES, sellerBy, T_MSGS, T_TIME, usd, type ChatFrom, type Order } from '../data/sample';
 import { closeModal, getState, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -30,6 +31,71 @@ export function sendChat(raw: string) {
     setState((s) => ({ typing: false, chatLog: { ...s.chatLog, [key]: [...chatLog(key), { from: 'them', text: REPLIES[key] }] } }));
   }, 1100);
 }
+
+/* ---------------- Messages: one inbox, a thread per job and seller ---------------- */
+export interface Thread {
+  k: string; mode: 'buy' | 'sell'; who: string; ag?: boolean; job: string; title: string;
+  st: [string, string]; amt: string; last: string; time: string; unread?: boolean; order?: Order; msgs: ChatMsg[];
+}
+/** Messages for a non-demo thread; seeded from the sample data the first time it is read. */
+export const threadLog = (k: string, seed?: [ChatFrom | 'sys', string][]): ChatMsg[] =>
+  getState().tLog[k] ?? (seed ?? T_MSGS[k] ?? []).map(([from, text]) => ({ from, text }));
+export function threads(): Thread[] {
+  const s = getState();
+  const out: Thread[] = [];
+  if (s.stage >= 4) {
+    const b = sellerBy(s.chatWith)!; const log = chatLog(s.chatWith); const last = log[log.length - 1];
+    out.push({ k: 'demo', mode: 'buy', who: b.name, ag: b.kind === 'agent', job: JOB.id, title: JOB.title, st: s.stage >= 7 ? ['ok', 'Paid'] : s.stage >= 5 ? ['acc', 'In escrow'] : ['info', 'Offer agreed'], amt: usd(b.final), last: last ? last.text : '', time: 'Now', unread: s.stage === 4, msgs: log });
+  }
+  const add = (t: Omit<Thread, 'msgs' | 'last' | 'time'>, seed?: [ChatFrom | 'sys', string][], time?: string) => {
+    const msgs = threadLog(t.k, seed); const l = msgs[msgs.length - 1];
+    out.push({ ...t, msgs, last: l ? l.text : '', time: time ?? T_TIME[t.k] ?? '' });
+  };
+  s.newJobs.filter((j) => j.who).forEach((j) => add({ k: 'n' + j.id, mode: 'buy', who: j.who, job: j.id, title: j.title, st: j.status, amt: j.budget }, [['me', `Request sent: ${j.title}`], ['sys', 'Waiting for the seller to answer with an offer.']], 'Now'));
+  add({ k: 't1041', mode: 'buy', who: 'Ines Varga', job: 'J-1041', title: OTHER_JOBS[0].title, st: OTHER_JOBS[0].status, amt: '45.00', unread: true });
+  add({ k: 't1040', mode: 'buy', who: 'Your buyer agent', ag: true, job: 'J-1040', title: OTHER_JOBS[1].title, st: OTHER_JOBS[1].status, amt: '15–25' });
+  s.orders.filter((o) => o.st < 4).forEach((o) => add({ k: o.buyer, mode: 'sell', who: o.buyer, job: o.id, title: o.title, st: O_ST[o.st], amt: o.price, order: o, unread: o.st === 0 }));
+  return out;
+}
+/** Send a message in a non-demo thread. */
+export function sendThread(raw: string) {
+  const v = raw.trim(); const k = getState().thread;
+  if (!v || !k) return;
+  const cur = threads().find((t) => t.k === k); if (!cur) return;
+  const log: ChatMsg[] = [...cur.msgs, { from: 'me', text: v }];
+  if (/telegram|whatsapp|outside|off.?platform|paypal|direct(ly)? pay/i.test(v)) log.push({ from: 'sys', text: 'The fraud and lure agent flagged this message. Payment outside escrow is not protected.' });
+  setState((s) => ({ tLog: { ...s.tLog, [k]: log } }));
+}
+
+/* ---------------- seller orders ---------------- */
+const patchOrder = (id: string, p: Partial<Order>) => setState((s) => ({ orders: s.orders.map((o) => (o.id === id ? { ...o, ...p } : o)) }));
+export const orderAct = {
+  offer: (id: string) => openModal('offer', { id }),
+  decline: (id: string) => { setState((s) => ({ orders: s.orders.filter((o) => o.id !== id) })); toast('Request declined. The buyer can pick another seller.'); },
+  accept: (id: string) => {
+    const o = getState().orders.find((x) => x.id === id)!;
+    patchOrder(id, { st: 2, note: 'Buyer accepted. Tests locked, ' + o.price + ' USDC funded into escrow.' });
+    toast(id + ' accepted. Escrow funded, you can start.');
+  },
+  deliver: (id: string) => {
+    const o = getState().orders.find((x) => x.id === id)!;
+    patchOrder(id, { st: 3, note: 'Delivered commit a41c9e2. Reviewers are running the locked tests.' });
+    toast('Delivery submitted. 3 reviewers are running the locked tests.');
+    setTimeout(() => {
+      patchOrder(id, { st: 4, note: 'Released after 2 of 3 approvals. Paid to your seller account.' });
+      toast(<><b>{o.price} USDC released</b> for {id} after 2 of 3 approvals.</>);
+    }, 2600);
+  },
+  /** The Send an offer form. */
+  sendOffer: (id: string, priceText: string, days: string) => {
+    const o = getState().orders.find((x) => x.id === id); if (!o) return;
+    const p = (priceText.match(/[\d.]+/) || ['42'])[0];
+    const price = (+p).toFixed(2);
+    patchOrder(id, { st: 1, id: 'J-1045', price, note: `Your offer: ${price} USDC in ${days}. The buyer accepts to lock the tests.` });
+    setState({ modal: null, oTab: 'active' });
+    toast('Offer sent to ' + o.buyer + '.');
+  },
+};
 
 /* ---------------- tour ---------------- */
 interface TourStep { r: string; st: number; t: string; p: string; d: ReactNode; act?: () => void }
@@ -154,7 +220,25 @@ export const act = {
     if (k && s.stage >= 4) { setState({ chatWith: k }); go('chat'); return; }
     toast(`Message sent to ${gg.seller}. Replies arrive in Messages.`);
   },
-  fold: () => { const fold = !getState().fold; storage.set('agora-fold', fold ? '1' : '0'); setState({ fold }); },
+  /** The Buying / Selling switch in the sidebar and the account menu. */
+  mode: (m: 'buy' | 'sell', route: string) => {
+    if (getState().mode === m && route !== 'home') return;
+    setState({ mode: m }); go(m === 'sell' ? 'orders' : 'dash');
+    toast(m === 'sell' ? 'Switched to selling. Orders buyers sent you are here.' : 'Switched to buying.');
+  },
+  flatcmp: (v: boolean) => setState({ flat: v }),
+  fold: () => {
+    // v6.2: the page grows into the freed space, slid in with a FLIP transform
+    const m0 = document.querySelector<HTMLElement>('.main'); const x0 = m0 ? m0.getBoundingClientRect().left : 0;
+    const fold = !getState().fold; storage.set('agora-fold', fold ? '1' : '0');
+    flushSync(() => setState({ fold }));
+    const m = document.querySelector<HTMLElement>('.main');
+    if (!m || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+    const dx = x0 - m.getBoundingClientRect().left; if (!dx) return;
+    m.classList.remove('flip'); m.style.transform = `translateX(${dx}px)`; m.getBoundingClientRect();
+    m.classList.add('flip'); m.style.transform = '';
+    m.addEventListener('transitionend', () => m.classList.remove('flip'), { once: true });
+  },
   like: (id: string) => {
     const s = getState();
     if (s.liked.includes(id)) setState({ liked: s.liked.filter((x) => x !== id) });
