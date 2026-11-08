@@ -25,4 +25,14 @@ npm run build    # typecheck + production build to dist/
 - `src/ui/`: icons and logo, shared parts, the app shell, modals, toasts, tour
 - `public/img/`: the two photos from the prototype
 
-Everything runs on sample data, as in the prototype. Sign-in, payments and contract calls are simulated, and the `stage` value in the store drives the scripted demo.
+Everything runs on sample data, as in the prototype. Payments and contract calls are simulated, and the `stage` value in the store drives the scripted demo.
+
+## Google and GitHub sign-in
+
+The **Continue with Google** and **Continue with GitHub** buttons use Supabase Auth (`src/lib/supabase.ts`, `src/lib/auth.ts`). They send the user to Google's or GitHub's own sign-in page, so AGORA never handles their password. After the redirect, `initAuth()` in `src/store/actions.tsx` picks up the session and continues to the wallet and role steps. Without the env variables, sign-in stays simulated.
+
+1. Copy `.env.example` to `.env` and set `VITE_SUPABASE_URL` and `VITE_SUPABASE_ANON_KEY`.
+2. Supabase > Authentication > URL Configuration: add `http://localhost:5173/**` and your production URL to Redirect URLs.
+3. Supabase > Authentication > Providers: enable Google and GitHub and paste each provider's client ID and secret.
+   - Google Cloud Console > Credentials > OAuth client ID (Web): authorized redirect URI `https://<project-ref>.supabase.co/auth/v1/callback`.
+   - GitHub > Settings > Developer settings > OAuth Apps: callback URL `https://<project-ref>.supabase.co/auth/v1/callback`.

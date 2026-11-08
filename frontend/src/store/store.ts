@@ -1,4 +1,5 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
+import type { AuthUser } from '../lib/auth';
 import { BIDS, ORDERS, type Bid, type FilterKey, type Order, type OtherJob } from '../data/sample';
 
 /*
@@ -31,6 +32,8 @@ export interface State {
   extra: { id: string; text: string; t: string; posted: boolean }[];
   who: string; oj: number; exTab: 'services' | 'sellers'; ssort: 'rating' | 'jobs' | 'price'; fromHero: string;
   stars: number; dReason: string; mail: string; walletLinked: boolean;
+  /** The real signed-in account from Google or GitHub; null in the simulated demo. */
+  user: AuthUser | null;
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
 }
 
@@ -58,6 +61,7 @@ let state: State = {
   asked: false, askText: '', bidsShown: 0, streamId: 0, jf: 'all', extra: [],
   who: 'patchsmith', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
+  user: null,
   modal: null,
 };
 

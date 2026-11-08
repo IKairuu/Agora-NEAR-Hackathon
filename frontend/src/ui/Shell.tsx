@@ -19,7 +19,7 @@ function MeMenu({ close, cur }: { close: () => void; cur: string }) {
   return (
     <>
       <div className="who">
-        <b>{ME.name}</b><span className="muted small">{ME.acct}</span>
+        <b>{s.user?.name || ME.name}</b><span className="muted small">{s.user?.email || ME.acct}</span>
         <span className="small"><b className="num">{usd(free(s))} USDC</b> <span className="muted">{escrow(s) ? usd(escrow(s)) + ' protected' : 'available'}</span></span>
       </div>
       <hr />

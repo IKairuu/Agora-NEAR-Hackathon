@@ -1,6 +1,8 @@
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
+import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
+import { authConfigured, supabase } from '../lib/supabase';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -156,6 +158,18 @@ export function hire(key: string) {
   tourStep(4, 5);
 }
 
+/** Saves an onboarding answer for the signed-in account. Does nothing in the simulated demo. */
+function remember(patch: Onboarding) {
+  const u = getState().user; if (!u) return;
+  const onboarding = { ...u.onboarding, ...patch };
+  setState({ user: { ...u, onboarding } });
+  void saveOnboarding(onboarding);
+}
+/** Sends the user to the home that fits what brings them here. */
+function goRole(r: 'hire' | 'work') {
+  if (r === 'hire') go('ask'); else { setState({ sellStep: 0 }); go(getState().seller ? 'seller' : 'sell'); }
+}
+
 /* ---------------- actions, the prototype's ACT table ---------------- */
 export const act = {
   signin: () => openModal('signin'),
@@ -164,18 +178,35 @@ export const act = {
   passkey: () => { setState({ signVia: 'passkey' }); toast('Passkey confirmed with your device. Nothing to remember.'); act.walletstep(); },
   walletstep: () => openModal('walletstep'),
   walletpick: () => openModal('walletpick'),
-  walletlinked: () => { setState({ walletLinked: true }); toast('Wallet linked. It can fund jobs; your agents still cannot withdraw.'); act.signin2(); },
+  walletlinked: () => { setState({ walletLinked: true }); remember({ wallet: true }); toast('Wallet linked. It can fund jobs; your agents still cannot withdraw.'); act.signin2(); },
   signsell: () => {
     if (getState().stage >= 1) { setState({ sellStep: 0 }); go('sell'); return; }
     setState({ after: 'sell', rolePick: 'work' }); openModal('signin');
   },
   /** Google, GitHub: account is ready, then offer to connect a wallet. Wallet: straight in. */
-  signVia: (via: string) => { setState({ signVia: via }); if (via === 'wallet') act.signin2(); else act.walletstep(); },
+  signVia: (via: string) => {
+    if ((via === 'google' || via === 'github') && authConfigured) { void act.oauth(via); return; }
+    setState({ signVia: via }); if (via === 'wallet') act.signin2(); else act.walletstep();
+  },
+  /** Real Google or GitHub sign-in: remember where the user was, then leave for the provider's own page. */
+  oauth: async (via: OAuthVia) => {
+    const s = getState();
+    savePending({ via, after: s.after, rolePick: s.rolePick, tour: s.tour, draft: s.draft });
+    const err = await startOAuth(via);
+    if (err) { takePending(); toast(`Could not reach ${via === 'google' ? 'Google' : 'GitHub'}: ${err}`, 'block'); }
+  },
   signin2: () => {
     setState((s) => ({ stage: Math.max(s.stage, 1) }));
-    toast('Signed in as lumen.testnet. Agent sub-account created.');
+    const u = getState().user;
+    toast(!u ? 'Signed in as lumen.testnet. Agent sub-account created.' : u.isNew ? `Signed in as ${u.email || u.name}. Agent sub-account created.` : `Welcome back, ${u.name}.`);
     const s = getState();
     if (s.tour === 0) { closeModal(); tourGo(1); return; }
+    const known = u?.onboarding.role;
+    if (known) {
+      setState({ role: known, after: null, modal: null });
+      goRole(s.after === 'ask' ? 'hire' : s.after === 'sell' ? 'work' : known);
+      return;
+    }
     setState({ rolePick: s.after === 'sell' ? 'work' : s.after === 'ask' ? 'hire' : s.role });
     openModal('role');
   },
@@ -183,10 +214,11 @@ export const act = {
   rolego: () => {
     const r = getState().rolePick; if (!r) return;
     setState({ role: r, after: null, modal: null });
-    if (r === 'hire') go('ask'); else { setState({ sellStep: 0 }); go(getState().seller ? 'seller' : 'sell'); }
+    remember({ role: r });
+    goRole(r);
   },
   roleskip: () => { setState((s) => ({ role: s.role || 'hire', modal: null })); go('ask'); },
-  signout: () => { setState({ stage: 0, role: null, tour: -1 }); go('home'); toast('Signed out.'); },
+  signout: () => { signOutRemote(); setState({ stage: 0, role: null, tour: -1, user: null, signVia: '' }); go('home'); toast('Signed out.'); },
   /** Approve and lock the tests: offers then arrive one by one, lowest price first. */
   lockspec: () => {
     const id = getState().streamId + 1;
@@ -394,3 +426,29 @@ export const act = {
     act.walletstep();
   },
 };
+
+/* ---------------- real sign-in session ---------------- */
+/**
+ * Call once at startup. Picks up the session Supabase creates after the Google or GitHub redirect,
+ * resumes the sign-in flow the user started, and keeps the app signed in across reloads.
+ */
+export function initAuth(): () => void {
+  const urlError = takeUrlError();
+  if (urlError) { takePending(); toast(`Sign-in was not completed: ${urlError}`, 'block'); }
+  if (!supabase) return () => {};
+  const { data } = supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT') { setState({ user: null }); return; }
+    if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;
+    const user = userOf(session);
+    setTimeout(() => {
+      const pending = takePending();
+      if (pending) {
+        setState({ user, signVia: pending.via, after: pending.after, rolePick: pending.rolePick, tour: pending.tour, draft: pending.draft });
+        if (user.onboarding.wallet) act.signin2(); else act.walletstep();
+        return;
+      }
+      setState((s) => ({ user, signVia: s.signVia || user.via, stage: Math.max(s.stage, 1), role: s.role || user.onboarding.role || null }));
+    }, 0);
+  });
+  return () => data.subscription.unsubscribe();
+}
