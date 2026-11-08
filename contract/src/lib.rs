@@ -1,9 +1,9 @@
-use near_sdk::json_types::{Base64VecU8, U128, U64};
-use near_sdk::serde_json::{json, Value};
+use near_sdk::json_types::{Base64VecU8, U64, U128};
+use near_sdk::serde_json::{Value, json};
 use near_sdk::store::{LookupMap, LookupSet};
 use near_sdk::{
-    assert_one_yocto, env, ext_contract, near, require, AccountId, BorshStorageKey, Gas,
-    NearToken, PanicOnDefault, Promise, PromiseError, PromiseOrValue,
+    AccountId, BorshStorageKey, Gas, NearToken, PanicOnDefault, Promise, PromiseError,
+    PromiseOrValue, assert_one_yocto, env, ext_contract, near, require,
 };
 
 const USDC: u128 = 1_000_000;
@@ -271,7 +271,11 @@ impl Contract {
             "milestone_released",
             json!({ "job_id": job.job_id, "seller": seller, "amount": U128(price - fee), "fee": U128(fee) }),
         );
-        let rating_avg = if rep.rating_count == 0 { 0.0 } else { rep.rating_sum as f64 / rep.rating_count as f64 };
+        let rating_avg = if rep.rating_count == 0 {
+            0.0
+        } else {
+            rep.rating_sum as f64 / rep.rating_count as f64
+        };
         emit(
             "reputation_updated",
             json!({ "account_id": seller, "settled": rep.settled, "disputes": rep.disputes, "rating_avg": rating_avg }),
@@ -279,7 +283,10 @@ impl Contract {
     }
 
     fn require_config_owner(&self) {
-        require!(env::predecessor_account_id() == self.config.owner_id, "Only the config owner");
+        require!(
+            env::predecessor_account_id() == self.config.owner_id,
+            "Only the config owner"
+        );
     }
 }
 
@@ -352,8 +359,14 @@ impl Contract {
         assert_one_yocto();
         let account_id = env::predecessor_account_id();
         require!(!is_agent(&account_id), "Agents cannot change the mandate");
-        require!(per_job_cap.0 <= daily_cap.0, "Per-job cap cannot exceed daily cap");
-        require!(new_seller_cap.0 <= per_job_cap.0, "New-seller cap cannot exceed per-job cap");
+        require!(
+            per_job_cap.0 <= daily_cap.0,
+            "Per-job cap cannot exceed daily cap"
+        );
+        require!(
+            new_seller_cap.0 <= per_job_cap.0,
+            "New-seller cap cannot exceed per-job cap"
+        );
         require!(review_timeout_hours > 0, "Review timeout must be positive");
         let paused = self.get_mandate(account_id.clone()).paused;
         let mandate = Mandate {
@@ -441,11 +454,20 @@ impl Contract {
         }
     }
 
-    pub fn post_job(&mut self, category: String, budget_hint: U128, spec_hash: String, deadline: U64) -> U64 {
+    pub fn post_job(
+        &mut self,
+        category: String,
+        budget_hint: U128,
+        spec_hash: String,
+        deadline: U64,
+    ) -> U64 {
         let buyer = owner_of(&env::predecessor_account_id());
         require!(!category.is_empty(), "Category is required");
         require!(!spec_hash.is_empty(), "Spec hash is required");
-        require!(deadline.0 > env::block_timestamp(), "Deadline must be in the future");
+        require!(
+            deadline.0 > env::block_timestamp(),
+            "Deadline must be in the future"
+        );
         let job_id = self.next_job_id;
         self.next_job_id += 1;
         let job = Job {
@@ -491,17 +513,29 @@ impl Contract {
         require!(self.sellers.contains(&seller), "Not a registered seller");
         require!(price.0 > 0, "Price must be positive");
         require!(days > 0, "Days must be positive");
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         require!(job.stage == JobStage::Open, "Job is not open for bids");
         require!(job.buyer != seller, "Cannot bid on your own job");
-        require!(job.bid_ids.len() < MAX_BIDS_PER_JOB, "Too many bids on this job");
-        let already = job
-            .bid_ids
-            .iter()
-            .any(|id| self.bids.get(&id.0).map(|b| b.seller == seller).unwrap_or(false));
+        require!(
+            job.bid_ids.len() < MAX_BIDS_PER_JOB,
+            "Too many bids on this job"
+        );
+        let already = job.bid_ids.iter().any(|id| {
+            self.bids
+                .get(&id.0)
+                .map(|b| b.seller == seller)
+                .unwrap_or(false)
+        });
         require!(!already, "Seller already bid on this job");
         let open = self.open_bids.get(&seller).copied().unwrap_or(0);
-        require!(open < MAX_OPEN_BIDS_PER_SELLER, "Too many open bids for this seller");
+        require!(
+            open < MAX_OPEN_BIDS_PER_SELLER,
+            "Too many open bids for this seller"
+        );
         let bid_id = self.next_bid_id;
         self.next_bid_id += 1;
         let bid = Bid {
@@ -525,11 +559,29 @@ impl Contract {
         U64(bid_id)
     }
 
-    pub fn set_bid_flags(&mut self, job_id: U64, bid_id: U64, price_check_ok: bool, fraud_score: u8, held: bool) {
-        let oracle = self.config.fraud_oracle.clone().unwrap_or_else(|| env::panic_str("No fraud oracle set"));
-        require!(env::predecessor_account_id() == oracle, "Only the fraud oracle can flag bids");
+    pub fn set_bid_flags(
+        &mut self,
+        job_id: U64,
+        bid_id: U64,
+        price_check_ok: bool,
+        fraud_score: u8,
+        held: bool,
+    ) {
+        let oracle = self
+            .config
+            .fraud_oracle
+            .clone()
+            .unwrap_or_else(|| env::panic_str("No fraud oracle set"));
+        require!(
+            env::predecessor_account_id() == oracle,
+            "Only the fraud oracle can flag bids"
+        );
         require!(fraud_score <= 100, "Fraud score is 0 to 100");
-        let mut bid = self.bids.get(&bid_id.0).cloned().unwrap_or_else(|| env::panic_str("Bid not found"));
+        let mut bid = self
+            .bids
+            .get(&bid_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Bid not found"));
         require!(bid.job_id == job_id, "Bid is not on this job");
         bid.price_check_ok = Some(price_check_ok);
         bid.fraud_score = fraud_score;
@@ -557,7 +609,10 @@ impl Contract {
     }
 
     pub fn get_reputation(&self, account_id: AccountId) -> Reputation {
-        self.reputations.get(&account_id).cloned().unwrap_or_default()
+        self.reputations
+            .get(&account_id)
+            .cloned()
+            .unwrap_or_default()
     }
 
     pub fn accept_offer(
@@ -571,17 +626,34 @@ impl Contract {
         deadline: U64,
     ) {
         let caller = owner_of(&env::predecessor_account_id());
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         require!(job.buyer == caller, "Only the buyer can accept an offer");
         require!(job.stage == JobStage::Open, "Job is not open");
-        let bid = self.bids.get(&bid_id.0).cloned().unwrap_or_else(|| env::panic_str("Bid not found"));
+        let bid = self
+            .bids
+            .get(&bid_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Bid not found"));
         require!(bid.job_id == job_id, "Bid is not on this job");
-        require!(owner_of(&bid.seller) != job.buyer, "Self-dealing: seller is the buyer");
-        require!(price.0 > 0 && price.0 <= bid.price.0, "Price must be positive and not above the bid");
+        require!(
+            owner_of(&bid.seller) != job.buyer,
+            "Self-dealing: seller is the buyer"
+        );
+        require!(
+            price.0 > 0 && price.0 <= bid.price.0,
+            "Price must be positive and not above the bid"
+        );
         require!(!spec_hash.is_empty(), "Spec hash is required");
         require!(!holdout_hash.is_empty(), "Holdout hash is required");
         require!(attempts >= 1, "At least one attempt");
-        require!(deadline.0 > env::block_timestamp(), "Deadline must be in the future");
+        require!(
+            deadline.0 > env::block_timestamp(),
+            "Deadline must be in the future"
+        );
         for id in job.bid_ids.iter() {
             if let Some(b) = self.bids.get(&id.0) {
                 let seller = b.seller.clone();
@@ -615,20 +687,34 @@ impl Contract {
 
     pub fn fund_job(&mut self, job_id: U64) {
         let caller = owner_of(&env::predecessor_account_id());
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         require!(job.buyer == caller, "Only the buyer can fund this job");
         require!(job.stage == JobStage::Accepted, "Job is not accepted");
         let buyer = job.buyer.clone();
         let seller = job.seller.clone().unwrap();
-        let bid = self.bids.get(&job.accepted_bid.unwrap().0).cloned().unwrap();
+        let bid = self
+            .bids
+            .get(&job.accepted_bid.unwrap().0)
+            .cloned()
+            .unwrap();
         let mandate = self.get_mandate(buyer.clone());
         let price = job.price.0;
         let used = self.get_used_today(buyer.clone()).0;
         require!(!mandate.paused, "Paused");
         require!(price <= mandate.per_job_cap.0, "Over per-job cap");
         require!(used + price <= mandate.daily_cap.0, "Over daily cap");
-        require!(mandate.categories.contains(&job.category), "Category not allowed");
-        require!(!mandate.strict || mandate.approved_sellers.contains(&seller), "Seller not approved");
+        require!(
+            mandate.categories.contains(&job.category),
+            "Category not allowed"
+        );
+        require!(
+            !mandate.strict || mandate.approved_sellers.contains(&seller),
+            "Seller not approved"
+        );
         require!(bid.fraud_score < HIGH_FRAUD_SCORE, "Bid flagged");
         require!(!bid.held, "Bid held by price check");
         let settled = self.get_reputation(seller.clone()).settled;
@@ -657,16 +743,32 @@ impl Contract {
     }
 
     pub fn get_votes(&self, job_id: U64) -> Vec<Vote> {
-        self.jobs.get(&job_id.0).map(|j| j.votes.clone()).unwrap_or_default()
+        self.jobs
+            .get(&job_id.0)
+            .map(|j| j.votes.clone())
+            .unwrap_or_default()
     }
 
     pub fn submit_delivery(&mut self, job_id: U64, commit_hash: String) {
         let caller = owner_of(&env::predecessor_account_id());
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
-        require!(job.seller.as_ref() == Some(&caller), "Only the hired seller can deliver");
-        require!(job.stage == JobStage::Funded, "Job is not waiting for a delivery");
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(
+            job.seller.as_ref() == Some(&caller),
+            "Only the hired seller can deliver"
+        );
+        require!(
+            job.stage == JobStage::Funded,
+            "Job is not waiting for a delivery"
+        );
         require!(job.attempts_left > 0, "No attempts left");
-        require!(env::block_timestamp() <= job.deadline.0, "Deadline has passed");
+        require!(
+            env::block_timestamp() <= job.deadline.0,
+            "Deadline has passed"
+        );
         require!(!commit_hash.is_empty(), "Commit hash is required");
         require!(self.config.reviewers.len() == 3, "Reviewers are not set");
         job.attempts_left -= 1;
@@ -688,12 +790,28 @@ impl Contract {
 
     pub fn vote(&mut self, job_id: U64, approve: bool, log_hash: String, attestation_hash: String) {
         let reviewer = env::predecessor_account_id();
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         let rechecking = job.stage == JobStage::Disputed
-            && self.disputes.get(&job_id.0).is_some_and(|d| d.recheck.is_none() && d.escalated_at.is_none());
-        require!(job.stage == JobStage::Delivered || rechecking, "Job is not under review");
-        require!(job.reviewers.contains(&reviewer), "Not an assigned reviewer");
-        require!(!job.votes.iter().any(|v| v.reviewer == reviewer), "Reviewer already voted");
+            && self
+                .disputes
+                .get(&job_id.0)
+                .is_some_and(|d| d.recheck.is_none() && d.escalated_at.is_none());
+        require!(
+            job.stage == JobStage::Delivered || rechecking,
+            "Job is not under review"
+        );
+        require!(
+            job.reviewers.contains(&reviewer),
+            "Not an assigned reviewer"
+        );
+        require!(
+            !job.votes.iter().any(|v| v.reviewer == reviewer),
+            "Reviewer already voted"
+        );
         job.votes.push(Vote {
             reviewer: reviewer.clone(),
             approve,
@@ -719,7 +837,10 @@ impl Contract {
                 dispute.recheck = Some(result.to_string());
                 dispute.recheck_at = Some(U64(env::block_timestamp()));
                 self.disputes.insert(job_id.0, dispute);
-                emit("recheck_decided", json!({ "job_id": job_id, "result": result }));
+                emit(
+                    "recheck_decided",
+                    json!({ "job_id": job_id, "result": result }),
+                );
             }
         } else if approvals >= 2 {
             self.release(&mut job);
@@ -734,8 +855,15 @@ impl Contract {
     }
 
     pub fn refund_expired(&mut self, job_id: U64) {
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
-        require!(env::block_timestamp() > job.deadline.0, "Deadline has not passed");
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(
+            env::block_timestamp() > job.deadline.0,
+            "Deadline has not passed"
+        );
         require!(
             job.stage == JobStage::Funded || job.stage == JobStage::Delivered,
             "Nothing to refund"
@@ -758,7 +886,12 @@ impl Contract {
         self.balances.get(&account_id).cloned().unwrap_or_default()
     }
 
-    pub fn ft_on_transfer(&mut self, sender_id: AccountId, amount: U128, msg: String) -> PromiseOrValue<U128> {
+    pub fn ft_on_transfer(
+        &mut self,
+        sender_id: AccountId,
+        amount: U128,
+        msg: String,
+    ) -> PromiseOrValue<U128> {
         require!(
             env::predecessor_account_id() == self.config.usdc_token,
             "Only the USDC token can deposit"
@@ -768,10 +901,15 @@ impl Contract {
             return self.add_stake(sender_id, amount);
         }
         if let Some(job_id) = msg.strip_prefix("dispute_bond:") {
-            let job_id = job_id.parse::<u64>().unwrap_or_else(|_| env::panic_str("Bad job id in dispute bond"));
+            let job_id = job_id
+                .parse::<u64>()
+                .unwrap_or_else(|_| env::panic_str("Bad job id in dispute bond"));
             return self.escalate(sender_id, U64(job_id), amount);
         }
-        require!(msg == "deposit" || msg.is_empty(), "Unsupported deposit message");
+        require!(
+            msg == "deposit" || msg.is_empty(),
+            "Unsupported deposit message"
+        );
         let mut balance = self.get_balance(sender_id.clone());
         balance.free = U128(balance.free.0 + amount.0);
         self.balances.insert(sender_id.clone(), balance.clone());
@@ -798,7 +936,11 @@ impl Contract {
         ext_ft::ext(self.config.usdc_token.clone())
             .with_attached_deposit(NearToken::from_yoctonear(1))
             .with_static_gas(GAS_FOR_FT_TRANSFER)
-            .ft_transfer(account_id.clone(), amount, Some("AGORA withdraw".to_string()))
+            .ft_transfer(
+                account_id.clone(),
+                amount,
+                Some("AGORA withdraw".to_string()),
+            )
             .then(
                 Self::ext(env::current_account_id())
                     .with_static_gas(GAS_FOR_WITHDRAW_CALLBACK)
@@ -942,15 +1084,30 @@ impl Contract {
     }
 
     fn add_stake(&mut self, sender_id: AccountId, amount: U128) -> PromiseOrValue<U128> {
-        require!(self.sellers.contains(&sender_id), "Only a registered seller can stake");
+        require!(
+            self.sellers.contains(&sender_id),
+            "Only a registered seller can stake"
+        );
         let total = self.get_stake(sender_id.clone()).0 + amount.0;
         self.stakes.insert(sender_id.clone(), total);
-        emit("stake_added", json!({ "account_id": sender_id, "amount": amount, "stake": U128(total) }));
+        emit(
+            "stake_added",
+            json!({ "account_id": sender_id, "amount": amount, "stake": U128(total) }),
+        );
         PromiseOrValue::Value(U128(0))
     }
 
-    fn escalate(&mut self, sender_id: AccountId, job_id: U64, amount: U128) -> PromiseOrValue<U128> {
-        let job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+    fn escalate(
+        &mut self,
+        sender_id: AccountId,
+        job_id: U64,
+        amount: U128,
+    ) -> PromiseOrValue<U128> {
+        let job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         require!(job.stage == JobStage::Disputed, "Job is not disputed");
         let party = owner_of(&sender_id);
         let claim = if party == job.buyer {
@@ -961,15 +1118,24 @@ impl Contract {
             env::panic_str("Only the buyer or seller can escalate")
         };
         let mut dispute = self.disputes.get(&job_id.0).cloned().unwrap();
-        require!(dispute.escalated_at.is_none(), "Dispute is already escalated");
-        let recheck = dispute.recheck.clone().unwrap_or_else(|| env::panic_str("Wait for the re-check result"));
+        require!(
+            dispute.escalated_at.is_none(),
+            "Dispute is already escalated"
+        );
+        let recheck = dispute
+            .recheck
+            .clone()
+            .unwrap_or_else(|| env::panic_str("Wait for the re-check result"));
         require!(
             env::block_timestamp() < dispute.recheck_at.unwrap().0 + ESCALATION_WINDOW,
             "The escalation window has closed"
         );
         require!(recheck != claim, "The re-check already agrees with you");
         let needed = (job.price.0 * BOND_BPS / 10_000).max(MIN_BOND);
-        require!(amount.0 >= needed, "Bond is below 5% of the price (minimum 1 USDC)");
+        require!(
+            amount.0 >= needed,
+            "Bond is below 5% of the price (minimum 1 USDC)"
+        );
         dispute.escalated_by = Some(sender_id.clone());
         dispute.escalated_at = Some(U64(env::block_timestamp()));
         dispute.claim = Some(claim.to_string());
@@ -1026,16 +1192,30 @@ impl Contract {
     }
 
     pub fn rerun_review(&mut self, job_id: U64) {
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         let rechecking = job.stage == JobStage::Disputed
-            && self.disputes.get(&job_id.0).is_some_and(|d| d.recheck.is_none() && d.escalated_at.is_none());
-        require!(job.stage == JobStage::Delivered || rechecking, "Job is not under review");
+            && self
+                .disputes
+                .get(&job_id.0)
+                .is_some_and(|d| d.recheck.is_none() && d.escalated_at.is_none());
+        require!(
+            job.stage == JobStage::Delivered || rechecking,
+            "Job is not under review"
+        );
         let approvals = job.votes.iter().filter(|v| v.approve).count();
         let rejections = job.votes.len() - approvals;
         let split = approvals == 1 && rejections == 1;
-        let timeout = self.get_mandate(job.buyer.clone()).review_timeout_hours as u64 * NANOS_PER_HOUR;
+        let timeout =
+            self.get_mandate(job.buyer.clone()).review_timeout_hours as u64 * NANOS_PER_HOUR;
         let stalled = env::block_timestamp() >= job.delivered_at.0 + timeout;
-        require!(split || stalled, "A rerun needs a split vote or the review timeout");
+        require!(
+            split || stalled,
+            "A rerun needs a split vote or the review timeout"
+        );
         self.reassign_reviewers(&mut job);
         let round = job.review_round;
         self.jobs.insert(job_id.0, job);
@@ -1047,7 +1227,11 @@ impl Contract {
 
     pub fn refund_milestone(&mut self, job_id: U64) {
         let caller = owner_of(&env::predecessor_account_id());
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         require!(job.buyer == caller, "Only the buyer can refund");
         require!(
             job.stage == JobStage::Funded && job.attempt > 0 && job.attempts_left == 0,
@@ -1059,7 +1243,11 @@ impl Contract {
 
     pub fn grant_attempt(&mut self, job_id: U64) {
         let caller = owner_of(&env::predecessor_account_id());
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         require!(job.buyer == caller, "Only the buyer can grant an attempt");
         require!(
             job.stage == JobStage::Funded && job.attempt > 0 && job.attempts_left == 0,
@@ -1067,12 +1255,19 @@ impl Contract {
         );
         job.attempts_left = 1;
         self.jobs.insert(job_id.0, job);
-        emit("attempt_granted", json!({ "job_id": job_id, "attempts_left": 1 }));
+        emit(
+            "attempt_granted",
+            json!({ "job_id": job_id, "attempts_left": 1 }),
+        );
     }
 
     pub fn open_dispute(&mut self, job_id: U64, reason: String) {
         let caller = owner_of(&env::predecessor_account_id());
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         require!(
             job.buyer == caller || job.seller.as_ref() == Some(&caller),
             "Only the buyer or seller can open a dispute"
@@ -1083,7 +1278,10 @@ impl Contract {
         );
         require!(!reason.trim().is_empty(), "Reason is required");
         require!(reason.len() <= MAX_REASON_LEN, "Reason is too long");
-        require!(self.disputes.get(&job_id.0).is_none(), "This job was already disputed");
+        require!(
+            self.disputes.get(&job_id.0).is_none(),
+            "This job was already disputed"
+        );
         require!(self.config.reviewers.len() == 3, "Reviewers are not set");
         self.disputes.insert(
             job_id.0,
@@ -1109,20 +1307,36 @@ impl Contract {
         let mut rep = self.get_reputation(seller.clone());
         rep.disputes += 1;
         self.reputations.insert(seller, rep);
-        emit("dispute_opened", json!({ "job_id": job_id, "opener": caller, "reason": reason }));
+        emit(
+            "dispute_opened",
+            json!({ "job_id": job_id, "opener": caller, "reason": reason }),
+        );
     }
 
     pub fn resolve_dispute(&mut self, job_id: U64, outcome: String, seller_share_bps: u16) {
-        require!(env::predecessor_account_id() == self.config.dao_account, "Only the DAO can resolve a dispute");
-        let job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(
+            env::predecessor_account_id() == self.config.dao_account,
+            "Only the DAO can resolve a dispute"
+        );
+        let job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         require!(job.stage == JobStage::Disputed, "Job is not disputed");
         let dispute = self.disputes.get(&job_id.0).cloned().unwrap();
-        require!(dispute.escalated_at.is_some(), "The dispute was not escalated");
+        require!(
+            dispute.escalated_at.is_some(),
+            "The dispute was not escalated"
+        );
         let bps = match outcome.as_str() {
             "release" => 10_000,
             "refund" => 0,
             "split" => {
-                require!(seller_share_bps > 0 && seller_share_bps < 10_000, "A split needs a share between 1 and 9999");
+                require!(
+                    seller_share_bps > 0 && seller_share_bps < 10_000,
+                    "A split needs a share between 1 and 9999"
+                );
                 seller_share_bps
             }
             _ => env::panic_str("Outcome must be release, refund or split"),
@@ -1131,25 +1345,42 @@ impl Contract {
     }
 
     pub fn finalize_default(&mut self, job_id: U64) {
-        let job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        let job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
         require!(job.stage == JobStage::Disputed, "Job is not disputed");
         let dispute = self.disputes.get(&job_id.0).cloned().unwrap();
-        let recheck = dispute.recheck.clone().unwrap_or_else(|| env::panic_str("The re-check has no result yet"));
+        let recheck = dispute
+            .recheck
+            .clone()
+            .unwrap_or_else(|| env::panic_str("The re-check has no result yet"));
         let since = dispute.escalated_at.or(dispute.recheck_at).unwrap().0;
-        require!(env::block_timestamp() >= since + ESCALATION_WINDOW, "Wait 72 hours before finalizing");
+        require!(
+            env::block_timestamp() >= since + ESCALATION_WINDOW,
+            "Wait 72 hours before finalizing"
+        );
         let bps = if recheck == "release" { 10_000 } else { 0 };
         self.settle_dispute(job_id, recheck.as_str(), bps, "default");
     }
 
     #[private]
-    pub fn on_proposal_added(&mut self, job_id: U64, #[callback_result] result: Result<U64, PromiseError>) {
+    pub fn on_proposal_added(
+        &mut self,
+        job_id: U64,
+        #[callback_result] result: Result<U64, PromiseError>,
+    ) {
         match result {
             Ok(id) => {
                 if let Some(mut dispute) = self.disputes.get(&job_id.0).cloned() {
                     dispute.proposal_id = Some(id);
                     self.disputes.insert(job_id.0, dispute);
                 }
-                emit("proposal_added", json!({ "job_id": job_id, "proposal_id": id }));
+                emit(
+                    "proposal_added",
+                    json!({ "job_id": job_id, "proposal_id": id }),
+                );
             }
             Err(_) => emit("proposal_failed", json!({ "job_id": job_id })),
         }
@@ -1157,8 +1388,15 @@ impl Contract {
 
     pub fn rate(&mut self, job_id: U64, stars: u8) {
         let caller = owner_of(&env::predecessor_account_id());
-        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
-        require!(job.stage == JobStage::Released, "Only a paid job can be rated");
+        let mut job = self
+            .jobs
+            .get(&job_id.0)
+            .cloned()
+            .unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(
+            job.stage == JobStage::Released,
+            "Only a paid job can be rated"
+        );
         require!((1..=5).contains(&stars), "Stars must be between 1 and 5");
         let seller = job.seller.clone().unwrap();
         let ratee = if caller == job.buyer {
@@ -1177,7 +1415,10 @@ impl Contract {
         rep.rating_sum += stars as u32;
         rep.rating_count += 1;
         self.reputations.insert(ratee.clone(), rep.clone());
-        emit("rated", json!({ "job_id": job_id, "by": caller, "account_id": ratee, "stars": stars }));
+        emit(
+            "rated",
+            json!({ "job_id": job_id, "by": caller, "account_id": ratee, "stars": stars }),
+        );
         let rating_avg = rep.rating_sum as f64 / rep.rating_count as f64;
         emit(
             "reputation_updated",
@@ -1196,7 +1437,10 @@ impl Contract {
         );
         self.stakes.remove(&caller);
         self.credit(&caller, stake);
-        emit("stake_returned", json!({ "account_id": caller, "amount": U128(stake) }));
+        emit(
+            "stake_returned",
+            json!({ "account_id": caller, "amount": U128(stake) }),
+        );
     }
 
     pub fn get_dispute(&self, job_id: U64) -> Option<Dispute> {
@@ -1233,18 +1477,42 @@ impl Contract {
     }
 
     pub fn nft_supply_for_owner(&self, account_id: AccountId) -> U128 {
-        U128(self.records_of.get(&account_id).map(|v| v.len()).unwrap_or(0) as u128)
+        U128(
+            self.records_of
+                .get(&account_id)
+                .map(|v| v.len())
+                .unwrap_or(0) as u128,
+        )
     }
 
-    pub fn nft_tokens_for_owner(&self, account_id: AccountId, from_index: Option<U128>, limit: Option<u64>) -> Vec<Token> {
-        let ids = self.records_of.get(&account_id).cloned().unwrap_or_default();
+    pub fn nft_tokens_for_owner(
+        &self,
+        account_id: AccountId,
+        from_index: Option<U128>,
+        limit: Option<u64>,
+    ) -> Vec<Token> {
+        let ids = self
+            .records_of
+            .get(&account_id)
+            .cloned()
+            .unwrap_or_default();
         let start = from_index.map(|i| i.0 as usize).unwrap_or(0);
         let take = limit.unwrap_or(50).min(100) as usize;
-        ids.iter().skip(start).take(take).filter_map(|id| self.nft_token(id.clone())).collect()
+        ids.iter()
+            .skip(start)
+            .take(take)
+            .filter_map(|id| self.nft_token(id.clone()))
+            .collect()
     }
 
     #[payable]
-    pub fn nft_transfer(&mut self, receiver_id: AccountId, token_id: String, approval_id: Option<u64>, memo: Option<String>) {
+    pub fn nft_transfer(
+        &mut self,
+        receiver_id: AccountId,
+        token_id: String,
+        approval_id: Option<u64>,
+        memo: Option<String>,
+    ) {
         let _ = (receiver_id, token_id, approval_id, memo);
         env::panic_str("Completion records are non-transferable")
     }
@@ -1274,7 +1542,11 @@ mod tests {
     }
 
     fn setup() -> Contract {
-        Contract::new(acc("owner.testnet"), acc("usdc.testnet"), acc("dao.testnet"))
+        Contract::new(
+            acc("owner.testnet"),
+            acc("usdc.testnet"),
+            acc("dao.testnet"),
+        )
     }
 
     fn call_from(predecessor: &str, deposit: u128) {
@@ -1301,7 +1573,12 @@ mod tests {
 
     fn post(contract: &mut Contract, from: &str) -> U64 {
         call_from(from, 0);
-        contract.post_job("rust".to_string(), U128(40_000_000), "spec-hash-1".to_string(), U64(10_000))
+        contract.post_job(
+            "rust".to_string(),
+            U128(40_000_000),
+            "spec-hash-1".to_string(),
+            U64(10_000),
+        )
     }
 
     fn call_at(predecessor: &str, deposit: u128, timestamp: u64) {
@@ -1319,11 +1596,24 @@ mod tests {
 
     fn hired_job(contract: &mut Contract, price: u128, seller: &str, at: u64) -> U64 {
         call_at("agents.alice.testnet", 0, at);
-        let job_id = contract.post_job("rust".to_string(), U128(price), "spec".to_string(), U64(FAR));
+        let job_id = contract.post_job(
+            "rust".to_string(),
+            U128(price),
+            "spec".to_string(),
+            U64(FAR),
+        );
         call_at(seller, 0, at);
         let bid_id = contract.place_bid(job_id, U128(price), 2);
         call_at("agents.alice.testnet", 0, at);
-        contract.accept_offer(job_id, bid_id, U128(price), "spec".to_string(), "holdout".to_string(), 2, U64(FAR));
+        contract.accept_offer(
+            job_id,
+            bid_id,
+            U128(price),
+            "spec".to_string(),
+            "holdout".to_string(),
+            2,
+            U64(FAR),
+        );
         job_id
     }
 
@@ -1333,7 +1623,12 @@ mod tests {
         contract.register_seller(acc("veteran.testnet"));
         contract.reputations.insert(
             acc("veteran.testnet"),
-            Reputation { settled: 5, disputes: 0, rating_sum: 25, rating_count: 5 },
+            Reputation {
+                settled: 5,
+                disputes: 0,
+                rating_sum: 25,
+                rating_count: 5,
+            },
         );
         deposit(&mut contract, "alice.testnet", 200_000_000);
         contract
@@ -1341,7 +1636,11 @@ mod tests {
 
     fn delivered_job(contract: &mut Contract) -> U64 {
         call_from("owner.testnet", 1);
-        contract.set_reviewers(vec![acc("r1.testnet"), acc("r2.testnet"), acc("r3.testnet")]);
+        contract.set_reviewers(vec![
+            acc("r1.testnet"),
+            acc("r2.testnet"),
+            acc("r3.testnet"),
+        ]);
         let job_id = hired_job(contract, 32_000_000, "veteran.testnet", 0);
         call_at("agents.alice.testnet", 0, 0);
         contract.fund_job(job_id);
@@ -1363,7 +1662,10 @@ mod tests {
         assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Delivered);
         vote_as(&mut contract, job_id, "r2.testnet", true);
         assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Released);
-        assert_eq!(contract.get_balance(acc("veteran.testnet")).free.0, 31_360_000);
+        assert_eq!(
+            contract.get_balance(acc("veteran.testnet")).free.0,
+            31_360_000
+        );
         assert_eq!(contract.get_balance(acc("dao.testnet")).free.0, 640_000);
         let buyer = contract.get_balance(acc("alice.testnet"));
         assert_eq!(buyer.escrowed.0, 0);
@@ -1422,7 +1724,11 @@ mod tests {
     fn other_seller_cannot_deliver() {
         let mut contract = funded_setup();
         call_from("owner.testnet", 1);
-        contract.set_reviewers(vec![acc("r1.testnet"), acc("r2.testnet"), acc("r3.testnet")]);
+        contract.set_reviewers(vec![
+            acc("r1.testnet"),
+            acc("r2.testnet"),
+            acc("r3.testnet"),
+        ]);
         let job_id = hired_job(&mut contract, 32_000_000, "veteran.testnet", 0);
         call_at("agents.alice.testnet", 0, 0);
         contract.fund_job(job_id);
@@ -1524,11 +1830,20 @@ mod tests {
     fn check_4_wrong_category() {
         let mut contract = funded_setup();
         call_at("agents.alice.testnet", 0, 0);
-        let job_id = contract.post_job("scripts".to_string(), U128(1), "spec".to_string(), U64(FAR));
+        let job_id =
+            contract.post_job("scripts".to_string(), U128(1), "spec".to_string(), U64(FAR));
         call_at("veteran.testnet", 0, 0);
         let bid_id = contract.place_bid(job_id, U128(10_000_000), 2);
         call_at("agents.alice.testnet", 0, 0);
-        contract.accept_offer(job_id, bid_id, U128(10_000_000), "spec".to_string(), "h".to_string(), 2, U64(FAR));
+        contract.accept_offer(
+            job_id,
+            bid_id,
+            U128(10_000_000),
+            "spec".to_string(),
+            "h".to_string(),
+            2,
+            U64(FAR),
+        );
         contract.fund_job(job_id);
     }
 
@@ -1590,7 +1905,13 @@ mod tests {
         let mut contract = admin_setup();
         call_from("owner.testnet", 1);
         contract.register_seller(acc("veteran.testnet"));
-        contract.reputations.insert(acc("veteran.testnet"), Reputation { settled: 5, ..Default::default() });
+        contract.reputations.insert(
+            acc("veteran.testnet"),
+            Reputation {
+                settled: 5,
+                ..Default::default()
+            },
+        );
         deposit(&mut contract, "alice.testnet", 10_000_000);
         let job_id = hired_job(&mut contract, 32_000_000, "veteran.testnet", 0);
         call_at("agents.alice.testnet", 0, 0);
@@ -1606,7 +1927,15 @@ mod tests {
         call_at("veteran.testnet", 0, 0);
         let bid_id = contract.place_bid(job_id, U128(10_000_000), 2);
         call_at("agents.mallory.testnet", 0, 0);
-        contract.accept_offer(job_id, bid_id, U128(10_000_000), "spec".to_string(), "h".to_string(), 2, U64(FAR));
+        contract.accept_offer(
+            job_id,
+            bid_id,
+            U128(10_000_000),
+            "spec".to_string(),
+            "h".to_string(),
+            2,
+            U64(FAR),
+        );
     }
 
     #[test]
@@ -1825,7 +2154,10 @@ mod tests {
         deposit(&mut contract, "alice.testnet", 50_000_000);
         call_from("alice.testnet", 1);
         let _ = contract.withdraw(U128(20_000_000));
-        assert_eq!(contract.get_balance(acc("alice.testnet")).free.0, 30_000_000);
+        assert_eq!(
+            contract.get_balance(acc("alice.testnet")).free.0,
+            30_000_000
+        );
     }
 
     #[test]
@@ -1869,7 +2201,11 @@ mod tests {
 
     fn bond(contract: &mut Contract, from: &str, job_id: U64, amount: u128, at: u64) {
         call_at("usdc.testnet", 0, at);
-        let _ = contract.ft_on_transfer(acc(from), U128(amount), format!("dispute_bond:{}", job_id.0));
+        let _ = contract.ft_on_transfer(
+            acc(from),
+            U128(amount),
+            format!("dispute_bond:{}", job_id.0),
+        );
     }
 
     fn released_job(contract: &mut Contract) -> U64 {
@@ -1970,7 +2306,10 @@ mod tests {
         assert_eq!(job.stage, JobStage::Disputed);
         assert!(job.votes.is_empty());
         assert_eq!(contract.get_reputation(acc("veteran.testnet")).disputes, 1);
-        assert_eq!(contract.get_dispute(job_id).unwrap().opened_by, acc("alice.testnet"));
+        assert_eq!(
+            contract.get_dispute(job_id).unwrap().opened_by,
+            acc("alice.testnet")
+        );
     }
 
     #[test]
@@ -1995,13 +2334,22 @@ mod tests {
     fn recheck_result_stands_after_72_hours() {
         let mut contract = funded_setup();
         let job_id = disputed_with_recheck(&mut contract, true);
-        assert_eq!(contract.get_dispute(job_id).unwrap().recheck, Some("release".to_string()));
+        assert_eq!(
+            contract.get_dispute(job_id).unwrap().recheck,
+            Some("release".to_string())
+        );
         assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Disputed);
         call_at("anyone.testnet", 0, 72 * HOUR);
         contract.finalize_default(job_id);
         assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Released);
-        assert_eq!(contract.get_balance(acc("veteran.testnet")).free.0, 31_360_000);
-        assert_eq!(contract.get_dispute(job_id).unwrap().outcome, Some("release".to_string()));
+        assert_eq!(
+            contract.get_balance(acc("veteran.testnet")).free.0,
+            31_360_000
+        );
+        assert_eq!(
+            contract.get_dispute(job_id).unwrap().outcome,
+            Some("release".to_string())
+        );
     }
 
     #[test]
@@ -2037,7 +2385,10 @@ mod tests {
         call_at("anyone.testnet", 0, 73 * HOUR);
         contract.finalize_default(job_id);
         assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Released);
-        assert_eq!(contract.get_balance(acc("dao.testnet")).free.0, 640_000 + 1_600_000);
+        assert_eq!(
+            contract.get_balance(acc("dao.testnet")).free.0,
+            640_000 + 1_600_000
+        );
     }
 
     #[test]
@@ -2048,9 +2399,15 @@ mod tests {
         call_at("dao.testnet", 0, 2 * HOUR);
         contract.resolve_dispute(job_id, "split".to_string(), 7_000);
         assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Released);
-        assert_eq!(contract.get_balance(acc("veteran.testnet")).free.0, 21_952_000 + 1_600_000);
+        assert_eq!(
+            contract.get_balance(acc("veteran.testnet")).free.0,
+            21_952_000 + 1_600_000
+        );
         assert_eq!(contract.get_balance(acc("dao.testnet")).free.0, 448_000);
-        assert_eq!(contract.get_balance(acc("alice.testnet")).free.0, 168_000_000 + 9_600_000);
+        assert_eq!(
+            contract.get_balance(acc("alice.testnet")).free.0,
+            168_000_000 + 9_600_000
+        );
     }
 
     #[test]
@@ -2147,7 +2504,11 @@ mod tests {
         let mut contract = admin_setup();
         deposit(&mut contract, "alice.testnet", 200_000_000);
         call_at("usdc.testnet", 0, 0);
-        let _ = contract.ft_on_transfer(acc("seller.testnet"), U128(10_000_000), "starter_stake".to_string());
+        let _ = contract.ft_on_transfer(
+            acc("seller.testnet"),
+            U128(10_000_000),
+            "starter_stake".to_string(),
+        );
         assert_eq!(contract.get_stake(acc("seller.testnet")).0, 10_000_000);
         let job_id = hired_job(&mut contract, 40_000_000, "seller.testnet", 0);
         call_at("agents.alice.testnet", 0, 0);
@@ -2160,19 +2521,38 @@ mod tests {
     fn unregistered_account_cannot_stake() {
         let mut contract = admin_setup();
         call_at("usdc.testnet", 0, 0);
-        let _ = contract.ft_on_transfer(acc("nobody.testnet"), U128(10_000_000), "starter_stake".to_string());
+        let _ = contract.ft_on_transfer(
+            acc("nobody.testnet"),
+            U128(10_000_000),
+            "starter_stake".to_string(),
+        );
     }
 
     #[test]
     fn stake_returns_after_three_clean_jobs() {
         let mut contract = admin_setup();
         call_at("usdc.testnet", 0, 0);
-        let _ = contract.ft_on_transfer(acc("seller.testnet"), U128(10_000_000), "starter_stake".to_string());
-        contract.reputations.insert(acc("seller.testnet"), Reputation { settled: 3, disputes: 0, rating_sum: 0, rating_count: 0 });
+        let _ = contract.ft_on_transfer(
+            acc("seller.testnet"),
+            U128(10_000_000),
+            "starter_stake".to_string(),
+        );
+        contract.reputations.insert(
+            acc("seller.testnet"),
+            Reputation {
+                settled: 3,
+                disputes: 0,
+                rating_sum: 0,
+                rating_count: 0,
+            },
+        );
         call_at("seller.testnet", 0, 0);
         contract.return_stake();
         assert_eq!(contract.get_stake(acc("seller.testnet")).0, 0);
-        assert_eq!(contract.get_balance(acc("seller.testnet")).free.0, 10_000_000);
+        assert_eq!(
+            contract.get_balance(acc("seller.testnet")).free.0,
+            10_000_000
+        );
     }
 
     #[test]
@@ -2180,7 +2560,11 @@ mod tests {
     fn stake_stays_before_three_jobs() {
         let mut contract = admin_setup();
         call_at("usdc.testnet", 0, 0);
-        let _ = contract.ft_on_transfer(acc("seller.testnet"), U128(10_000_000), "starter_stake".to_string());
+        let _ = contract.ft_on_transfer(
+            acc("seller.testnet"),
+            U128(10_000_000),
+            "starter_stake".to_string(),
+        );
         call_at("seller.testnet", 0, 0);
         contract.return_stake();
     }
@@ -2194,7 +2578,12 @@ mod tests {
         let token = contract.nft_token("1".to_string()).unwrap();
         assert_eq!(token.owner_id, acc("veteran.testnet"));
         assert_eq!(token.metadata.title, format!("Completed job {}", job_id.0));
-        assert_eq!(contract.nft_tokens_for_owner(acc("veteran.testnet"), None, None).len(), 1);
+        assert_eq!(
+            contract
+                .nft_tokens_for_owner(acc("veteran.testnet"), None, None)
+                .len(),
+            1
+        );
         assert_eq!(contract.nft_metadata().spec, "nft-1.0.0");
     }
 
