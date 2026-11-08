@@ -1,0 +1,707 @@
+{
+  "name": "AGORA · lib chain-call",
+  "id": "AgoraLibChain001",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "4f6497cd-7db3-4c4c-b9c3-f269c83ec927",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "Input: signer (tx-buyer, tx-seller, guardian-buyer, reviewer-1..3, platform), method, args, ownerId, jobId, amount.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "53acbb8b-6738-4a4e-8121-7d012d7f969a",
+              "name": "cfg",
+              "value": "={{ { mode: $env.AGORA_CHAIN_MODE || 'mock', contractId: $env.AGORA_CONTRACT_ID, accounts: { 'tx-buyer': $env.AGORA_ACCOUNT_TX_BUYER, 'tx-seller': $env.AGORA_ACCOUNT_TX_SELLER, 'guardian-buyer': $env.AGORA_ACCOUNT_GUARDIAN, 'reviewer-1': $env.AGORA_ACCOUNT_REVIEWER_1, 'reviewer-2': $env.AGORA_ACCOUNT_REVIEWER_2, 'reviewer-3': $env.AGORA_ACCOUNT_REVIEWER_3, platform: $env.AGORA_ACCOUNT_PLATFORM } } }}",
+              "type": "object"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "4572962f-1634-42f0-ab16-bbf18f6a1ad4",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "notes": "Reads AGORA_CHAIN_MODE, AGORA_CONTRACT_ID and the signer account names from the environment.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Input: signer, method, args, ownerId, jobId, amount (USDC, decimal)\nconst i = $input.first().json;\nconst SIGNERS = ['tx-buyer', 'tx-seller', 'guardian-buyer',\n                 'reviewer-1', 'reviewer-2', 'reviewer-3', 'platform'];\nif (!SIGNERS.includes(i.signer)) throw new Error('Unknown signer: ' + i.signer);\nif (!/^[a-z_]+$/.test(i.method || '')) throw new Error('Bad method name: ' + i.method);\nreturn [{\n  json: {\n    signer: i.signer,\n    signerIndex: SIGNERS.indexOf(i.signer),\n    signerAccount: i.cfg.accounts[i.signer] || i.signer,\n    method: i.method,\n    args: i.args || {},\n    ownerId: i.ownerId || null,\n    jobId: i.jobId || null,\n    amount: i.amount ?? null,\n    mode: i.cfg.mode === 'testnet' ? 'testnet' : 'mock',\n    contractId: i.cfg.contractId,\n  },\n}];\n"
+      },
+      "id": "b3ac0427-0541-482c-b759-c64fe37293b4",
+      "name": "Validate input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "notes": "Rejects unknown signers and odd method names; picks the signer's account and output index.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO chain_txs (owner_id, signer_account, method, args, amount, job_id, status)\nVALUES ($1::uuid, $2, $3, $4::jsonb, $5::numeric, $6::uuid, 'pending')\nRETURNING id;\n",
+        "options": {
+          "queryReplacement": "={{ [ $json.ownerId, $json.signerAccount, $json.method, JSON.stringify($json.args), $json.amount, $json.jobId ] }}"
+        }
+      },
+      "id": "9dd045ef-7944-4634-aae7-a7d1a536658b",
+      "name": "Insert pending tx",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        0
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Writes a chain_txs row with status pending before anything is sent.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "78595d9f-894b-4f2a-83c7-e7d39bb7ff46",
+              "leftValue": "={{ $('Validate input').first().json.mode === 'mock' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "9d33e392-fa65-4108-9dad-166ddc9875bf",
+      "name": "Mock mode?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "notes": "True while AGORA_CHAIN_MODE=mock (no contract yet). False sends a real testnet transaction.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT m.per_job_cap, m.daily_cap, m.new_seller_cap, m.paused, m.allowed_categories,\n       b.available, b.spent_today,\n       j.category, j.agreed_price,\n       bd.price_check::text AS price_check, bd.fraud_score, bd.owner_approved_risk,\n       coalesce(r.settled_jobs, 0) AS settled_jobs\nFROM profiles p\nLEFT JOIN mandates m   ON m.owner_id = p.id\nLEFT JOIN balances b   ON b.account_id = p.near_account_id\nLEFT JOIN jobs j       ON j.id = $2::uuid\nLEFT JOIN bids bd      ON bd.id = j.accepted_bid_id\nLEFT JOIN sellers s    ON s.id = j.seller_id\nLEFT JOIN reputation r ON r.account_id = s.near_account_id\nWHERE p.id = $1::uuid;\n",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate input').first().json.ownerId, $('Validate input').first().json.jobId ] }}"
+        }
+      },
+      "id": "f7fdc257-f865-4e20-94c6-ed53edde211f",
+      "name": "Load mandate (mock)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1100,
+        -160
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Reads the owner's mandate, balance, job, accepted bid and seller reputation.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pretends to be the contract: same checks, same refusals (paper Table 5).\nconst v = $('Validate input').first().json;\nconst m = $input.first().json || {};\nconst TX = ['post_job', 'place_bid', 'accept_offer', 'fund_job', 'submit_delivery', 'vote'];\nconst KEYS = {\n  'tx-buyer': TX, 'tx-seller': TX, 'guardian-buyer': ['pause'],\n  'reviewer-1': ['vote'], 'reviewer-2': ['vote'], 'reviewer-3': ['vote'],\n  platform: ['release_expired', 'flag_risk'],\n};\nconst fail = (rejectedBy, error) => [{ json: { ok: false, rejectedBy, error } }];\nconst n = (x) => Number(x ?? 0);\n\n// 1) What the function-call key itself allows (protocol level)\nif (!KEYS[v.signer].includes(v.method)) {\n  return fail('protocol:MethodNameMismatch', `Key ${v.signer} may not call ${v.method}`);\n}\n// 2) Pause stops every money-moving call\nconst moving = ['post_job', 'place_bid', 'accept_offer', 'fund_job', 'submit_delivery'];\nif (moving.includes(v.method) && m.paused === true) {\n  return fail('contract:paused', 'Agents are paused by the owner or the guardian');\n}\n// 3) Mandate checks on funding\nif (v.method === 'fund_job') {\n  const price = n(m.agreed_price ?? v.amount);\n  const amount = n(v.amount ?? price);\n  if (m.per_job_cap != null && price > n(m.per_job_cap)) {\n    return fail('contract:per_job_cap', `Job price ${price} USDC is over the per-job cap of ${n(m.per_job_cap)}`);\n  }\n  if (m.daily_cap != null && n(m.spent_today) + amount > n(m.daily_cap)) {\n    return fail('contract:daily_cap', `Would reach ${n(m.spent_today) + amount} USDC today; daily cap is ${n(m.daily_cap)}`);\n  }\n  const cats = m.allowed_categories || [];\n  if (cats.length && m.category && !cats.includes(m.category)) {\n    return fail('contract:category', `Category ${m.category} is not allowed`);\n  }\n  if (m.price_check === 'held') return fail('contract:price_hold', 'The bid is held by the price check');\n  if (n(m.fraud_score) >= 70 && !m.owner_approved_risk) {\n    return fail('contract:fraud_flag', `Seller is flagged (score ${m.fraud_score}) and not approved by the owner`);\n  }\n  if (n(m.settled_jobs) < 3 && m.new_seller_cap != null && price > n(m.new_seller_cap)) {\n    return fail('contract:new_seller_cap', `New seller: ${price} USDC is over the starter cap of ${n(m.new_seller_cap)}`);\n  }\n  if (n(m.available) < amount) return fail('contract:balance', `Free balance ${n(m.available)} USDC is below ${amount}`);\n}\nconst txHash = 'mock-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);\nreturn [{ json: { ok: true, txHash } }];\n"
+      },
+      "id": "a06f8aa3-e525-4eed-b2cc-7f2122cbf04f",
+      "name": "Mock contract checks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        -160
+      ],
+      "notes": "Plays the contract: key permissions, pause, per-job cap, daily cap, category, price hold, fraud flag, new-seller cap, balance. Returns ok or the refusal reason.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Hand the validated call to the Switch and the NEAR nodes\nreturn [{ json: $('Validate input').first().json }];\n"
+      },
+      "id": "5aabb992-c61d-4b01-8e05-ff4c41a33238",
+      "name": "Prepare call",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        160
+      ],
+      "notes": "Passes the validated call to the Switch.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "numberOutputs": 7,
+        "output": "={{ $json.signerIndex }}"
+      },
+      "id": "7b4113de-6775-4877-881c-7f343bfee2a9",
+      "name": "Pick signer",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3,
+      "position": [
+        1320,
+        160
+      ],
+      "notes": "Routes to the NEAR node whose credential is that signer's limited key (output = signerIndex).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "contract",
+        "operation": "callMethod",
+        "contractId": "={{ $json.contractId }}",
+        "methodName": "={{ $json.method }}",
+        "args": "={{ JSON.stringify($json.args) }}",
+        "deposit": "0",
+        "gas": 30
+      },
+      "id": "3c9a843e-ad83-453f-a91f-110d452f667e",
+      "name": "NEAR tx buyer",
+      "type": "CUSTOM.NEAR",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        -40
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "nearApi": {
+          "id": "agoraNearTxBuyer",
+          "name": "NEAR tx buyer"
+        }
+      },
+      "notes": "Your NEAR node, Contract (Advanced) > Call, credential: buyer transaction key. Deposit 0, gas 30 TGas.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "contract",
+        "operation": "callMethod",
+        "contractId": "={{ $json.contractId }}",
+        "methodName": "={{ $json.method }}",
+        "args": "={{ JSON.stringify($json.args) }}",
+        "deposit": "0",
+        "gas": 30
+      },
+      "id": "7af3e2e4-fa46-44fa-9ada-6dc48d002ab0",
+      "name": "NEAR tx seller",
+      "type": "CUSTOM.NEAR",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        70
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "nearApi": {
+          "id": "agoraNearTxSellr",
+          "name": "NEAR tx seller"
+        }
+      },
+      "notes": "Same, with the seller's transaction key.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "contract",
+        "operation": "callMethod",
+        "contractId": "={{ $json.contractId }}",
+        "methodName": "={{ $json.method }}",
+        "args": "={{ JSON.stringify($json.args) }}",
+        "deposit": "0",
+        "gas": 30
+      },
+      "id": "1fd17dd6-a05e-47c5-9871-83e995d37f4b",
+      "name": "NEAR guardian buyer",
+      "type": "CUSTOM.NEAR",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        180
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "nearApi": {
+          "id": "agoraNearGuardn1",
+          "name": "NEAR guardian buyer"
+        }
+      },
+      "notes": "Same, with the guardian's pause-only key.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "contract",
+        "operation": "callMethod",
+        "contractId": "={{ $json.contractId }}",
+        "methodName": "={{ $json.method }}",
+        "args": "={{ JSON.stringify($json.args) }}",
+        "deposit": "0",
+        "gas": 30
+      },
+      "id": "8d02fa6c-97fa-4973-9c6d-0eb7b462d87d",
+      "name": "NEAR reviewer 1",
+      "type": "CUSTOM.NEAR",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        290
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "nearApi": {
+          "id": "agoraNearRevwr01",
+          "name": "NEAR reviewer 1"
+        }
+      },
+      "notes": "Same, with reviewer 1's vote-only key.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "contract",
+        "operation": "callMethod",
+        "contractId": "={{ $json.contractId }}",
+        "methodName": "={{ $json.method }}",
+        "args": "={{ JSON.stringify($json.args) }}",
+        "deposit": "0",
+        "gas": 30
+      },
+      "id": "ab07b950-7aeb-427c-a075-e1cff9864fb8",
+      "name": "NEAR reviewer 2",
+      "type": "CUSTOM.NEAR",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        400
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "nearApi": {
+          "id": "agoraNearRevwr02",
+          "name": "NEAR reviewer 2"
+        }
+      },
+      "notes": "Same, with reviewer 2's vote-only key.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "contract",
+        "operation": "callMethod",
+        "contractId": "={{ $json.contractId }}",
+        "methodName": "={{ $json.method }}",
+        "args": "={{ JSON.stringify($json.args) }}",
+        "deposit": "0",
+        "gas": 30
+      },
+      "id": "07e9dd57-88ee-4b03-9c48-41e7535d9f8b",
+      "name": "NEAR reviewer 3",
+      "type": "CUSTOM.NEAR",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        510
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "nearApi": {
+          "id": "agoraNearRevwr03",
+          "name": "NEAR reviewer 3"
+        }
+      },
+      "notes": "Same, with reviewer 3's vote-only key.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "resource": "contract",
+        "operation": "callMethod",
+        "contractId": "={{ $json.contractId }}",
+        "methodName": "={{ $json.method }}",
+        "args": "={{ JSON.stringify($json.args) }}",
+        "deposit": "0",
+        "gas": 30
+      },
+      "id": "5346279c-9055-4d08-9b42-e4d06c4e9f0f",
+      "name": "NEAR platform",
+      "type": "CUSTOM.NEAR",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        620
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "nearApi": {
+          "id": "agoraNearPlatfm1",
+          "name": "NEAR platform"
+        }
+      },
+      "notes": "Same, with the platform key (auto-release timer).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validate input').first().json;\nconst txId = $('Insert pending tx').first().json.id;\nconst r = $input.first().json;\nlet ok, error = null, rejectedBy = null, explorer = null;\nconst txHash = r.txHash || null;\n\nif (v.mode === 'mock') {\n  ok = r.ok === true;\n  error = r.error || null;\n  rejectedBy = r.rejectedBy || null;\n} else {\n  ok = Boolean(txHash) && !r.error;\n  explorer = r.explorer || null;\n  error = r.error || null;\n  if (r.status && r.status.Failure) {\n    ok = false;\n    error = JSON.stringify(r.status.Failure).slice(0, 500);\n  }\n  if (!ok) {\n    const m = String(error || '').match(\n      /MethodNameMismatch|ReceiverMismatch|NotEnoughAllowance|DepositWithFunctionCall/i);\n    rejectedBy = m ? 'protocol:' + m[0] : 'contract';\n  }\n}\n\nlet effect = 'none';\nif (ok && v.mode === 'mock' && v.method === 'fund_job') effect = 'mock-fund';\nif (ok && v.mode === 'mock' && v.method === 'pause') effect = 'mock-pause';\n\nreturn [{\n  json: {\n    ok, txHash, explorer, error, rejectedBy, txId, effect,\n    method: v.method, signer: v.signer, amount: v.amount, ownerId: v.ownerId, jobId: v.jobId,\n  },\n}];\n"
+      },
+      "id": "da27dbd6-afc0-437f-b3bc-ae3b3ad0abb3",
+      "name": "Normalize result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        0
+      ],
+      "notes": "Turns mock or real output into {ok, txHash, explorer, error, rejectedBy}. Classifies protocol refusals (MethodNameMismatch, NotEnoughAllowance...).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH upd AS (\n  UPDATE chain_txs\n     SET status = $2::tx_status, tx_hash = $3, error = $4, rejected_by = $5\n   WHERE id = $1::uuid\n  RETURNING id\n), bal AS (\n  -- mock mode only: move the amount from available to escrow\n  UPDATE balances b\n     SET available = b.available - $7::numeric,\n         escrowed = b.escrowed + $7::numeric,\n         spent_today = b.spent_today + $7::numeric\n    FROM profiles p\n   WHERE $6 = 'mock-fund' AND p.id = $8::uuid AND b.account_id = p.near_account_id\n  RETURNING b.account_id\n), pz AS (\n  -- mock mode only: the guardian's pause\n  UPDATE mandates SET paused = true, paused_by = 'guardian', paused_at = now()\n   WHERE $6 = 'mock-pause' AND owner_id = $8::uuid\n  RETURNING owner_id\n)\nSELECT (SELECT id FROM upd) AS id;\n",
+        "options": {
+          "queryReplacement": "={{ [ $json.txId, $json.ok ? 'success' : 'rejected', $json.txHash, $json.error, $json.rejectedBy, $json.effect, $json.amount ?? 0, $json.ownerId ] }}"
+        }
+      },
+      "id": "92025564-82bb-4d8b-bceb-4327839af077",
+      "name": "Record result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1980,
+        0
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Updates the chain_txs row. In mock mode also moves funds to escrow (fund_job) or sets mandates.paused (pause), so the demo behaves like the real contract.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $('Normalize result').first().json }];\n"
+      },
+      "id": "09330ee2-9e18-46c7-833f-79882e195eeb",
+      "name": "Return",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        0
+      ],
+      "notes": "Returns the normalized result to the caller.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Pick signer": {
+      "main": [
+        [
+          {
+            "node": "NEAR tx buyer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NEAR tx seller",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NEAR guardian buyer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NEAR reviewer 1",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NEAR reviewer 2",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NEAR reviewer 3",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NEAR platform",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Validate input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate input": {
+      "main": [
+        [
+          {
+            "node": "Insert pending tx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert pending tx": {
+      "main": [
+        [
+          {
+            "node": "Mock mode?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock mode?": {
+      "main": [
+        [
+          {
+            "node": "Load mandate (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load mandate (mock)": {
+      "main": [
+        [
+          {
+            "node": "Mock contract checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock contract checks": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare call": {
+      "main": [
+        [
+          {
+            "node": "Pick signer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NEAR tx buyer": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NEAR tx seller": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NEAR guardian buyer": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NEAR reviewer 1": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NEAR reviewer 2": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NEAR reviewer 3": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NEAR platform": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize result": {
+      "main": [
+        [
+          {
+            "node": "Record result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record result": {
+      "main": [
+        [
+          {
+            "node": "Return",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

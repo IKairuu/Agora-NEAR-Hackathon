@@ -1,0 +1,100 @@
+{
+  "name": "AGORA · lib notify-nest",
+  "id": "AgoraLibNotify01",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "4fd75998-8410-42e2-8c92-59ad1001958f",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "Input: an item with a 'notify' object (runId, role, ok, jobId, result, error).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AGORA_NEST_URL }}/agents/notify",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 5000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.notify || {}) }}"
+      },
+      "id": "45530d24-ee35-4554-a0b6-8b7d68f3a0bc",
+      "name": "POST /agents/notify",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "agoraNestOut0001",
+          "name": "AGORA Nest out"
+        }
+      },
+      "notes": "HTTP Request to {AGORA_NEST_URL}/agents/notify with the shared secret header. 5 s timeout; on error it continues.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nest may not exist yet; a failed call is not an error for the agent.\nconst r = $input.first().json;\nreturn [{ json: { notified: !r.error, nestError: r.error ? String(r.error.message || r.error) : null } }];\n"
+      },
+      "id": "8a03cae7-1117-47c1-9ea7-66571da26268",
+      "name": "Return",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "notes": "Returns notified: true/false. A missing NestJS is not an error for the agent.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "POST /agents/notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "POST /agents/notify": {
+      "main": [
+        [
+          {
+            "node": "Return",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

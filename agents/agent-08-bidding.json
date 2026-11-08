@@ -1,0 +1,478 @@
+{
+  "name": "AGORA · 08 bidding",
+  "id": "AgoraBidding0001",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agora/bidding",
+        "authentication": "headerAuth",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "id": "ccb0ec14-3379-4868-a40c-2ef75bafc1a1",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "9a0bc6b3-1864-4d93-9cf4-155b343fb0ac",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "agoraWebhookIn01",
+          "name": "AGORA webhook in"
+        }
+      },
+      "notes": "Entry point. POST from NestJS with the envelope {runId, ownerId, jobId, agentId, payload}. Checks the X-Agora-Secret header and answers 200 at once; the work continues in the background.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook output has the request body under $json.body.\n// Flatten the envelope and its payload into one item.\nconst b = $input.first().json.body || {};\nif (!b.runId) throw new Error('Missing runId in the request body');\nreturn [{\n  json: {\n    runId: b.runId,\n    ownerId: b.ownerId ?? null,\n    jobId: b.jobId ?? null,\n    agentId: b.agentId ?? null,\n    ...(b.payload || {}),\n  },\n}];\n"
+      },
+      "id": "c9584e14-42e6-4f7c-bdef-51f915f884bd",
+      "name": "Read envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "notes": "Takes the request body and flattens envelope + payload into one item, so later nodes can read $('Read envelope').first().json.jobId and friends. Stops if runId is missing.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT j.id AS job_id, j.title, j.description, j.category, j.budget_label, j.budget_max_public,\n       s.id AS seller_id, s.display_name, s.headline, s.skills, s.categories,\n       s.price_floor, s.max_concurrent_jobs, s.delivery_terms,\n       (SELECT count(*) FROM jobs x\n         WHERE x.seller_id = s.id AND x.status IN ('funded', 'in_progress'))::int AS active_jobs,\n       b.id AS bid_id, b.price AS bid_price, b.status::text AS bid_status,\n       (SELECT coalesce(max(n.round), 0) FROM negotiation_messages n WHERE n.bid_id = b.id) AS last_round,\n       (SELECT n.offered_price FROM negotiation_messages n\n         WHERE n.bid_id = b.id AND n.sender = 'buyer_agent'\n         ORDER BY n.created_at DESC LIMIT 1) AS buyer_offer,\n       (SELECT n.body FROM negotiation_messages n\n         WHERE n.bid_id = b.id AND n.sender = 'buyer_agent'\n         ORDER BY n.created_at DESC LIMIT 1) AS buyer_message\nFROM jobs j\nJOIN sellers s ON s.id = $2::uuid\nLEFT JOIN bids b ON b.job_id = j.id AND b.seller_id = s.id\nWHERE j.id = $1::uuid;\n",
+        "options": {
+          "queryReplacement": "={{ [ $json.jobId, $json.sellerId ] }}"
+        }
+      },
+      "id": "80bf67c4-89d4-4af6-8481-96131b5f99c9",
+      "name": "Load job and seller",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        0
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Reads the job, the seller's skills, floor and capacity, and any existing bid and the buyer's last counter-offer.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const env = $('Read envelope').first().json;\nconst r = $input.first().json;\nconst action = env.action === 'negotiate' ? 'negotiate' : 'bid';\nlet skip = null;\nif (!r.job_id) skip = 'Job or seller not found';\nelse if (action === 'bid' && r.bid_id) skip = 'Already bid on this job';\nelse if (action === 'bid' && r.active_jobs >= r.max_concurrent_jobs) skip = 'At capacity';\nelse if (action === 'bid' && !(r.categories || []).includes(r.category)) skip = 'Category not offered';\nelse if (action === 'negotiate' && !r.bid_id) skip = 'No bid to negotiate';\nelse if (action === 'negotiate' && r.last_round >= 3) skip = 'Negotiation already at 3 rounds';\nreturn [{ json: { ...r, action, skip } }];\n"
+      },
+      "id": "4a4964fd-0610-4044-b539-b7182820374c",
+      "name": "Can act?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "notes": "Skips when the seller already bid, is at capacity, does not serve the category, or negotiation is at 3 rounds.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "126dfa65-a5a1-4dbd-8c01-d3f97f055cc6",
+              "leftValue": "={{ Boolean($json.skip) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "69ac4278-f519-4f33-a897-2cd46c9a9f71",
+      "name": "Skip?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "notes": "True: log why and stop. False: ask the model.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst persona = `You are the bidding agent for seller \"${r.display_name}\" (${r.headline || ''}).\nSkills: ${(r.skills || []).join(', ')}. Price floor: ${r.price_floor} USDC. Terms: ${r.delivery_terms || ''}.\nNever go below the price floor. Prices are in USDC.`;\nif (r.action === 'negotiate') {\n  return [{ json: { provider: 'general', required: ['accept', 'price', 'message'],\n    system: persona + `\nThe buyer's agent sent a counter-offer. Decide: accept it, or answer with a price between\nthe counter and your current price. Return JSON {\"accept\": boolean, \"price\": number, \"message\": string}.`,\n    user: `Job: ${r.title}\nYour current price: ${r.bid_price} USDC. Buyer counter: ${r.buyer_offer} USDC. Round ${r.last_round} of 3.\nBuyer message:\n<untrusted>${r.buyer_message || ''}</untrusted>` } }];\n}\nreturn [{ json: { provider: 'general', required: ['bid', 'price', 'etaDays', 'note', 'milestones'],\n  system: persona + `\nDecide whether to bid on this job. If yes, give a price, delivery time and 1 to 3 milestones\nwhose amounts add up to the price. Return JSON\n{\"bid\": boolean, \"price\": number, \"etaDays\": integer, \"note\": string,\n \"milestones\": [{\"description\": string, \"amount\": number}]}.`,\n  user: `Job: ${r.title} (category ${r.category}, budget ${r.budget_label || 'not stated'})\n<untrusted>\n${r.description}\n</untrusted>` } }];\n"
+      },
+      "id": "91229867-ba4a-4358-8932-92acb005255f",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        120
+      ],
+      "notes": "Two prompts: a new bid (price, ETA, 1-3 milestones) or an answer to a counter-offer.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibLlmJson1",
+        "mode": "once",
+        "options": {}
+      },
+      "id": "546850a1-4f4a-44da-95fa-90d9ea5c8048",
+      "name": "Ask LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        120
+      ],
+      "notes": "Calls the lib llm-json sub-workflow: one model call that must return a JSON object with the required keys, or the run fails.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// The model proposes; this code decides what is allowed.\nconst r = $('Can act?').first().json;\nconst d = $input.first().json.data;\nconst floor = Number(r.price_floor || 0);\nconst round6 = (x) => Math.round(Number(x) * 1e6) / 1e6;\n\nif (r.action === 'negotiate') {\n  const counter = Number(r.buyer_offer);\n  let price = d.accept ? counter : Math.max(round6(d.price), floor);\n  let accept = Boolean(d.accept) && counter >= floor;\n  let message = String(d.message || '').slice(0, 1000);\n  if (counter < floor && price <= floor) {\n    price = floor;\n    message = `I can't go below ${floor} USDC for this job.`;\n  }\n  return [{ json: { kind: 'reply', bidId: r.bid_id, jobId: r.job_id, round: Number(r.last_round) + 1,\n    price, accept, message } }];\n}\n\nif (!d.bid) return [{ json: { kind: 'none', jobId: r.job_id, reason: 'Model chose not to bid' } }];\nconst price = Math.max(round6(d.price), floor);\nlet ms = Array.isArray(d.milestones) ? d.milestones.slice(0, 3) : [];\nif (ms.length === 0) ms = [{ description: 'Whole job', amount: price }];\n// Make milestone amounts add up to the price exactly\nconst sum = ms.reduce((a, m) => a + Number(m.amount || 0), 0) || 1;\nms = ms.map((m) => ({ description: String(m.description || ''), amount: round6(Number(m.amount || 0) * price / sum) }));\nconst drift = round6(price - ms.reduce((a, m) => a + m.amount, 0));\nms[ms.length - 1].amount = round6(ms[ms.length - 1].amount + drift);\nconst eta = Math.min(Math.max(parseInt(d.etaDays, 10) || 2, 1), 30);\nreturn [{ json: { kind: 'bid', jobId: r.job_id, sellerId: r.seller_id, price, etaDays: eta,\n  note: String(d.note || '').slice(0, 1000), milestones: ms } }];\n"
+      },
+      "id": "ec180de9-bf2e-40d3-aad9-f499bbabd7a6",
+      "name": "Enforce rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1540,
+        120
+      ],
+      "notes": "Code decides: never below price_floor, milestones always sum to the price, at most 3, ETA 1-30 days.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose"
+          },
+          "conditions": [
+            {
+              "id": "896d0553-db4b-4c31-9d52-2617ca7bef40",
+              "leftValue": "={{ $json.kind === 'reply' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "789e3bde-73a0-4c63-bcef-3542a595dc08",
+      "name": "Is reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        1760,
+        120
+      ],
+      "notes": "True: save a negotiation message. False: save a new bid.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH msg AS (\n  INSERT INTO negotiation_messages\n    (job_id, bid_id, round, sender, sender_agent_id, body, offered_price)\n  VALUES ($1::uuid, $2::uuid, $3::smallint, 'seller_agent', $4::uuid, $5, $6::numeric)\n  RETURNING id\n)\nUPDATE bids SET price = $6::numeric WHERE id = $2::uuid\nRETURNING (SELECT id FROM msg) AS message_id;\n",
+        "options": {
+          "queryReplacement": "={{ [ $json.jobId, $json.bidId, $json.round, $('Read envelope').first().json.agentId, $json.message, $json.price ] }}"
+        }
+      },
+      "id": "0e5f6548-f31b-4d3c-aaad-ceabe246593e",
+      "name": "Save reply",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1980,
+        40
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Inserts negotiation_messages (sender seller_agent) and updates the bid's price.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO bids (job_id, seller_id, placed_by_agent_id, price, delivery_eta, note,\n                  proposed_milestones, status)\nSELECT $1::uuid, $2::uuid, $3::uuid, $4::numeric, ($5 || ' days')::interval, $6, $7::jsonb,\n       'pending_check'\nWHERE $8 = 'bid'\nON CONFLICT (job_id, seller_id) DO NOTHING\nRETURNING id;\n",
+        "options": {
+          "queryReplacement": "={{ [ $json.jobId, $json.sellerId || null, $('Read envelope').first().json.agentId, $json.price ?? 0, String($json.etaDays ?? 1), $json.note || '', JSON.stringify($json.milestones || []), $json.kind ] }}"
+        }
+      },
+      "id": "abc9c802-1341-4da1-87f1-63a361e76589",
+      "name": "Save bid",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1980,
+        200
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Inserts bids with status pending_check. ON CONFLICT DO NOTHING: one bid per seller per job.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const env = $('Read envelope').first().json;\nconst act = $('Can act?').first().json;\nlet e;\ntry { e = $('Enforce rules').first().json; } catch { e = null; }\nconst row = $input.first().json || {};\nlet message, severity = 'info', result = {};\nif (act.skip) {\n  message = `${act.display_name || 'Seller'} skipped this job: ${act.skip}`;\n} else if (e.kind === 'none') {\n  message = `${act.display_name} chose not to bid`;\n} else if (e.kind === 'reply') {\n  message = e.accept\n    ? `${act.display_name} accepted the counter of ${e.price} USDC`\n    : `${act.display_name} answered with ${e.price} USDC (round ${e.round})`;\n  result = { bidId: e.bidId, messageId: row.message_id ?? null, accept: e.accept, price: e.price };\n} else {\n  message = `${act.display_name} bid ${e.price} USDC, ${e.etaDays} day(s), ${e.milestones.length} milestone(s)`;\n  severity = 'ok';\n  result = { bidId: row.id ?? null, price: e.price };\n}\nreturn [{ json: {\n  runId: env.runId, ownerId: env.ownerId, agentId: env.agentId, jobId: env.jobId,\n  actorLabel: act.display_name ? `${act.display_name} (bidding)` : 'Bidding agent',\n  message, severity, data: result,\n  notify: { runId: env.runId, role: 'bidding', ok: true, jobId: env.jobId,\n            result: { action: act.action, skip: act.skip, ...result }, error: null },\n} }];\n"
+      },
+      "id": "8f085e59-44ee-4187-b1eb-77d6269c5081",
+      "name": "Finish",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2200,
+        120
+      ],
+      "notes": "Builds one item with the feed message for agent_events and the 'notify' body for NestJS. Messages are written for the owner to read.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibLogEvnt1",
+        "mode": "once",
+        "options": {}
+      },
+      "id": "d96df942-1b90-4a80-aef0-0b439ca8d75a",
+      "name": "Log event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        2420,
+        120
+      ],
+      "notes": "Calls lib log-event: inserts the row into agent_events (the live activity feed).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibNotify01",
+        "mode": "once",
+        "options": {}
+      },
+      "id": "fd85d37d-a98b-4ed9-85b0-19cbeb6b75f5",
+      "name": "Notify Nest",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        2640,
+        120
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Calls lib notify-nest: POST /agents/notify so NestJS moves the job to its next step. Errors are ignored, so the agent still works while Nest is not built.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Finish": {
+      "main": [
+        [
+          {
+            "node": "Log event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log event": {
+      "main": [
+        [
+          {
+            "node": "Notify Nest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read envelope": {
+      "main": [
+        [
+          {
+            "node": "Load job and seller",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load job and seller": {
+      "main": [
+        [
+          {
+            "node": "Can act?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Can act?": {
+      "main": [
+        [
+          {
+            "node": "Skip?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip?": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "Ask LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask LLM": {
+      "main": [
+        [
+          {
+            "node": "Enforce rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enforce rules": {
+      "main": [
+        [
+          {
+            "node": "Is reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is reply?": {
+      "main": [
+        [
+          {
+            "node": "Save reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save bid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save reply": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save bid": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

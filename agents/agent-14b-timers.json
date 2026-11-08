@@ -1,0 +1,339 @@
+{
+  "name": "AGORA · 14b timers",
+  "id": "AgoraTimers00001",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "d4487905-5278-415f-b4f2-16e42b32d9cf",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "Schedule trigger for both timers.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "mode": "manual",
+        "assignments": {
+          "assignments": [
+            {
+              "id": "23dd5107-3ba6-49c9-8c55-1d84d5311fc9",
+              "name": "cfg",
+              "value": "={{ { windowMinutes: Number($env.AGORA_BID_WINDOW_MINUTES || 10) } }}",
+              "type": "object"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "24e71eb1-8f1e-432a-b88b-a67c29e22ea0",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        220,
+        0
+      ],
+      "notes": "Reads the bid window length.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT m.job_id, m.idx, m.amount, j.buyer_id\nFROM milestones m\nJOIN jobs j ON j.id = m.job_id\nWHERE m.status = 'in_review' AND m.review_deadline < now()\n  AND NOT EXISTS (SELECT 1 FROM disputes d\n                   WHERE d.milestone_id = m.id AND d.status <> 'resolved')\n  AND NOT EXISTS (SELECT 1 FROM chain_txs c\n                   WHERE c.job_id = m.job_id AND c.method = 'release_expired'\n                     AND c.args->>'milestone_idx' = m.idx::text AND c.status <> 'rejected');\n",
+        "options": {}
+      },
+      "id": "79beffdf-be08-4cf9-b748-56047a44a9cf",
+      "name": "Expired reviews",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        -120
+      ],
+      "alwaysOutputData": false,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Milestones in review past their deadline, with no open dispute and no release sent yet.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(({ json: m }) => ({ json: {\n  signer: 'platform', method: 'release_expired',\n  args: { job_id: m.job_id, milestone_idx: m.idx },\n  ownerId: m.buyer_id, jobId: m.job_id, amount: Number(m.amount),\n} }));\n"
+      },
+      "id": "7ade0c82-b479-4786-979a-ea5e0233aca1",
+      "name": "Release args",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        -120
+      ],
+      "notes": "Builds release_expired calls (platform key). The contract re-checks the deadline.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibChain001",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "dc23b4d1-7570-431f-bb0b-6b39bb2e842a",
+      "name": "Chain call",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        880,
+        -120
+      ],
+      "notes": "Calls lib chain-call, the only door to NEAR. Mock mode checks the mandate in the database; testnet mode signs with the right limited key.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(({ json: r }) => ({ json: {\n  runId: 'timer-' + Date.now(), ownerId: r.ownerId, agentId: null, jobId: r.jobId,\n  actorLabel: 'Auto-release',\n  message: r.ok\n    ? `Released ${r.amount} USDC: no dispute before the review window ended (tx ${r.txHash})`\n    : `Auto-release refused: ${r.error}`,\n  severity: r.ok ? 'ok' : 'block',\n  data: { txHash: r.txHash, ok: r.ok },\n  notify: { runId: 'timer-' + Date.now(), role: 'auto_release', ok: r.ok, jobId: r.jobId,\n            result: { txHash: r.txHash }, error: r.error || null },\n} }));\n"
+      },
+      "id": "b64d589b-e764-4329-845a-772db94ed279",
+      "name": "Release events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1100,
+        -120
+      ],
+      "notes": "Feed message per release.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibLogEvnt1",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "5271c6a7-ccc5-4586-aa5b-8e1f45a57dde",
+      "name": "Log release",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1320,
+        -120
+      ],
+      "notes": "Writes each release to agent_events.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibNotify01",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "f7b9bc21-c376-478b-9a47-b9d5c69439c9",
+      "name": "Notify release",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        -120
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Tells NestJS about each release.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "-- open jobs whose bidding window ended in the last minute and that have live bids\nSELECT j.id AS job_id, j.buyer_id\nFROM jobs j\nWHERE j.status = 'open' AND j.accepted_bid_id IS NULL\n  AND j.posted_at <= now() - make_interval(mins => $1::int)\n  AND j.posted_at >  now() - make_interval(mins => $1::int) - interval '1 minute'\n  AND EXISTS (SELECT 1 FROM bids b WHERE b.job_id = j.id AND b.status IN ('live', 'shortlisted'));\n",
+        "options": {
+          "queryReplacement": "={{ [ $json.cfg.windowMinutes ] }}"
+        }
+      },
+      "id": "4c6c23b3-6a55-4d0a-8572-7b7c596c195d",
+      "name": "Bid windows ended",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        440,
+        120
+      ],
+      "alwaysOutputData": false,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Open jobs whose bid window ended in the last minute and that have live bids.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nest re-runs the buyer agent with the private max price\nreturn $input.all().map(({ json: j }) => ({ json: {\n  notify: { runId: 'window-' + Date.now(), role: 'buyer_window', ok: true, jobId: j.job_id,\n            result: { ownerId: j.buyer_id }, error: null },\n} }));\n"
+      },
+      "id": "eb114a2b-b1bc-4d6f-ae13-84d03f9f9524",
+      "name": "Window notify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        120
+      ],
+      "notes": "Asks NestJS to re-run the buyer agent (Nest holds the private max price).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibNotify01",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "fde16a8e-63b3-4843-98bb-95e38b8b8f74",
+      "name": "Notify window",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        880,
+        120
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Sends those notifications.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Expired reviews",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Bid windows ended",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expired reviews": {
+      "main": [
+        [
+          {
+            "node": "Release args",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release args": {
+      "main": [
+        [
+          {
+            "node": "Chain call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chain call": {
+      "main": [
+        [
+          {
+            "node": "Release events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release events": {
+      "main": [
+        [
+          {
+            "node": "Log release",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log release": {
+      "main": [
+        [
+          {
+            "node": "Notify release",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bid windows ended": {
+      "main": [
+        [
+          {
+            "node": "Window notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window notify": {
+      "main": [
+        [
+          {
+            "node": "Notify window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

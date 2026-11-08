@@ -1,3 +1,7 @@
+CREATE EXTENSION IF NOT EXISTS vector;
+
+CREATE SEQUENCE IF NOT EXISTS job_ref_seq;
+
 -- CreateSchema
 CREATE SCHEMA IF NOT EXISTS "private";
 

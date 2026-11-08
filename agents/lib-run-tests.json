@@ -1,0 +1,74 @@
+{
+  "name": "AGORA · lib run-tests",
+  "id": "AgoraLibRunTest1",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "b88c5692-989e-49b6-a040-449a5b30deb3",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "Input: repoUrl, commit, baseCommit, testCommand, buildCommand, testFiles.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AGORA_RUNNER_URL }}/run",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 600000
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ repoUrl: $json.repoUrl, commit: $json.commit, baseCommit: $json.baseCommit, testCommand: $json.testCommand, buildCommand: $json.buildCommand, testFiles: $json.testFiles || [] }) }}"
+      },
+      "id": "adf41964-599e-46d7-bbe0-4143b5d6d035",
+      "name": "POST runner /run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        220,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "agoraNestOut0001",
+          "name": "AGORA Nest out"
+        }
+      },
+      "notes": "Calls the test runner on your laptop (agents-kit/04-runner). Waits up to 10 minutes. Returns exitCode, installExit, changedFiles, diffText, logSha256, logTail.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "POST runner /run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

@@ -1,0 +1,148 @@
+{
+  "name": "AGORA · eval P1 mandate",
+  "id": "AgoraEvalP100001",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "77678aa5-2e5f-4bc6-8318-01bc415cc646",
+      "name": "Run P1",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "Manual trigger: click Execute workflow.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Each case is one call that the contract (or mock) must refuse.\n// Extend to 50 cases: vary amounts, methods, signers and paused state.\nconst owner = '00000000-0000-4000-a000-000000000001';\nconst job = 'c0000000-0000-4000-a000-000000000001';\nconst runId = 'p1-' + new Date().toISOString();\nconst cases = [\n  { caseId: 'guardian-calls-fund', signer: 'guardian-buyer', method: 'fund_job', amount: 10 },\n  { caseId: 'reviewer-calls-fund', signer: 'reviewer-1', method: 'fund_job', amount: 10 },\n  { caseId: 'tx-calls-withdraw', signer: 'tx-buyer', method: 'withdraw', amount: 10 },\n  { caseId: 'tx-calls-pause', signer: 'tx-buyer', method: 'pause', amount: null },\n  { caseId: 'reviewer-calls-accept', signer: 'reviewer-2', method: 'accept_offer', amount: 10 },\n];\nreturn cases.map((c) => ({ json: { ...c, runId, ownerId: owner, jobId: job,\n  args: { job_id: job, milestone_idx: 0 } } }));\n"
+      },
+      "id": "97d1eac8-1e78-455d-8267-cf7151fa6e4e",
+      "name": "P1 cases",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ],
+      "notes": "Seeded calls that must all be refused (wrong key, wrong method). Extend to the 50 cases in P1.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibChain001",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "5a0bfee2-0f61-4994-a976-45ad36cc55b5",
+      "name": "Chain call",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        440,
+        0
+      ],
+      "notes": "Calls lib chain-call, the only door to NEAR. Mock mode checks the mandate in the database; testnet mode signs with the right limited key.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO eval_results (run_id, pass_mark, case_id, expected, actual, passed, tx_hash, details)\nVALUES ($1, 'P1', $2, 'rejected', $3, $4::boolean, $5, $6::jsonb)\nON CONFLICT (run_id, pass_mark, case_id) DO NOTHING\nRETURNING id;\n",
+        "options": {
+          "queryReplacement": "={{ [ $('P1 cases').all()[$itemIndex].json.runId, $('P1 cases').all()[$itemIndex].json.caseId, $json.ok ? 'accepted' : 'rejected', !$json.ok, $json.txHash, JSON.stringify({ rejectedBy: $json.rejectedBy, error: $json.error }) ] }}"
+        }
+      },
+      "id": "4dd4ac74-8cd7-4a53-8ad0-ce82d98edd2c",
+      "name": "Save result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        660,
+        0
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "One eval_results row per case: expected rejected, actual, passed.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const rows = $('Chain call').all().map((i) => i.json);\nconst passed = rows.filter((r) => !r.ok).length;\nreturn [{ json: { passMark: 'P1', passed, total: rows.length,\n  target: 'all refused, 0 USDC moved', ok: passed === rows.length } }];\n"
+      },
+      "id": "7b1872d3-d0d6-495a-9a38-f92919c8ca8d",
+      "name": "Summary",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        0
+      ],
+      "notes": "Prints passed / total against the target.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Run P1": {
+      "main": [
+        [
+          {
+            "node": "P1 cases",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "P1 cases": {
+      "main": [
+        [
+          {
+            "node": "Chain call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chain call": {
+      "main": [
+        [
+          {
+            "node": "Save result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save result": {
+      "main": [
+        [
+          {
+            "node": "Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}

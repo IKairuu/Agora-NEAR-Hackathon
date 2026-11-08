@@ -1,0 +1,277 @@
+{
+  "name": "AGORA · 14 guardian",
+  "id": "AgoraGuardian001",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "3c27ed13-9912-4576-8e75-64a1861887c7",
+      "name": "Every minute",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "notes": "Schedule trigger. Runs once a minute while the workflow is active.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT m.owner_id, m.daily_cap, coalesce(b.spent_today, 0) AS spent_today, g.id AS guardian_id,\n  count(c.id) FILTER (WHERE c.status = 'rejected') AS rejected_5m,\n  coalesce(sum(c.amount) FILTER (WHERE c.method = 'fund_job' AND c.status = 'success'), 0) AS funded_5m,\n  count(c.id) FILTER (WHERE c.method = 'fund_job' AND c.status = 'success'\n                      AND coalesce(r.settled_jobs, 0) < 3) AS new_seller_funds_5m\nFROM mandates m\nJOIN agents g ON g.owner_id = m.owner_id AND g.role = 'guardian' AND g.status = 'active'\nJOIN profiles p ON p.id = m.owner_id\nLEFT JOIN balances b ON b.account_id = p.near_account_id\nLEFT JOIN chain_txs c ON c.owner_id = m.owner_id\n      AND c.created_at > now() - interval '5 minutes' AND c.method <> 'pause'\nLEFT JOIN jobs j ON j.id = c.job_id\nLEFT JOIN sellers s ON s.id = j.seller_id\nLEFT JOIN reputation r ON r.account_id = s.near_account_id\nWHERE m.paused = false\n  AND NOT EXISTS (SELECT 1 FROM guardian_alerts ga\n                   WHERE ga.owner_id = m.owner_id AND ga.resolved_at IS NULL\n                     AND ga.created_at > now() - interval '30 minutes')\nGROUP BY m.owner_id, m.daily_cap, b.spent_today, g.id;\n",
+        "options": {}
+      },
+      "id": "f6ec3460-4347-444b-9738-512ee6bf96d4",
+      "name": "Activity last 5 min",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        220,
+        0
+      ],
+      "alwaysOutputData": false,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Per owner with an active guardian: refused calls, USDC funded, funds to new sellers in the last 5 minutes. Skips owners already paused or alerted in the last 30 minutes.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Paper III.d: pause on probing, spending near the cap, or a burst to new sellers.\nconst out = [];\nfor (const { json: a } of $input.all()) {\n  const reasons = [];\n  if (Number(a.rejected_5m) >= 3) reasons.push(`${a.rejected_5m} refused calls in 5 minutes`);\n  if (Number(a.funded_5m) > 0 && Number(a.spent_today) >= 0.9 * Number(a.daily_cap)) {\n    reasons.push(`spent ${a.spent_today} of the ${a.daily_cap} USDC daily cap`);\n  }\n  if (Number(a.new_seller_funds_5m) >= 3) reasons.push(`${a.new_seller_funds_5m} jobs funded to new sellers at once`);\n  if (reasons.length) out.push({ json: { ...a, reasons } });\n}\nreturn out; // empty = nothing to do, the workflow stops here\n"
+      },
+      "id": "5e89073e-a08f-4da7-b18c-27afe384502f",
+      "name": "Rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        0
+      ],
+      "notes": "Paper III.d: 3+ refused calls, spending at 90% of the daily cap, or 3+ jobs to new sellers. Returns nothing when all is fine (the run stops).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "// Demo: one guardian credential (the buyer's). For more owners, add signers per owner.\nreturn $input.all().map(({ json: a }) => ({ json: {\n  signer: 'guardian-buyer', method: 'pause', args: { owner: a.owner_id },\n  ownerId: a.owner_id, jobId: null, amount: null,\n} }));\n"
+      },
+      "id": "bc894478-9a15-4917-9d9c-efeb70ccf585",
+      "name": "Pause args",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ],
+      "notes": "Builds a pause call for the guardian's pause-only key.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibChain001",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "8bfc2f35-0a42-49f4-acda-6cebc81ddca0",
+      "name": "Chain call",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        880,
+        0
+      ],
+      "notes": "Calls lib chain-call, the only door to NEAR. Mock mode checks the mandate in the database; testnet mode signs with the right limited key.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO guardian_alerts (owner_id, trigger, details, pause_tx)\nVALUES ($1::uuid, $2, $3::jsonb, $4)\nRETURNING id;\n",
+        "options": {
+          "queryReplacement": "={{ [ $json.ownerId, $('Rules').all()[$itemIndex].json.reasons[0], JSON.stringify({ reasons: $('Rules').all()[$itemIndex].json.reasons, ok: $json.ok, error: $json.error }), $json.txHash ] }}"
+        }
+      },
+      "id": "2ce16596-f106-41ff-ba52-44a335d6241a",
+      "name": "Save alert",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1100,
+        0
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "id": "agoraSupabase001",
+          "name": "AGORA Supabase"
+        }
+      },
+      "notes": "Inserts guardian_alerts with the reasons and the pause transaction.",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "jsCode": "return $('Rules').all().map(({ json: a }, k) => {\n  const tx = $('Chain call').all()[k]?.json || {};\n  const message = tx.ok\n    ? `Paused your agents: ${a.reasons.join('; ')}. Only you can unpause.`\n    : `Tried to pause your agents (${a.reasons.join('; ')}) but the call failed: ${tx.error}`;\n  return { json: {\n    runId: 'guardian-' + Date.now(), ownerId: a.owner_id, agentId: a.guardian_id, jobId: null,\n    actorLabel: 'Guardian', message, severity: 'block',\n    data: { reasons: a.reasons, pauseTx: tx.txHash || null },\n    notify: { runId: 'guardian-' + Date.now(), role: 'guardian', ok: Boolean(tx.ok), jobId: null,\n              result: { ownerId: a.owner_id, reasons: a.reasons, pauseTx: tx.txHash || null }, error: tx.error || null },\n  } };\n});\n"
+      },
+      "id": "fe7a02e6-c021-4459-850b-17e18435d343",
+      "name": "Finish",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1320,
+        0
+      ],
+      "notes": "Feed message: 'Paused your agents: ... Only you can unpause.'",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibLogEvnt1",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "b358ecb5-44cc-4ea2-98e2-5d07b5b6c9e0",
+      "name": "Log event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1540,
+        0
+      ],
+      "notes": "Calls lib log-event: inserts the row into agent_events (the live activity feed).",
+      "notesInFlow": true
+    },
+    {
+      "parameters": {
+        "source": "database",
+        "workflowId": "AgoraLibNotify01",
+        "mode": "each",
+        "options": {}
+      },
+      "id": "0d869fde-62b3-4d2d-9836-0ae229c7e63e",
+      "name": "Notify Nest",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1,
+      "position": [
+        1760,
+        0
+      ],
+      "onError": "continueRegularOutput",
+      "notes": "Calls lib notify-nest: POST /agents/notify so NestJS moves the job to its next step. Errors are ignored, so the agent still works while Nest is not built.",
+      "notesInFlow": true
+    }
+  ],
+  "connections": {
+    "Every minute": {
+      "main": [
+        [
+          {
+            "node": "Activity last 5 min",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Activity last 5 min": {
+      "main": [
+        [
+          {
+            "node": "Rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Rules": {
+      "main": [
+        [
+          {
+            "node": "Pause args",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pause args": {
+      "main": [
+        [
+          {
+            "node": "Chain call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chain call": {
+      "main": [
+        [
+          {
+            "node": "Save alert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save alert": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish": {
+      "main": [
+        [
+          {
+            "node": "Log event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log event": {
+      "main": [
+        [
+          {
+            "node": "Notify Nest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  },
+  "tags": []
+}
