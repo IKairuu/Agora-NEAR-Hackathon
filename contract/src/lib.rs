@@ -71,6 +71,19 @@ pub struct Job {
     pub price: U128,
     pub holdout_hash: Option<String>,
     pub attempts_left: u8,
+    pub attempt: u8,
+    pub commit_hash: Option<String>,
+    pub reviewers: Vec<AccountId>,
+    pub votes: Vec<Vote>,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
+pub struct Vote {
+    pub reviewer: AccountId,
+    pub approve: bool,
+    pub log_hash: String,
+    pub attestation_hash: String,
 }
 
 #[near(serializers = [json, borsh])]
@@ -158,6 +171,37 @@ pub fn owner_of(account_id: &AccountId) -> AccountId {
 }
 
 impl Contract {
+    fn credit(&mut self, account_id: &AccountId, amount: u128) {
+        let mut balance = self.get_balance(account_id.clone());
+        balance.free = U128(balance.free.0 + amount);
+        self.balances.insert(account_id.clone(), balance);
+    }
+
+    fn release(&mut self, job: &mut Job) {
+        let price = job.price.0;
+        let fee = price * self.config.fee_bps as u128 / 10_000;
+        let seller = job.seller.clone().unwrap();
+        let mut buyer_balance = self.get_balance(job.buyer.clone());
+        buyer_balance.escrowed = U128(buyer_balance.escrowed.0 - price);
+        self.balances.insert(job.buyer.clone(), buyer_balance);
+        self.credit(&seller, price - fee);
+        let dao = self.config.dao_account.clone();
+        self.credit(&dao, fee);
+        job.stage = JobStage::Released;
+        let mut rep = self.get_reputation(seller.clone());
+        rep.settled += 1;
+        self.reputations.insert(seller.clone(), rep.clone());
+        emit(
+            "milestone_released",
+            json!({ "job_id": job.job_id, "seller": seller, "amount": U128(price - fee), "fee": U128(fee) }),
+        );
+        let rating_avg = if rep.rating_count == 0 { 0.0 } else { rep.rating_sum as f64 / rep.rating_count as f64 };
+        emit(
+            "reputation_updated",
+            json!({ "account_id": seller, "settled": rep.settled, "disputes": rep.disputes, "rating_avg": rating_avg }),
+        );
+    }
+
     fn require_config_owner(&self) {
         require!(env::predecessor_account_id() == self.config.owner_id, "Only the config owner");
     }
@@ -336,6 +380,10 @@ impl Contract {
             price: U128(0),
             holdout_hash: None,
             attempts_left: 0,
+            attempt: 0,
+            commit_hash: None,
+            reviewers: vec![],
+            votes: vec![],
         };
         self.jobs.insert(job_id, job);
         emit(
@@ -517,6 +565,91 @@ impl Contract {
         );
     }
 
+    pub fn get_votes(&self, job_id: U64) -> Vec<Vote> {
+        self.jobs.get(&job_id.0).map(|j| j.votes.clone()).unwrap_or_default()
+    }
+
+    pub fn submit_delivery(&mut self, job_id: U64, commit_hash: String) {
+        let caller = owner_of(&env::predecessor_account_id());
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.seller.as_ref() == Some(&caller), "Only the hired seller can deliver");
+        require!(job.stage == JobStage::Funded, "Job is not waiting for a delivery");
+        require!(job.attempts_left > 0, "No attempts left");
+        require!(env::block_timestamp() <= job.deadline.0, "Deadline has passed");
+        require!(!commit_hash.is_empty(), "Commit hash is required");
+        require!(self.config.reviewers.len() == 3, "Reviewers are not set");
+        job.attempts_left -= 1;
+        job.attempt += 1;
+        job.commit_hash = Some(commit_hash.clone());
+        job.reviewers = self.config.reviewers.clone();
+        job.votes = vec![];
+        job.stage = JobStage::Delivered;
+        let attempt = job.attempt;
+        let reviewers = job.reviewers.clone();
+        self.jobs.insert(job_id.0, job);
+        emit(
+            "delivery_submitted",
+            json!({ "job_id": job_id, "attempt": attempt, "commit_hash": commit_hash, "reviewers": reviewers }),
+        );
+    }
+
+    pub fn vote(&mut self, job_id: U64, approve: bool, log_hash: String, attestation_hash: String) {
+        let reviewer = env::predecessor_account_id();
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.stage == JobStage::Delivered, "Job is not under review");
+        require!(job.reviewers.contains(&reviewer), "Not an assigned reviewer");
+        require!(!job.votes.iter().any(|v| v.reviewer == reviewer), "Reviewer already voted");
+        job.votes.push(Vote {
+            reviewer: reviewer.clone(),
+            approve,
+            log_hash: log_hash.clone(),
+            attestation_hash: attestation_hash.clone(),
+        });
+        emit(
+            "vote_cast",
+            json!({
+                "job_id": job_id,
+                "reviewer": reviewer,
+                "approve": approve,
+                "log_hash": log_hash,
+                "attestation_hash": attestation_hash,
+            }),
+        );
+        let approvals = job.votes.iter().filter(|v| v.approve).count();
+        let rejections = job.votes.len() - approvals;
+        if approvals >= 2 {
+            self.release(&mut job);
+        } else if rejections >= 2 {
+            job.stage = JobStage::Funded;
+            emit(
+                "attempt_failed",
+                json!({ "job_id": job_id, "attempt": job.attempt, "attempts_left": job.attempts_left }),
+            );
+        }
+        self.jobs.insert(job_id.0, job);
+    }
+
+    pub fn refund_expired(&mut self, job_id: U64) {
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(env::block_timestamp() > job.deadline.0, "Deadline has not passed");
+        require!(
+            job.stage == JobStage::Funded || job.stage == JobStage::Delivered,
+            "Nothing to refund"
+        );
+        let price = job.price.0;
+        let buyer = job.buyer.clone();
+        let mut balance = self.get_balance(buyer.clone());
+        balance.escrowed = U128(balance.escrowed.0 - price);
+        balance.free = U128(balance.free.0 + price);
+        self.balances.insert(buyer.clone(), balance);
+        job.stage = JobStage::Refunded;
+        self.jobs.insert(job_id.0, job);
+        emit(
+            "milestone_refunded",
+            json!({ "job_id": job_id, "buyer": buyer, "amount": U128(price), "reason": "expired" }),
+        );
+    }
+
     pub fn get_balance(&self, account_id: AccountId) -> Balance {
         self.balances.get(&account_id).cloned().unwrap_or_default()
     }
@@ -657,6 +790,129 @@ mod tests {
         );
         deposit(&mut contract, "alice.testnet", 200_000_000);
         contract
+    }
+
+    fn delivered_job(contract: &mut Contract) -> U64 {
+        call_from("owner.testnet", 1);
+        contract.set_reviewers(vec![acc("r1.testnet"), acc("r2.testnet"), acc("r3.testnet")]);
+        let job_id = hired_job(contract, 32_000_000, "veteran.testnet", 0);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+        call_at("agents.veteran.testnet", 0, 0);
+        contract.submit_delivery(job_id, "commit-1".to_string());
+        job_id
+    }
+
+    fn vote_as(contract: &mut Contract, job_id: U64, reviewer: &str, approve: bool) {
+        call_at(reviewer, 0, 0);
+        contract.vote(job_id, approve, "log".to_string(), "att".to_string());
+    }
+
+    #[test]
+    fn two_approvals_release_with_fee() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        vote_as(&mut contract, job_id, "r1.testnet", true);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Delivered);
+        vote_as(&mut contract, job_id, "r2.testnet", true);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Released);
+        assert_eq!(contract.get_balance(acc("veteran.testnet")).free.0, 31_360_000);
+        assert_eq!(contract.get_balance(acc("dao.testnet")).free.0, 640_000);
+        let buyer = contract.get_balance(acc("alice.testnet"));
+        assert_eq!(buyer.escrowed.0, 0);
+        assert_eq!(buyer.free.0, 168_000_000);
+        assert_eq!(contract.get_reputation(acc("veteran.testnet")).settled, 6);
+    }
+
+    #[test]
+    fn two_rejections_fail_the_attempt_and_allow_resubmit() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        vote_as(&mut contract, job_id, "r1.testnet", false);
+        vote_as(&mut contract, job_id, "r2.testnet", false);
+        let job = contract.get_job(job_id).unwrap();
+        assert_eq!(job.stage, JobStage::Funded);
+        assert_eq!(job.attempts_left, 1);
+        call_at("veteran.testnet", 0, 0);
+        contract.submit_delivery(job_id, "commit-2".to_string());
+        vote_as(&mut contract, job_id, "r1.testnet", true);
+        vote_as(&mut contract, job_id, "r3.testnet", true);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Released);
+    }
+
+    #[test]
+    #[should_panic(expected = "No attempts left")]
+    fn attempts_run_out() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        for _ in 0..2 {
+            vote_as(&mut contract, job_id, "r1.testnet", false);
+            vote_as(&mut contract, job_id, "r2.testnet", false);
+            call_at("veteran.testnet", 0, 0);
+            contract.submit_delivery(job_id, "again".to_string());
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Not an assigned reviewer")]
+    fn unassigned_vote_fails() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        vote_as(&mut contract, job_id, "mallory.testnet", true);
+    }
+
+    #[test]
+    #[should_panic(expected = "Reviewer already voted")]
+    fn reviewer_cannot_vote_twice() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        vote_as(&mut contract, job_id, "r1.testnet", true);
+        vote_as(&mut contract, job_id, "r1.testnet", true);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the hired seller can deliver")]
+    fn other_seller_cannot_deliver() {
+        let mut contract = funded_setup();
+        call_from("owner.testnet", 1);
+        contract.set_reviewers(vec![acc("r1.testnet"), acc("r2.testnet"), acc("r3.testnet")]);
+        let job_id = hired_job(&mut contract, 32_000_000, "veteran.testnet", 0);
+        call_at("agents.alice.testnet", 0, 0);
+        contract.fund_job(job_id);
+        call_at("seller.testnet", 0, 0);
+        contract.submit_delivery(job_id, "commit".to_string());
+    }
+
+    #[test]
+    fn refund_after_deadline() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        call_at("anyone.testnet", 0, FAR + 1);
+        contract.refund_expired(job_id);
+        let buyer = contract.get_balance(acc("alice.testnet"));
+        assert_eq!(buyer.free.0, 200_000_000);
+        assert_eq!(buyer.escrowed.0, 0);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Refunded);
+    }
+
+    #[test]
+    #[should_panic(expected = "Deadline has not passed")]
+    fn refund_before_deadline_fails() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        call_at("anyone.testnet", 0, 5);
+        contract.refund_expired(job_id);
+    }
+
+    #[test]
+    #[should_panic(expected = "Nothing to refund")]
+    fn released_job_cannot_be_refunded() {
+        let mut contract = funded_setup();
+        let job_id = delivered_job(&mut contract);
+        vote_as(&mut contract, job_id, "r1.testnet", true);
+        vote_as(&mut contract, job_id, "r2.testnet", true);
+        call_at("anyone.testnet", 0, FAR + 1);
+        contract.refund_expired(job_id);
     }
 
     #[test]

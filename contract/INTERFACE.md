@@ -2,7 +2,7 @@
 
 Owner: Member A. This file is the contract between the Rust contract, A's `chain/` module, the indexer, and Members B, C and D. Method names, arguments and event names change only with notice to the whole team.
 
-Status: Phase 0 draft, 2026-11-08. Implemented so far: setup and config, balances, deposit, `withdraw`, mandate, `pause`, `unpause`, `register_seller`, `post_job`, `place_bid`, `set_bid_flags`, `accept_offer`, `fund_job` with the nine checks, and their views.
+Status: Phase 0 draft, 2026-11-08. Implemented so far: setup and config, balances, deposit, `withdraw`, mandate, `pause`, `unpause`, `register_seller`, `post_job`, `place_bid`, `set_bid_flags`, `accept_offer`, `fund_job` with the nine checks, `submit_delivery`, `vote` with 2-of-3 release and the 2% fee, `refund_expired`, and their views. Phase 1 complete.
 
 ## 1. Basics
 
@@ -123,7 +123,8 @@ Every state change logs one line: `EVENT_JSON:{"standard":"agora","version":"1.0
 | `job_funded` | `job_id, buyer, amount, used_today` |
 | `delivery_submitted` | `job_id, attempt, commit_hash, reviewers` |
 | `vote_cast` | `job_id, reviewer, approve, log_hash, attestation_hash` |
-| `milestone_released` | `job_id, seller, amount, fee` |
+| | `attempt_failed` | `job_id, attempt, attempts_left` (2 of 3 reviewers rejected; the job goes back to `Funded` so the seller can deliver again if attempts are left) |
+| `milestone_released` | `job_id, seller, amount, fee` (`amount` is what the seller gets, after the fee) |
 | `milestone_refunded` | `job_id, buyer, amount, reason` |
 | `dispute_opened` | `job_id, opener, reason` |
 | `dispute_resolved` | `job_id, outcome, seller_amount, buyer_amount` |
