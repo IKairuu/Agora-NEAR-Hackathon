@@ -1,0 +1,13 @@
+/*
+ * Responsive fixes layered on top of the prototype stylesheet (agora.css stays verbatim).
+ * Each rule only fixes clipping or overflow; none changes the design at normal sizes.
+ */
+
+/* visually-hidden table labels are absolutely positioned; keep them inside their scroll box */
+.tablewrap { position: relative; }
+
+/* 320px phones: the signed-in top bar was 4px too wide, clipping the account avatar */
+@media (max-width: 22.5rem) {
+  .top { gap: var(--space-2xs); padding-inline: var(--space-sm); }
+  .top-right { gap: var(--space-3xs); }
+}
