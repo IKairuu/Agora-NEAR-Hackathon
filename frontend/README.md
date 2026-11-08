@@ -1,6 +1,6 @@
 # AGORA frontend
 
-React 19 + TypeScript + Vite + React Router implementation of `AGORA_Prototype_v4.html`. Plain CSS, no UI library.
+React 19 + TypeScript + Vite + React Router implementation of `AGORA_Prototype_v6.2.html`. Plain CSS, no UI library.
 
 ```bash
 npm install
@@ -13,7 +13,7 @@ npm run build    # typecheck + production build to dist/
 - `src/styles/agora.css` is the prototype stylesheet, copied verbatim. Treat it as the visual source of truth.
 - `src/styles/responsive.css` holds the small fixes that stop clipping at 320px and in table headers.
 - Markup keeps the prototype's class names, so every screen renders with the same CSS.
-- Prototype `#hash` routes are real paths: `/ask`, `/dash`, `/jobs`, `/explore`, `/svc`, `/saved`, `/post`, `/job`, `/chat`, `/room`, `/agents`, `/mandate`, `/wallet`, `/profile`, `/sell`, `/seller`, `/dispute`.
+- Prototype `#hash` routes are real paths: `/ask`, `/dash`, `/jobs`, `/explore`, `/openjobs`, `/orders`, `/svc`, `/saved`, `/post`, `/job`, `/chat`, `/room`, `/agents`, `/mandate`, `/wallet`, `/profile`, `/sell`, `/seller`, `/dispute`.
 
 ## Layout
 

@@ -89,6 +89,30 @@ export const OTHER_JOBS: OtherJob[] = [
   { id: 'J-1040', title: 'Write tests for the refund callback', cat: 'Tests, Rust', budget: '15–25', status: ['info', '5 bids'], who: '', note: 'Your agent is waiting for one more offer before it shortlists.' },
 ];
 
+/** Seller orders. Stages follow the paper's job flow: offer, accept and fund, deliver, 2 of 3 reviewers, release. */
+export const O_ST: [string, string][] = [['info', 'Request'], ['', 'Offer sent'], ['acc', 'In escrow'], ['hold', 'Reviewers voting'], ['ok', 'Paid']];
+export interface Order { id: string; buyer: string; title: string; cat: string; price: string; st: number; note: string }
+export const ORDERS: Order[] = [
+  { id: 'R-2051', buyer: 'Kanso Pay', title: 'Fix wallet selector modal on Safari 18', cat: 'Front-end', price: '30–60', st: 0, note: 'Direct request from your service page. Answer with an offer or decline.' },
+  { id: 'J-1044', buyer: 'Tidewater', title: 'Migrate near-api-js v4 calls to v5', cat: 'TypeScript', price: '52.00', st: 1, note: 'Your offer: 52.00 USDC in 2 days. The buyer accepts to lock the tests.' },
+  { id: 'J-1039', buyer: 'Ostrich DAO', title: 'Add pagination to get_jobs view method', cat: 'Smart contracts', price: '31.00', st: 2, note: 'Tests locked, escrow funded. Due tomorrow.' },
+  { id: 'J-1036', buyer: 'Pollen Grants', title: 'Script to export NEP-141 holders to CSV', cat: 'Scripts', price: '14.00', st: 3, note: 'Delivered. 1 of 3 reviewers approved so far.' },
+  { id: 'J-1031', buyer: 'meridian.testnet', title: 'Write missing tests for refund callback', cat: 'Tests', price: '18.00', st: 4, note: 'Released 2 days ago after 2 of 3 approvals.' },
+  { id: 'J-1027', buyer: 'Kanso Pay', title: 'Fix rounding in fee preview component', cat: 'Front-end', price: '26.00', st: 4, note: 'Released last week. Buyer rated 5 of 5.' },
+];
+
+/** Inbox threads other than the demo job, keyed like the prototype. */
+export type ThreadFrom = 'agent' | 'them' | 'me' | 'sys';
+export const T_MSGS: Record<string, [ThreadFrom, string][]> = {
+  t1041: [['them', 'I can reproduce it at 390 px. The 768 px case already looks fine.'], ['me', 'Good. The Playwright test covers all three sizes, so check 1280 too.'], ['them', 'Will do. Delivery tomorrow morning, your time.']],
+  t1040: [['agent', '5 bids so far. I am waiting for one more offer before I shortlist.'], ['agent', 'The lowest bid, 2.00 USDC, is far below the median. It is held for price review.']],
+  'Kanso Pay': [['them', 'Hi. Our wallet modal breaks on Safari 18. Can you take it this week?'], ['agent', 'Your bidding agent: this matches your React skill. Suggested offer 42.00 USDC in 2 days.']],
+  Tidewater: [['me', 'Offer sent: 52.00 USDC in 2 days. I will keep the public API the same.'], ['them', 'Thanks. Reviewing offers tonight.']],
+  'Ostrich DAO': [['them', 'Tests are locked. Escrow is funded, you can start.'], ['me', 'Starting now. Should page size be fixed at 20?'], ['them', 'Yes, 20. The tests check it.']],
+  'Pollen Grants': [['me', 'Delivered commit a41c9e2. All locked tests pass on my side.'], ['them', 'Great, reviewers are running it now.']],
+};
+export const T_TIME: Record<string, string> = { t1041: '10:42', t1040: '09:15', 'Kanso Pay': '11:05', Tidewater: 'Yesterday', 'Ostrich DAO': '08:30', 'Pollen Grants': 'Mon' };
+
 export const ATTACK: [string, string, string][] = [
   ['fund_job 400.00 USDC to new job', 'Over per-job cap (50)', 'Contract'],
   ['fund_job 45.00 to drain-1.testnet', 'Seller not on approved list (strict mode)', 'Contract'],
@@ -99,7 +123,7 @@ export const ATTACK: [string, string, string][] = [
 ];
 
 export const WALK: [string, string][] = [
-  ['Describe the job', 'The spec writer turns your sentence into tests that fail today. Their hash is locked with the job.'],
+  ['Describe the job', 'Your sentence becomes tests that fail today, locked with the job.'],
   ['Agents bid, lures are held', 'People and AI agents bid. Your buyer agent waits for three offers and holds anything that asks to skip escrow.'],
   ['Three reviewers vote', 'Each one runs the locked tests on the delivered commit inside an enclave and signs its vote.'],
   ['Two approvals pay', 'USDC leaves escrow about a second later. If you stay silent, it releases after 72 hours.'],
@@ -156,6 +180,12 @@ export const OPEN_JOBS: [string, string, string, string, number, string, boolean
   ['Fix wallet selector modal on Safari 18', 'Front-end, React', '30–60', 'Playwright test', 5, 'Kanso Pay', true, 'The wallet modal breaks on Safari 18. A Playwright test checks it at 390, 768 and 1280 px.', '4.8 buyer', 26],
   ['Write missing tests for refund callback', 'Tests, Rust', '15–25', 'Coverage target 90%', 2, 'meridian.testnet', true, 'Raise coverage on the refund callback to 90%. The coverage target is locked in the spec.', 'New buyer', 41],
   ['Script to export NEP-141 holders to CSV', 'Scripts, TypeScript', '10–20', '1 golden-file test', 4, 'Pollen Grants', true, 'Export holders of a NEP-141 token to CSV, checked against a golden file.', '4.7 buyer', 58],
+  ['Add storage deposit checks to register()', 'Smart contracts, Rust', '20–35', '4 failing tests', 2, 'Orbit Guild', true, 'Calls to register() can leave accounts without storage. 4 tests describe the deposit rules.', '4.6 buyer', 84],
+  ['Fix flaky e2e login test in CI', 'Tests, Playwright', '15–30', 'Passes 20 runs in a row', 6, 'Lantern Labs', true, 'The login test fails about 1 run in 5. It must pass 20 runs in a row in CI.', '4.9 buyer', 97],
+  ['Add CSV export to the payouts table', 'Front-end, React', '25–40', 'Golden-file test', 3, 'Pollen Grants', true, 'Export the visible payouts as CSV. A golden-file test checks the columns and rounding.', 'New buyer', 112],
+  ['Port a Solidity vesting check to NEAR', 'Smart contracts, Rust', '60–90', '9 failing tests', 2, 'Kestrel DAO', true, 'Move the cliff and linear vesting checks to a NEAR contract. 9 tests describe the schedule.', '4.8 buyer', 130],
+  ['Type the API client and fix 14 errors', 'TypeScript', '15–25', 'tsc passes, 0 errors', 5, 'Tidewater', true, 'Add types to the API client so tsc passes with strict mode on.', '4.7 buyer', 151],
+  ['Write property tests for split_payment()', 'Tests, Rust', '20–30', 'Coverage target 95%', 1, 'Ostrich DAO', true, 'Add property tests for the split, including dust and zero amounts.', '4.9 buyer', 176],
   ['Migrate near-api-js v4 calls to v5', 'Front-end, TypeScript', '40–70', 'Type check and 12 tests', 1, 'Tidewater', true, 'Move v4 calls to v5. The type check and 12 tests must pass.', '5.0 buyer', 75],
 ];
 

@@ -1,24 +1,26 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
-import type { OtherJob, FilterKey } from '../data/sample';
+import { ORDERS, type FilterKey, type Order, type OtherJob } from '../data/sample';
 
 /*
  * App state, mirroring the prototype's `S` object.
  * `stage` drives the scripted demo: 0 signed out, 1 signed in, 2 job posted, 3 bids in,
  * 4 negotiated, 5 funded, 6 bad delivery rejected, 7 released and settled, 8 paused by guardian.
  */
-export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held'; text: string }
+export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
-  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob';
+  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer';
 export interface State {
   stage: number;
   tour: number; tourMin: boolean;
-  exTab: 'services' | 'jobs'; jobTab: 'bids' | 'neg' | 'spec'; dTab: 'open' | 'ruled'; walTab: 'assets' | 'activity';
+  jobTab: 'bids' | 'neg' | 'spec'; dTab: 'open' | 'ruled'; walTab: 'assets' | 'activity';
   specGen: boolean; votes: number[] | null; voting: boolean; attack: { n: number } | null;
   cats: Record<string, boolean>; strict: boolean; payout: string;
   role: 'hire' | 'work' | null; rolePick: 'hire' | 'work' | null; after: 'sell' | 'ask' | null;
   draft: string; seller: boolean; sellStep: number; skills: Record<string, boolean>; stake: boolean; sellPay: string;
   chatWith: string; chatLog: Record<string, ChatMsg[]>; typing: boolean;
+  tLog: Record<string, ChatMsg[]>; thread: string; inboxF: '' | 'buy' | 'sell' | 'all'; flat: boolean;
+  mode: 'buy' | 'sell'; oTab: 'active' | 'req' | 'done'; orders: Order[];
   liked: string[]; newJobs: OtherJob[]; nextJob: number; svc: string;
   sort: 'best' | 'rating' | 'price'; f: Partial<Record<FilterKey, string>>; q: string; online: boolean; newOnly: boolean;
   signVia: string; sellCoder: 'me' | 'agent'; expOpen: string; cvFile: string; avatarImg: string; coverImg: string; ghLinked: boolean;
@@ -34,12 +36,14 @@ export { storage };
 
 let state: State = {
   stage: 0, tour: -1, tourMin: false,
-  exTab: 'services', jobTab: 'bids', dTab: 'open', walTab: 'assets',
+  jobTab: 'bids', dTab: 'open', walTab: 'assets',
   specGen: false, votes: null, voting: false, attack: null,
   cats: { rust: true, fe: true, tests: true, scripts: false }, strict: false, payout: 'near',
   role: null, rolePick: null, after: null,
   draft: '', seller: false, sellStep: 0, skills: { Rust: true, 'NEAR SDK': true, Tests: true }, stake: false, sellPay: 'near',
   chatWith: 'patchsmith', chatLog: {}, typing: false,
+  tLog: {}, thread: '', inboxF: '', flat: false,
+  mode: 'buy', oTab: 'active', orders: ORDERS.map((o) => ({ ...o })),
   liked: ['g3'], newJobs: [], nextJob: 1043, svc: 'g1',
   sort: 'best', f: {}, q: '', online: false, newOnly: false,
   signVia: '', sellCoder: 'me', expOpen: 'cv', cvFile: '', avatarImg: '', coverImg: '', ghLinked: false,

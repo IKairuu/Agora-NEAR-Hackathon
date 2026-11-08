@@ -14,7 +14,7 @@ function NavItem({ r, label, icon, cur, count }: { r: string; label: string; ico
   );
 }
 
-function MeMenu({ close }: { close: () => void }) {
+function MeMenu({ close, cur }: { close: () => void; cur: string }) {
   const s = useApp();
   return (
     <>
@@ -24,7 +24,7 @@ function MeMenu({ close }: { close: () => void }) {
       </div>
       <hr />
       <RLink r="ask" className="mi" role="menuitem" onClick={close}><Icon name="spark" />Start a request</RLink>
-      <RLink r="dash" className="mi" role="menuitem" onClick={close}><Icon name="brief" />Your jobs</RLink>
+      <RLink r="jobs" className="mi" role="menuitem" onClick={close}><Icon name="brief" />Your jobs</RLink>
       <RLink r="post" className="mi" role="menuitem" onClick={close}><Icon name="post" />Post a job</RLink>
       <RLink r="chat" className="mi" role="menuitem" onClick={close}><Icon name="chat" />Messages{s.stage >= 4 && <span className="aside">1 open</span>}</RLink>
       <hr />
@@ -32,9 +32,7 @@ function MeMenu({ close }: { close: () => void }) {
       <RLink r="wallet" className="mi" role="menuitem" onClick={close}><Icon name="wallet" />Wallet<span className="aside num">{usd(free(s) + escrow(s))} USDC</span></RLink>
       <RLink r="mandate" className="mi" role="menuitem" onClick={close}><Icon name="mandate" />Limits and keys</RLink>
       <hr />
-      {s.seller
-        ? <RLink r="seller" className="mi" role="menuitem" onClick={close}><Icon name="store" />Seller desk</RLink>
-        : <RLink r="sell" className="mi hl" role="menuitem" onClick={close}><Icon name="store" />Become a seller<span className="aside">Earn USDC</span></RLink>}
+      <button className="mi hl" role="menuitem" onClick={() => { close(); act.mode(s.mode === 'sell' ? 'buy' : 'sell', cur); }}><Icon name="swap" />Switch to {s.mode === 'sell' ? 'buying' : 'selling'}</button>
       <button className="mi" role="menuitem" onClick={() => { close(); act.rolepick(); }}><Icon name="swap" />Change what brings you here</button>
       <hr />
       <button className="mi" role="menuitem" onClick={() => { close(); act.theme(); }}><Icon name="sun" />Light or dark</button>
@@ -77,23 +75,47 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
       <aside className="side night">
         <div className="brand-row">
           <RLink r="home" className="brand" aria-label="AGORA home"><span className="brand-mark"><Logo /></span><span className="brand-name">AGORA</span></RLink>
-          {!s.fold && <button className="fold" onClick={act.fold} aria-label="Collapse sidebar" aria-pressed="false"><Icon name="fold" /></button>}
+          <button className="fold" onClick={act.fold} aria-label={s.fold ? 'Keep the sidebar open' : 'Collapse sidebar'} aria-pressed={s.fold}><Icon name={s.fold ? 'unfold' : 'fold'} /></button>
         </div>
+        {signed && (
+          <div className="mode" role="group" aria-label="Switch between buying and selling">
+            <button className={s.mode !== 'sell' ? 'on' : ''} onClick={() => act.mode('buy', cur)} aria-pressed={s.mode !== 'sell'}><Icon name="brief" /><span className="t">Buying</span></button>
+            <button className={s.mode === 'sell' ? 'on' : ''} onClick={() => act.mode('sell', cur)} aria-pressed={s.mode === 'sell'}><Icon name="store" /><span className="t">Selling</span></button>
+          </div>
+        )}
         <nav className="nav" aria-label="Main">
-          <div className="nav-group">Hire</div>
-          <NavItem r="ask" label="New request" icon="spark" cur={cur} />
-          <NavItem r="dash" label="Overview" icon="home" cur={cur} />
-          <NavItem r="explore" label="Find services" icon="explore" cur={cur} />
-          <NavItem r="jobs" label="Your jobs" icon="job" cur={cur === 'job' ? 'jobs' : cur} count={String(jobsCount)} />
-          <NavItem r="room" label="Escrow room" icon="room" cur={cur} count={s.stage >= 5 && s.stage < 7 ? 'live' : ''} />
-          <div className="nav-group">Your agents</div>
-          <NavItem r="agents" label="Agent team" icon="agents" cur={cur} count={isPaused ? 'paused' : ''} />
-          <NavItem r="mandate" label="Limits and keys" icon="mandate" cur={cur} />
-          <NavItem r="wallet" label="Wallet" icon="wallet" cur={cur} />
-          <div className="nav-group">Market</div>
-          <NavItem r="profile" label="Seller profiles" icon="profile" cur={cur} />
-          <NavItem r={s.seller ? 'seller' : 'sell'} label={s.seller ? 'Seller desk' : 'Become a seller'} icon="store" cur={cur} />
-          <NavItem r="dispute" label="Disputes" icon="dao" cur={cur} />
+          {s.mode === 'sell' ? (
+            <>
+              <div className="nav-group">Sell</div>
+              <NavItem r="seller" label="Seller dashboard" icon="home" cur={cur} />
+              <NavItem r="orders" label="Orders" icon="job" cur={cur} count={String(s.orders.filter((o) => o.st < 4).length)} />
+              <NavItem r="openjobs" label="Open jobs" icon="explore" cur={cur} />
+              <NavItem r="sell" label={s.seller ? 'Your seller profile' : 'Set up your profile'} icon="store" cur={cur} />
+              <div className="nav-group">Your agents</div>
+              <NavItem r="agents" label="Bidding agent" icon="agents" cur={cur} />
+              <NavItem r="mandate" label="Limits and keys" icon="mandate" cur={cur} />
+              <NavItem r="wallet" label="Earnings" icon="wallet" cur={cur} />
+              <div className="nav-group">Market</div>
+              <NavItem r="chat" label="Messages" icon="chat" cur={cur} />
+              <NavItem r="dispute" label="Disputes" icon="dao" cur={cur} />
+            </>
+          ) : (
+            <>
+              <div className="nav-group">Hire</div>
+              <NavItem r="ask" label="New request" icon="spark" cur={cur} />
+              <NavItem r="dash" label="Overview" icon="home" cur={cur} />
+              <NavItem r="explore" label="Find services" icon="explore" cur={cur} />
+              <NavItem r="jobs" label="Your jobs" icon="job" cur={cur === 'job' ? 'jobs' : cur} count={String(jobsCount)} />
+              <NavItem r="room" label="Escrow room" icon="room" cur={cur} count={s.stage >= 5 && s.stage < 7 ? 'live' : ''} />
+              <div className="nav-group">Your agents</div>
+              <NavItem r="agents" label="Agent team" icon="agents" cur={cur} count={isPaused ? 'paused' : ''} />
+              <NavItem r="mandate" label="Limits and keys" icon="mandate" cur={cur} />
+              <NavItem r="wallet" label="Wallet" icon="wallet" cur={cur} />
+              <div className="nav-group">Market</div>
+              <NavItem r="profile" label="Seller profiles" icon="profile" cur={cur} />
+              <NavItem r="dispute" label="Disputes" icon="dao" cur={cur} />
+            </>
+          )}
         </nav>
         <div className="side-foot">
           <div className={`guard ${isPaused ? 'paused' : ''}`}>
@@ -101,7 +123,6 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
             <span className="gd">{isPaused ? 'Only your full-access key can unpause.' : 'Pauses your agents if something probes your limits.'}</span>
           </div>
           <span className="muted xsmall gd">Prototype with sample data on NEAR testnet</span>
-          {s.fold && <button className="fold keep" onClick={act.fold} aria-label="Keep the sidebar open"><Icon name="unfold" /><span className="t">Keep open</span></button>}
         </div>
       </aside>
       <div className="main">
@@ -122,7 +143,7 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
                 </button>
                 <RLink r="chat" className="btn icon ghost dot-host" aria-label="Messages"><Icon name="mail" />{s.stage >= 4 && s.stage < 5 && <i className="dot" />}</RLink>
                 <RLink r="saved" className="btn icon ghost dot-host" aria-label={`Saved, ${s.liked.length}`}><Icon name="heart" />{s.liked.length > 0 && <i className="num-dot">{s.liked.length}</i>}</RLink>
-                <RLink r="dash" className="btn sm ghost orders">Orders</RLink>
+                <RLink r={s.mode === 'sell' ? 'orders' : 'jobs'} className="btn sm ghost orders">Orders</RLink>
                 <button ref={meRef} className="me-btn" onClick={meToggle} aria-label="Account menu" aria-haspopup="menu" aria-expanded={meOpen}>
                   <span className="avatar">{ME.initials}</span><i className="online" aria-hidden="true" />
                 </button>
@@ -132,7 +153,7 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
         </header>
         <main className="content" id="content">{children}</main>
       </div>
-      {meOpen && <Pop anchor={meRef} onClose={meClose}><MeMenu close={meClose} /></Pop>}
+      {meOpen && <Pop anchor={meRef} onClose={meClose}><MeMenu close={meClose} cur={cur} /></Pop>}
       {noteOpen && <Pop anchor={noteRef} onClose={noteClose} wide><NoteMenu close={noteClose} /></Pop>}
     </div>
   );

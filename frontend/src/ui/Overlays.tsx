@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { gigBy, ME, OTHER_JOBS, ROLES, sellerBy, usd, VIA, BIDS } from '../data/sample';
-import { act, TOUR } from '../store/actions';
+import { act, orderAct, TOUR } from '../store/actions';
 import { closeModal, free, setState, useApp, useToasts } from '../store/store';
 import { GoogleIcon, Icon, Tile } from './icons';
 import { Check, T } from './parts';
@@ -198,6 +198,28 @@ function OtherJob({ id }: { id: string }) {
   );
 }
 
+function Offer({ id }: { id: string }) {
+  const { orders } = useApp();
+  const o = orders.find((x) => x.id === id);
+  const [price, setPrice] = useState('42.00 USDC');
+  const [days, setDays] = useState('2 days');
+  if (!o) return null;
+  return (
+    <Frame>
+      <h2>Send an offer</h2>
+      <p className="muted">{o.buyer} asked: {o.title}. If they accept, the tests are locked and escrow is funded before you start.</p>
+      <form className="stack" onSubmit={(e) => { e.preventDefault(); orderAct.sendOffer(id, price, days); }}>
+        <div className="grid g-2">
+          <div className="field"><label htmlFor="of-p">Your price</label><input className="input num" id="of-p" value={price} onChange={(e) => setPrice(e.target.value)} /></div>
+          <div className="field"><label htmlFor="of-d">Delivery</label><select className="input" id="of-d" value={days} onChange={(e) => setDays(e.target.value)}><option>1 day</option><option>2 days</option><option>3 days</option></select></div>
+        </div>
+        <div className="field"><label htmlFor="of-n">Note to the buyer</label><textarea className="input" id="of-n" rows={3} defaultValue="I can reproduce it on Safari 18. I will add one extra test for the 390 px layout." /></div>
+        <div className="acts"><button type="button" className="btn ghost" data-close="1" onClick={closeModal}>Cancel</button><button type="submit" className="btn primary">Send offer</button></div>
+      </form>
+    </Frame>
+  );
+}
+
 export function ModalHost() {
   const { modal } = useApp();
   if (!modal) return null;
@@ -213,6 +235,7 @@ export function ModalHost() {
     case 'unpause': return <Unpause />;
     case 'reqsvc': return <RequestService />;
     case 'ojob': return <OtherJob id={modal.props?.id ?? ''} />;
+    case 'offer': return <Offer id={modal.props?.id ?? ''} />;
   }
 }
 

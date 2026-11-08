@@ -1,11 +1,12 @@
-import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
-import { BIDS, HELD, JOB, ME, QUEUE, REVIEWERS, sellerBy, SPEC, usd, type Bid } from '../data/sample';
-import { act, chatLog, sendChat } from '../store/actions';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { BIDS, HELD, JOB, ME, QUEUE, REVIEWERS, sellerBy, SPEC, usd } from '../data/sample';
+import { act, sendChat, sendThread, threads, type Thread } from '../store/actions';
 import { setState, useApp, type ChatMsg } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
-import { Gate, Head, Lifecycle, Mk, RLink, T, Tl } from '../ui/parts';
+import { Gate, Head, Lifecycle, Mk, RLink, SignInButton, T, Tl } from '../ui/parts';
 import { Shell } from '../ui/Shell';
 import { SpecTable } from './hire';
+import { OrderAction } from './orders';
 
 /* ---------------- job page: bids, negotiation, spec ---------------- */
 function BidsView({ bidsIn, neg }: { bidsIn: boolean; neg: boolean }) {
@@ -130,82 +131,122 @@ export function Job() {
   );
 }
 
-/* ---------------- chat with the agent's pick ---------------- */
-function Msg({ m, b }: { m: ChatMsg; b: Bid }) {
+/* ---------------- Messages: one inbox, a thread per job and seller ---------------- */
+type Who = { name: string; kind: 'agent' | 'human' | 'person' };
+function Msg({ m, b, sellMode = false }: { m: ChatMsg; b: Who; sellMode?: boolean }) {
   const av = <span className={`avatar ${b.kind === 'agent' ? 'ag' : ''}`}>{b.name.slice(0, 2).toUpperCase()}</span>;
   if (m.from === 'them') return <div className="msg them">{av}<div><div className="who">{b.name}</div><div className="bub">{m.text}</div></div></div>;
-  if (m.from === 'agent') return <div className="msg bot"><span className="avatar ag"><Icon name="bot" /></span><div><div className="who">Your buyer agent, for you</div><div className="bub">{m.text}</div></div></div>;
-  if (m.from === 'held') return <div className="sys">{m.text}</div>;
+  if (m.from === 'agent') return <div className="msg bot"><span className="avatar ag"><Icon name="bot" /></span><div><div className="who">{sellMode ? 'Your bidding agent, for you' : 'Your buyer agent, for you'}</div><div className="bub">{m.text}</div></div></div>;
+  if (m.from === 'held' || m.from === 'sys') return <div className="sys">{m.text}</div>;
   return <div className="msg me"><span className="avatar">{ME.initials}</span><div><div className="who">You</div><div className="bub">{m.text}</div></div></div>;
 }
+const initials = (t: Thread) => (t.ag ? <Icon name="bot" /> : t.who.slice(0, 2).toUpperCase());
 
 export function Chat() {
   const s = useApp();
   const [text, setText] = useState('');
   const msgs = useRef<HTMLDivElement>(null);
-  const log = chatLog(s.chatWith);
-  useEffect(() => { msgs.current?.lastElementChild?.scrollIntoView({ block: 'nearest' }); }, [log.length, s.typing]);
-  if (s.stage < 4) return <Shell cur="chat"><Head title="Messages" /><Gate msg="Your agent has not picked a seller yet"><RLink r="job" className="btn primary">Go to bids</RLink></Gate></Shell>;
+  const f = s.inboxF || (s.mode === 'sell' ? 'sell' : 'buy');
+  const all = s.stage >= 1 ? threads() : [];
+  const list = all.filter((t) => f === 'all' || t.mode === f);
+  const cur = list.find((t) => t.k === s.thread) || list[0];
+  const curKey = cur?.k ?? '';
+  useEffect(() => { if (curKey && curKey !== s.thread) setState({ thread: curKey }); }, [curKey, s.thread]);
+  const opened = useRef(false);
+  /* like the prototype, keep the newest message in view after sending or switching threads, not on first open */
+  useEffect(() => {
+    if (!opened.current) { opened.current = true; return; }
+    msgs.current?.lastElementChild?.scrollIntoView({ block: 'nearest' });
+  }, [curKey, cur?.msgs.length, s.typing]);
+  if (s.stage < 1) return <Shell cur="chat"><Head title="Messages" /><Gate msg="Sign in to see your messages"><SignInButton /></Gate></Shell>;
 
-  const key = s.chatWith, b = sellerBy(key)!, pos = QUEUE.indexOf(key), accepted = s.stage >= 5;
-  const last = log[log.length - 1];
-  const quick = key === 'patchsmith' && last?.from === 'them' && log.length === 6 ? ['Yes, always to the last worker', 'Split the remainder evenly', 'Let me check and come back'] : key !== 'patchsmith' && log.length === 6 ? ['Sounds good', 'What would you change in the spec?'] : [];
-  const submit = (e?: FormEvent) => { e?.preventDefault(); sendChat(text); setText(''); };
+  const filters: ['buy' | 'sell' | 'all', string][] = [['buy', 'Buying'], ['sell', 'Selling'], ['all', 'All']];
+  const side = (
+    <aside className="inbox-l">
+      <div className="seg ib-f" role="group" aria-label="Show threads">
+        {filters.map(([k, label]) => <button key={k} className={f === k ? 'on' : ''} onClick={() => setState({ inboxF: k, thread: '' })} aria-pressed={f === k}>{label} <span className="tcount">{all.filter((t) => k === 'all' || t.mode === k).length}</span></button>)}
+      </div>
+      <div className="tlist">
+        {list.length ? list.map((t) => {
+          const on = t.k === curKey;
+          return (
+            <button key={t.k} className={`trow ${on ? 'on' : ''}`} onClick={() => setState({ thread: t.k })} aria-current={on}>
+              <span className={`avatar ${t.ag ? 'ag' : ''}`}>{initials(t)}</span>
+              <span className="tr-b">
+                <span className="tr-top"><b>{t.who}</b><span className="muted xsmall">{t.time}</span></span>
+                <span className="tr-job">{t.job} · {t.title}</span>
+                <span className="tr-last">{t.last}</span>
+              </span>
+              {t.unread && !on && <i className="udot" aria-label="Unread" />}
+            </button>
+          );
+        }) : <p className="muted small" style={{ padding: 16 }}>No conversations yet.</p>}
+      </div>
+    </aside>
+  );
+  if (!cur) return (
+    <Shell cur="chat">
+      <Head title="Messages" />
+      <div className="inbox">{side}<section className="inbox-r"><div className="empty"><Icon name="chat" /><b>No conversations here</b><span>Threads start when your agent picks a seller, or a buyer sends you a request.</span></div></section></div>
+    </Shell>
+  );
+
+  const demo = cur.k === 'demo';
+  const submit = (e?: FormEvent) => { e?.preventDefault(); if (demo) sendChat(text); else sendThread(text); setText(''); };
   const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } };
+  let strip: ReactNode, body: ReactNode, quick: string[] = [];
+  if (demo) {
+    const key = s.chatWith, b = sellerBy(key)!, pos = QUEUE.indexOf(key), accepted = s.stage >= 5, log = cur.msgs, last = log[log.length - 1];
+    quick = key === 'patchsmith' && last?.from === 'them' && log.length === 6 ? ['Yes, always to the last worker', 'Split the remainder evenly', 'Let me check and come back'] : key !== 'patchsmith' && log.length === 6 ? ['Sounds good', 'What would you change in the spec?'] : [];
+    strip = (
+      <>
+        <div className="jstrip">
+          <span className={`pill ${cur.st[0]}`}>{cur.st[1]}</span><RLink r="job" className="mono xsmall">{JOB.id}</RLink><b className="js-t">{JOB.title}</b>
+          <span className="num js-a">{usd(b.final)} USDC · {b.days}</span>
+          {accepted ? <RLink r="room" className="btn sm">Escrow room</RLink> : <button className="btn sm primary" onClick={act.fund}>Accept and fund</button>}
+        </div>
+        <div className="jstrip sub">
+          <span className="muted xsmall">{pos === 0 ? "Your agent's pick" : 'Backup ' + pos} · risk {b.fraud} of 100 · {b.pass} pass first try</span>
+          <span className="muted xsmall" style={{ marginLeft: 'auto' }}>Backups</span>
+          {QUEUE.filter((k) => k !== key).map((k) => <button key={k} className="chip sm" onClick={() => act.talk(k)} disabled={accepted}>{sellerBy(k)!.name}</button>)}
+        </div>
+      </>
+    );
+    body = (
+      <>
+        <div className="sys">Your buyer agent picked {b.name}{pos === 0 ? ' as the best match' : ' as backup ' + pos} and asked the basics for you. Messages stay on AGORA, and money only moves through escrow.</div>
+        {log.map((m, i) => <Msg key={i} m={m} b={b} />)}
+        {s.typing && <div className="msg them"><span className={`avatar ${b.kind === 'agent' ? 'ag' : ''}`}>{b.name.slice(0, 2).toUpperCase()}</span><div className="bub typing" aria-label={`${b.name} is typing`}><i /><i /><i /></div></div>}
+      </>
+    );
+  } else {
+    const b: Who = { name: cur.who, kind: cur.ag ? 'agent' : 'person' };
+    strip = (
+      <div className="jstrip">
+        <span className={`pill ${cur.st[0]}`}>{cur.st[1]}</span><span className="mono xsmall muted">{cur.job}</span><b className="js-t">{cur.title}</b>
+        <span className="num js-a">{cur.amt} USDC</span>
+        {cur.order ? <OrderAction o={cur.order} full={false} /> : <RLink r="jobs" className="btn sm">View job</RLink>}
+      </div>
+    );
+    body = cur.msgs.map((m, i) => <Msg key={i} m={m} b={b} sellMode={cur.mode === 'sell'} />);
+  }
 
   return (
     <Shell cur="chat">
-      <Head
-        crumbs={<><RLink r="job">{JOB.id}</RLink> / Messages</>}
-        title={pos === 0 ? `Your agent's pick: ${b.name}` : `Talking to backup ${pos}: ${b.name}`}
-        sub={JOB.title}
-        actions={accepted ? <RLink r="room" className="btn primary">Open escrow room</RLink> : <button className="btn primary" onClick={act.fund}>Accept {usd(b.final)} USDC and fund escrow</button>}
-      />
-      <div className="chat">
-        <div className="panel thread">
-          <div className="panel-h">
-            <span className={`avatar ${b.kind === 'agent' ? 'ag' : ''}`}>{b.name.slice(0, 2).toUpperCase()}</span>
-            <div style={{ minWidth: 0 }}><b style={{ fontWeight: 500 }}>{b.name}</b><div className="muted xsmall">{b.kind === 'agent' ? 'AI agent. ' : 'Developer. '}{b.owner}</div></div>
-            <div className="r"><span className="status ok"><Icon name="check" />Replies in minutes</span></div>
-          </div>
-          <div className="msgs" id="msgs" ref={msgs} aria-live="polite">
-            <div className="sys">Your buyer agent picked {b.name}{pos === 0 ? ' as the best match' : ' as backup ' + pos} at {usd(b.final)} USDC, {b.days}. It opened this chat and asked the basics for you. Messages stay on AGORA, and money only moves through escrow.</div>
-            {log.map((m, i) => <Msg key={i} m={m} b={b} />)}
-            {s.typing && <div className="msg them"><span className={`avatar ${b.kind === 'agent' ? 'ag' : ''}`}>{b.name.slice(0, 2).toUpperCase()}</span><div className="bub typing" aria-label={`${b.name} is typing`}><i /><i /><i /></div></div>}
-          </div>
+      <Head title="Messages" />
+      <div className="inbox">
+        {side}
+        <section className="inbox-r" aria-label={`Conversation with ${cur.who}`}>
+          <div className="ib-head"><span className={`avatar ${cur.ag ? 'ag' : ''}`}>{initials(cur)}</span><div><b>{cur.who}</b><div className="muted xsmall">{cur.mode === 'sell' ? 'Buyer' : 'Seller'}{cur.ag ? ', AI agent' : ''}</div></div></div>
+          {strip}
+          <div className="msgs" id="msgs" ref={msgs} aria-live="polite">{body}</div>
           {quick.length > 0 && <div className="quick">{quick.map((q) => <button key={q} className="chip" onClick={() => sendChat(q)}>{q}</button>)}</div>}
           <form className="compose" onSubmit={submit}>
-            <label className="visually-hidden" htmlFor="chat-in">Message {b.name}</label>
-            <textarea className="input" id="chat-in" rows={1} placeholder={`Message ${b.name}`} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} />
+            <label className="visually-hidden" htmlFor="chat-in">Message {cur.who}</label>
+            <textarea className="input" id="chat-in" rows={1} placeholder={`Message ${cur.who}`} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} />
             <button className="btn primary icon" type="submit" aria-label="Send"><Icon name="up" /></button>
           </form>
-        </div>
-        <div className="stack">
-          <div className="panel pickcard">
-            <div className="top2">
-              <div className="row" style={{ flexWrap: 'nowrap' }}><span className={`avatar lg ${b.kind === 'agent' ? 'ag' : ''}`}>{b.name.slice(0, 2).toUpperCase()}</span><div style={{ minWidth: 0 }}><h3>{b.name}</h3><span className="mono muted xsmall" style={{ overflowWrap: 'anywhere' }}>{b.acct}</span></div></div>
-              <div className="row"><span className={`pill ${b.kind === 'agent' ? 'info' : ''}`}>{b.kind === 'agent' ? 'AI agent' : 'Developer'}</span>{pos === 0 ? <span className="pill ok">Agent's pick</span> : <span className="pill">Backup {pos}</span>}{b.newSeller && <span className="pill hold">New seller</span>}</div>
-              <p className="small">{b.note}</p>
-              <dl className="kv"><dt>Agreed price</dt><dd className="num">{usd(b.final)} USDC</dd><dt>Delivery</dt><dd>{b.days}</dd><dt>Risk score</dt><dd className="num">{b.fraud} of 100</dd></dl>
-              <RLink r="profile" className="btn sm">View full record</RLink>
-            </div>
-            <div className="mini"><div><b>{b.settled}</b>settled</div><div><b>{b.pass}</b>pass 1st try</div><div><b>{b.disputes}</b>disputes</div></div>
-          </div>
-          <div className="panel">
-            <div className="panel-h"><h3>If this doesn't work out</h3></div>
-            <div className="panel-b" style={{ paddingBottom: 12 }}><p className="muted xsmall">Your agent talks to one seller at a time, in this order. Switching keeps every chat.</p></div>
-            {QUEUE.map((k, i) => {
-              const sb = sellerBy(k)!;
-              return (
-                <div key={k} className={`backup ${k === key ? 'cur' : ''}`}>
-                  <span className="n">{i + 1}</span>
-                  <div style={{ minWidth: 0 }}><b style={{ fontWeight: 500 }}>{sb.name}</b><div className="muted xsmall">{usd(sb.final)} USDC, {sb.days}, {sb.pass} pass first try</div></div>
-                  {k === key ? <span className="muted xsmall">Talking</span> : <button className="btn sm" onClick={() => act.talk(k)} disabled={accepted}>Talk</button>}
-                </div>
-              );
-            })}
-          </div>
-        </div>
+        </section>
       </div>
     </Shell>
   );

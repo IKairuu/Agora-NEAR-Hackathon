@@ -1,8 +1,8 @@
-import { useRef, useState, type KeyboardEvent } from 'react';
+import { useEffect, useRef, useState, type KeyboardEvent } from 'react';
 import { FILTERS, GIGS, gigBy, JOB, ME, OPEN_JOBS, SPEC, usd, type FilterKey, type Gig } from '../data/sample';
 import { act } from '../store/actions';
 import { escrow, free, getState, paused, setState, toast, useApp, type State } from '../store/store';
-import { Icon, Tile } from '../ui/icons';
+import { Icon } from '../ui/icons';
 import { allOtherJobs, Feed, Gate, GigCard, Head, levelClass, Lifecycle, OtherJobCard, PastJob, POPULAR, Review, RLink, SignInButton, T, Thumb, Tl } from '../ui/parts';
 import { Shell } from '../ui/Shell';
 
@@ -20,7 +20,7 @@ export function Ask() {
   return (
     <Shell cur="ask">
       <div className="ask">
-        <div className="ask-head"><Tile size="lg" /><span className="muted">{greeting()}, {ME.name}</span><h1>What should we get built?</h1></div>
+        <div className="ask-head"><span className="muted">{greeting()}, {ME.name}</span><h1>What should we get built?</h1></div>
         <form className="composer" onSubmit={(e) => { e.preventDefault(); submit(); }}>
           <label className="visually-hidden" htmlFor="ask-in">Describe the job</label>
           <textarea id="ask-in" ref={input} rows={3} value={s.draft} onChange={(e) => setState({ draft: e.target.value })} onKeyDown={onKey} placeholder="Describe a bug, a test or a small feature. Paste a repo link if you have one." />
@@ -35,7 +35,7 @@ export function Ask() {
         <div className="services">
           <div className="services-h">
             <h2>Popular services</h2><span className="muted small">Each one ends with a test the reviewers can run</span>
-            <RLink r="explore" className="see-all" onClick={() => setState({ exTab: 'services' })}>See all <Icon name="ext" /></RLink>
+            <RLink r="explore" className="see-all">See all <Icon name="ext" /></RLink>
           </div>
           <div className="gig-row" tabIndex={0} aria-label="Popular services, scroll sideways">{POPULAR.map((g) => <GigCard key={g.id} g={g} />)}</div>
           <p className="muted xsmall">Sellers, prices and ratings are sample data for this prototype.</p>
@@ -66,7 +66,14 @@ export function Dash() {
   if (s.stage < 1) return <Shell cur="dash"><Head title="Overview" /><Gate msg="Sign in to see your overview"><SignInButton /></Gate></Shell>;
   return (
     <Shell cur="dash">
-      <Head title="Your jobs" sub={<>{ME.acct}. Agents live under <span className="mono">{ME.agents}</span></>} actions={<RLink r="ask" className="btn primary"><Icon name="spark" />New request</RLink>} />
+      <div className={s.flat ? 'flat' : ''}>
+      <Head title="Overview" sub={<>{ME.acct}. Agents live under <span className="mono">{ME.agents}</span></>} actions={<>
+        <div className="seg cmp" role="group" aria-label="Layout sample">
+          <button className={s.flat ? 'on' : ''} onClick={() => act.flatcmp(true)} aria-pressed={s.flat}>Preview: fewer boxes</button>
+          <button className={s.flat ? '' : 'on'} onClick={() => act.flatcmp(false)} aria-pressed={!s.flat}>Current</button>
+        </div>
+        <RLink r="ask" className="btn primary"><Icon name="spark" />New request</RLink>
+      </>} />
       <div className="tally">
         <div><span className="lbl">Available</span><b className="num">{usd(free(s))}<span className="u">USDC</span></b><span className="sub">ready to fund jobs</span></div>
         <div><span className="lbl">In escrow</span><b className="num">{usd(escrow(s))}<span className="u">USDC</span></b><span className="sub">{escrow(s) ? '1 milestone' : 'nothing locked'}</span></div>
@@ -83,6 +90,7 @@ export function Dash() {
           <PastJob id="J-0954" t="Typed client for get_balance view call" who="patchsmith.agents.testnet" amt="18.00" />
         </div>
         <div className="panel"><div className="panel-h"><h2>Agent activity</h2><div className="r"><RLink r="agents" className="btn sm ghost">All</RLink></div></div><div className="panel-b" style={{ paddingBlock: 4 }}><Feed short /></div></div>
+      </div>
       </div>
     </Shell>
   );
@@ -134,18 +142,18 @@ function Select({ k, label }: { k: FilterKey; label: string }) {
   );
 }
 
-export function Explore() {
+/** Find services for buyers; the same screen at /openjobs shows open jobs for sellers. */
+export function Explore({ sell = false }: { sell?: boolean }) {
   const s = useApp();
+  useEffect(() => { setState({ mode: sell ? 'sell' : 'buy' }); }, [sell]);
   const list = gigList(s);
   const jobs = s.stage >= 2 ? [['Make test_split_rounding pass in split_payment()', 'Smart contracts, Rust', 'under 40', '2 failing tests', s.stage >= 3 ? 6 : 0, 'Lumen Labs', true, 'The payroll contract loses 1 unit when splitting USDC. Make the named test pass without touching others.', '4.9 buyer', 3] as const, ...OPEN_JOBS] : OPEN_JOBS;
   return (
-    <Shell cur="explore">
-      <Head title="Find services" sub="Every service ends with tests the reviewers run. Every rating comes from a settled payment." actions={<RLink r="ask" className="btn primary"><Icon name="spark" />Let my agent find one</RLink>} />
-      <div className="tabs" role="tablist">
-        <button role="tab" aria-selected={s.exTab === 'services'} className={s.exTab === 'services' ? 'on' : ''} onClick={() => setState({ exTab: 'services' })}>Services</button>
-        <button role="tab" aria-selected={s.exTab === 'jobs'} className={s.exTab === 'jobs' ? 'on' : ''} onClick={() => setState({ exTab: 'jobs' })}>Open jobs, for sellers</button>
-      </div>
-      {s.exTab === 'services' ? (
+    <Shell cur={sell ? 'openjobs' : 'explore'}>
+      {sell
+        ? <Head title="Open jobs" sub="Bid on jobs whose tests match your skills. Escrow is funded before you start." actions={<RLink r="orders" className="btn"><Icon name="job" />Your orders</RLink>} />
+        : <Head title="Find services" sub="Every service ends with tests the reviewers run. Every rating comes from a settled payment." actions={<RLink r="ask" className="btn primary"><Icon name="spark" />Let my agent find one</RLink>} />}
+      {!sell ? (
         <>
           <div className="filters">
             <label className="search"><Icon name="explore" /><input id="q" value={s.q} onChange={(e) => setState({ q: e.target.value })} placeholder="Search services and sellers" aria-label="Search services and sellers" /></label>

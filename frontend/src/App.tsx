@@ -8,6 +8,7 @@ import { Agents, Mandate, Wallet } from './views/agents';
 import { Ask, Dash, Explore, Jobs, Post, Saved, Svc } from './views/hire';
 import { Chat, Job, Room } from './views/job';
 import { Dispute, Profile, Sell, Seller } from './views/market';
+import { Orders } from './views/orders';
 
 /** Root layout: shared SVG defs, the page, and the overlays that sit above every page. */
 function Root() {
@@ -34,6 +35,8 @@ const router = createBrowserRouter([{
     { path: '/dash', element: <Dash /> },
     { path: '/jobs', element: <Jobs /> },
     { path: '/explore', element: <Explore /> },
+    { path: '/openjobs', element: <Explore sell /> },
+    { path: '/orders', element: <Orders /> },
     { path: '/svc', element: <Svc /> },
     { path: '/saved', element: <Saved /> },
     { path: '/post', element: <Post /> },

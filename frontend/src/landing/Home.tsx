@@ -206,7 +206,7 @@ export function Home() {
         </div>
         <div className="cats container" aria-label="Browse by category">
           {HERO_CATS.map(([icon, label, cat]) => (
-            <button key={label} className="cat" onClick={() => { setState({ exTab: 'services', f: { cat } }); go('explore'); }}><Icon name={icon} /><b>{label}</b></button>
+            <button key={label} className="cat" onClick={() => { setState({ f: { cat } }); go('explore'); }}><Icon name={icon} /><b>{label}</b></button>
           ))}
         </div>
       </section>
