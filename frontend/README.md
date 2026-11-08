@@ -1,6 +1,6 @@
 # AGORA frontend
 
-Landing page, sign-up and the first screen for each account type. Vite, React 19, React Router and TypeScript. Plain CSS, no UI library.
+React 19 + TypeScript + Vite + React Router implementation of `AGORA_Prototype_v4.html`. Plain CSS, no UI library.
 
 ```bash
 npm install
@@ -8,28 +8,21 @@ npm run dev      # http://localhost:5173
 npm run build    # typecheck + production build to dist/
 ```
 
-## Routes
+## How it maps to the prototype
 
-| Path | Screen |
-| --- | --- |
-| `/` | Landing page |
-| `/start` | Get started: create an account with Google |
-| `/start/role` | What brings you here: hire, freelancer or AI agent |
-| `/app/hire` | Buyer home: describe a job, or pick a popular service |
-| `/app/freelancer` | Seller onboarding for developers |
-| `/app/agent` | Seller onboarding for AI agent operators |
-
-`/app/*` pages need a session and an account type; without them they send you to `/start` or `/start/role`.
-
-**Google sign-in is mocked** in `src/lib/auth.ts`: it returns a sample testnet account (`lumen.testnet`) after a short delay and keeps the session in `localStorage`. Replace `signInWithGoogle` with the real NEAR social login when the backend supports it; the screens only use `useSession()` and the functions in that file.
+- `src/styles/agora.css` is the prototype stylesheet, copied verbatim. Treat it as the visual source of truth.
+- `src/styles/responsive.css` holds the small fixes that stop clipping at 320px and in table headers.
+- Markup keeps the prototype's class names, so every screen renders with the same CSS.
+- Prototype `#hash` routes are real paths: `/ask`, `/dash`, `/jobs`, `/explore`, `/svc`, `/saved`, `/post`, `/job`, `/chat`, `/room`, `/agents`, `/mandate`, `/wallet`, `/profile`, `/sell`, `/seller`, `/dispute`.
 
 ## Layout
 
-- `src/App.tsx`: the router
-- `src/pages/`: `Landing`, `Start`, `Role`, `Hire`, `SellerOnboarding`
-- `src/components/`: `Nav`, `Hero` (live job card), `CharacterField` (canvas animation), `HowItWorks`, `Sections` (sides, safety drill, NEAR stack, FAQ, closing CTA, footer), `GoogleButton`, `AppShell` (top bar, account menu, sign-up frame)
-- `src/content/`: copy and sample figures (`landing.ts`, `app.ts`)
-- `src/config.ts`: where the CTAs and footer links point (placeholders until the app routes exist)
-- `src/styles/`: `tokens.css` (colours, dark mode, `.night` bands), `base.css`, `landing.css`, `app.css`
+- `src/store/store.ts`: app state (the prototype's `S`), toasts and modals
+- `src/store/actions.tsx`: every action (the prototype's `ACT`), navigation and the 16-step demo tour
+- `src/data/sample.ts`: sample data (jobs, bids, services, chats)
+- `src/landing/`: landing page and the character-field canvas
+- `src/views/`: `hire.tsx` (New request, Overview, Your jobs, Find services, service page, Saved, Post a job), `job.tsx` (job, chat, escrow room), `agents.tsx` (Agent team, Limits and keys, Wallet), `market.tsx` (seller profile, Become a seller, Seller desk, Disputes)
+- `src/ui/`: icons and logo, shared parts, the app shell, modals, toasts, tour
+- `public/img/`: the two photos from the prototype
 
-The accent is the emerald gradient. Dark mode follows the system setting. Animations respect `prefers-reduced-motion`.
+Everything runs on sample data, as in the prototype. Sign-in, payments and contract calls are simulated, and the `stage` value in the store drives the scripted demo.

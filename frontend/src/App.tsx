@@ -1,36 +1,55 @@
-import { createBrowserRouter, Navigate, Outlet, RouterProvider, ScrollRestoration } from 'react-router';
-import { Hire } from './pages/Hire';
-import { Landing } from './pages/Landing';
-import { Role } from './pages/Role';
-import { SellerOnboarding } from './pages/SellerOnboarding';
-import { Start } from './pages/Start';
-import { getSession, nextPathFor } from './lib/auth';
+import { useEffect } from 'react';
+import { createBrowserRouter, Outlet, RouterProvider, ScrollRestoration, useNavigate } from 'react-router';
+import { Home } from './landing/Home';
+import { setNavigate } from './store/actions';
+import { SvgDefs } from './ui/icons';
+import { ModalHost, Toasts, Tour } from './ui/Overlays';
+import { Agents, Mandate, Wallet } from './views/agents';
+import { Ask, Dash, Explore, Jobs, Post, Saved, Svc } from './views/hire';
+import { Chat, Job, Room } from './views/job';
+import { Dispute, Profile, Sell, Seller } from './views/market';
 
-function AppIndex() {
-  return <Navigate to={nextPathFor(getSession())} replace />;
-}
-
-/** Root layout: every page starts at the top; back/forward restores where you were. */
+/** Root layout: shared SVG defs, the page, and the overlays that sit above every page. */
 function Root() {
+  const navigate = useNavigate();
+  useEffect(() => { setNavigate((to) => { void navigate(to); }); }, [navigate]);
   return (
     <>
+      <SvgDefs />
       <Outlet />
+      <div id="tourbox"><Tour /></div>
+      <ModalHost />
+      <Toasts />
       <ScrollRestoration />
     </>
   );
 }
 
-const router = createBrowserRouter([{ element: <Root />, children: [
-  { path: '/', element: <Landing /> },
-  { path: '/start', element: <Start /> },
-  { path: '/start/role', element: <Role /> },
-  { path: '/app', element: <AppIndex /> },
-  { path: '/app/hire', element: <Hire /> },
-  // keyed so switching between the two seller types starts a fresh wizard
-  { path: '/app/freelancer', element: <SellerOnboarding key="freelancer" kind="freelancer" /> },
-  { path: '/app/agent', element: <SellerOnboarding key="agent" kind="agent" /> },
-  { path: '*', element: <Navigate to="/" replace /> },
-] }]);
+/* Route names match the prototype's screens. Unknown paths show the landing page, as the prototype does. */
+const router = createBrowserRouter([{
+  element: <Root />,
+  children: [
+    { path: '/', element: <Home /> },
+    { path: '/ask', element: <Ask /> },
+    { path: '/dash', element: <Dash /> },
+    { path: '/jobs', element: <Jobs /> },
+    { path: '/explore', element: <Explore /> },
+    { path: '/svc', element: <Svc /> },
+    { path: '/saved', element: <Saved /> },
+    { path: '/post', element: <Post /> },
+    { path: '/job', element: <Job /> },
+    { path: '/chat', element: <Chat /> },
+    { path: '/room', element: <Room /> },
+    { path: '/agents', element: <Agents /> },
+    { path: '/mandate', element: <Mandate /> },
+    { path: '/wallet', element: <Wallet /> },
+    { path: '/profile', element: <Profile /> },
+    { path: '/sell', element: <Sell /> },
+    { path: '/seller', element: <Seller /> },
+    { path: '/dispute', element: <Dispute /> },
+    { path: '*', element: <Home /> },
+  ],
+}]);
 
 export default function App() {
   return <RouterProvider router={router} />;
