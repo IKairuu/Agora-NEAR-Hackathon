@@ -22,7 +22,7 @@ AI agents are starting to hire on people's behalf, but the markets they enter we
 
 <br/>
 
-<img src="assets/pitch-deck/01.png" alt="Pay only when the tests pass. People and AI agents hire each other for small software jobs. The USDC waits in a NEAR contract until the locked tests pass." width="900" />
+<img src="assets/pitch-deck/01.png" alt="AGORA. Pay only when the tests pass. A search bar with a job request, and three live events: tests locked, a bait offer held, 32 USDC released after 2 of 3 reviewers approved." width="900" />
 
 </div>
 
@@ -45,17 +45,15 @@ AI agents are starting to hire on people's behalf, but the markets they enter we
 8. [NEAR Tools Used](#near-tools-used)
 9. [Business Model](#business-model)
 10. [How AGORA Is Different](#how-agora-is-different)
-11. [Pass Marks, Fixed Before Building](#pass-marks-fixed-before-building)
+11. [Evidence and Status](#evidence-and-status)
 12. [Limitations and Next Steps](#limitations-and-next-steps)
 13. [Architecture](#architecture)
-14. [On-Chain](#on-chain)
-15. [Repository Contents](#repository-contents)
-16. [Run the App](#run-the-app)
-17. [Status](#status)
-18. [Disclosures](#disclosures)
-19. [Team](#team)
-20. [References](#references)
-21. [License](#license)
+14. [Repository Contents](#repository-contents)
+15. [Run the App](#run-the-app)
+16. [Disclosures](#disclosures)
+17. [Team](#team)
+18. [References](#references)
+19. [License](#license)
 
 </details>
 
@@ -235,7 +233,19 @@ AGORA runs as an autonomous business. On every release the contract sends a **2%
 
 ## How AGORA Is Different
 
-From public documentation (✓ present, – absent or not documented). The comparison is about scope, not quality: the others work at scale today, while AGORA's column is a plan until the pass marks are measured.
+**AGORA is the only approach in the comparison that puts agents on both sides of a job and releases payment only when locked tests pass.**
+
+- **Upwork and Fiverr** have escrow and competing bids. They have no agents, no test-based release, and payments can still be reversed.
+- **Crypto freelance markets (LaborX)** add final payment on-chain, but release still depends on the client, and supply outruns demand.
+- **Agent payment protocols (AP2, x402)** let one agent pay one merchant within limits. They have no market, no bids and no check on the work.
+- **Kleros Escrow** has decentralised jurors, but needs written criteria and has no agents or price checks.
+
+AGORA combines all of these: agents and humans on both sides, spending limits in the contract, a bid price check, test-based release by independent reviewers, and DAO disputes. The comparison is about scope, not quality: the others work at scale today, while AGORA's column is a plan until the pass marks are measured.
+
+<details>
+<summary><b>Full feature comparison</b> (from public documentation)</summary>
+
+<br/>
 
 | Feature | Upwork, Fiverr | Crypto freelance (LaborX) | Agent pay protocols (AP2, x402) | Kleros Escrow | **AGORA** |
 |---|:---:|:---:|:---:|:---:|:---:|
@@ -250,13 +260,31 @@ From public documentation (✓ present, – absent or not documented). The compa
 | Decentralised disputes | – | – | – | ✓ | ✓ |
 | Payment final after release | – | ✓ | ✓ | ✓ | ✓ |
 
-AGORA's claim is the combination: no existing approach puts agents on both sides of a job and also ties release to a locked, machine-checked definition of done.
+✓ present · – absent or not documented. Full table and sources in the [project paper](docs/AGORA_Paper.pdf), Table 12.
+
+</details>
 
 ---
 
-## Pass Marks, Fixed Before Building
+## Evidence and Status
 
-These targets were written into the [project paper](docs/AGORA_Paper.pdf) on 7 November 2026, before any marketplace code. Results will be published here, failures included.
+What is built, what will be measured, and where to verify it on-chain. Every result will be published here, failures included.
+
+### Status
+
+| Part | State |
+|---|---|
+| Web app (all screens, scripted demo) | ✅ In this repo, on sample data |
+| Database schema (Prisma, Supabase) | ✅ In this repo, with the first migration |
+| Agent workflows (n8n) | ✅ In this repo |
+| NestJS API modules | 🚧 Scaffolded |
+| Rust market contract (escrow, limits, disputes, reputation) | 🚧 Extends the team's tested payroll vault |
+| Live chain calls from the app | 🚧 Planned |
+| Hosted demo and demo video | 🚧 Before 14 Nov |
+
+### Pass Marks, Fixed Before Building
+
+These targets were written into the [project paper](docs/AGORA_Paper.pdf) on 7 November 2026, before any marketplace code.
 
 | # | Test | Target | Result |
 |---|---|---|---|
@@ -268,6 +296,18 @@ These targets were written into the [project paper](docs/AGORA_Paper.pdf) on 7 N
 | P6 | Reproducibility | One command runs P1 to P5 and P7 in <10 min | pending |
 | P7 | 40 seeded bids (20 lures or far-off prices) | ≥18/20 lures held, ≤2/20 normal held | pending |
 | P8 | Outside teams | ≥3 jobs from ≥2 outside buyers, with explorer links | pending |
+
+### On-Chain
+
+> These fill in as each piece is deployed. Every link goes to a NEAR explorer.
+
+| What | Account or transaction |
+|---|---|
+| Market contract (testnet) | `TODO.testnet` |
+| Arbiter DAO (Sputnik, testnet) | `TODO.sputnik-dao.testnet` |
+| Example job: funded → released | `TODO tx link` |
+| Out-of-mandate call rejected (P1) | `TODO tx link` |
+| Real mainnet NEAR Intents pay-in (1 to 2 USDC) | `TODO tx link` |
 
 ---
 
@@ -298,20 +338,6 @@ These targets were written into the [project paper](docs/AGORA_Paper.pdf) on 7 N
 | Test runner | A throwaway Docker container per delivery |
 | Chain | Rust contract on NEAR, native USDC (NEP-141), near-api-js |
 | Wallet and login | Email code, passkey or Google sign-in with a relayer; NEAR Wallet Selector optional |
-
----
-
-## On-Chain
-
-> These fill in as each piece is deployed. Every link goes to a NEAR explorer.
-
-| What | Account or transaction |
-|---|---|
-| Market contract (testnet) | `TODO.testnet` |
-| Arbiter DAO (Sputnik, testnet) | `TODO.sputnik-dao.testnet` |
-| Example job: funded → released | `TODO tx link` |
-| Out-of-mandate call rejected (P1) | `TODO tx link` |
-| Real mainnet NEAR Intents pay-in (1 to 2 USDC) | `TODO tx link` |
 
 ---
 
@@ -384,20 +410,6 @@ Import each JSON file in [`agents/`](agents) into n8n (**Workflows → Import fr
 
 ---
 
-## Status
-
-| Part | State |
-|---|---|
-| Web app (all screens, scripted demo) | ✅ In this repo, on sample data |
-| Database schema (Prisma, Supabase) | ✅ In this repo, with the first migration |
-| Agent workflows (n8n) | ✅ In this repo |
-| NestJS API modules | 🚧 Scaffolded |
-| Rust market contract (escrow, limits, disputes, reputation) | 🚧 Extends the team's tested payroll vault |
-| Live chain calls from the app | 🚧 Planned |
-| Hosted demo and demo video | 🚧 Before 14 Nov |
-
----
-
 ## Disclosures
 
 - **Prior work.** Two pieces come from the team's earlier work on NEAR testnet: a Rust vault contract with per-payment and daily caps, an approved-member list and pause, and a custom n8n node that signs and sends NEAR transactions. AGORA's contract extends the vault. Everything else was written during the hackathon window.
@@ -408,6 +420,13 @@ Import each JSON file in [`agents/`](agents) into n8n (**Workflows → Import fr
 ---
 
 ## Team
+
+**Eight members, one team,** led by project manager **Jhon Lloyd M. Valencia**. The roles cover AI engineering, UI/UX design, frontend, backend, research, the smart contract, and QA and the demo.
+
+<details>
+<summary><b>Members and roles</b></summary>
+
+<br/>
 
 | Name | Role |
 |---|---|
@@ -420,9 +439,18 @@ Import each JSON file in [`agents/`](agents) into n8n (**Workflows → Import fr
 | **Leanne Elech P. Rosales** | *Role to be confirmed* |
 | **Raphael Augustin V. Dator** | *Role to be confirmed* |
 
+</details>
+
 ---
 
 ## References
+
+**AGORA's design rests on published evidence, not guesses.** Each design rule traces back to a source: Microsoft's Magentic Marketplace study (first-offer bias, manipulation), labour-market research (new sellers struggle to get hired; trust can push users off-platform), freelancer surveys and platform filings (non-payment, fees, chargebacks), and NEAR's own documentation for each tool. The project paper lists all 43 sources.
+
+<details>
+<summary><b>Key sources</b></summary>
+
+<br/>
 
 - Bansal, G., et al. (2025). *Magentic Marketplace: An open-source environment for studying agentic markets.* Microsoft Research.
 - Freelancers Union. (2022, May 12). Over 60% of NY freelancers report non-payment (press release).
@@ -434,6 +462,8 @@ Import each JSON file in [`agents/`](agents) into n8n (**Workflows → Import fr
 - NEAR documentation: access keys (function-call keys), NEP-141, NEP-171, Sputnik DAO, NEAR Intents.
 
 The full list is in the [project paper](docs/AGORA_Paper.pdf).
+
+</details>
 
 ---
 
