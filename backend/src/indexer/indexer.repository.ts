@@ -20,6 +20,24 @@ const today = (): Date => new Date(new Date().toISOString().slice(0, 10));
 
 const MONEY_TX = { timeout: 20_000, maxWait: 10_000 };
 
+export const MANDATE_DEFAULTS = {
+    perJobCap: 50,
+    dailyCap: 120,
+    newSellerCap: 25,
+    reviewWindowHours: 12,
+    allowedCategories: ['rust', 'fe', 'tests'],
+    strictSellers: false,
+};
+
+export interface MandateInput {
+    perJobCap: number;
+    dailyCap: number;
+    newSellerCap: number;
+    reviewWindowHours: number;
+    allowedCategories: string[];
+    strictSellers: boolean;
+}
+
 const sameDay = (a: Date | null): boolean => a !== null && a.toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10);
 
 @Injectable()
@@ -123,6 +141,89 @@ export class IndexerRepository {
             if (job.seller) await this.syncReputation(tx, job.seller.id, job.seller.nearAccountId);
             return { jobId: job.id, amount: Number(milestone.amount) };
         }, MONEY_TX);
+    }
+
+    async getFundingContext(key: JobRef) {
+        return prisma.job.findFirst({
+            where: key,
+            select: {
+                id: true, status: true, category: true, agreedPrice: true, buyerId: true,
+                buyer: {
+                    select: {
+                        nearAccountId: true,
+                        mandate: { select: { perJobCap: true, dailyCap: true, newSellerCap: true, allowedCategories: true, strictSellers: true, paused: true } },
+                        approvedSellers: { select: { sellerId: true } },
+                    },
+                },
+                seller: { select: { id: true, nearAccountId: true } },
+                acceptedBid: { select: { fraudScore: true, priceCheck: true, ownerApprovedRisk: true } },
+            },
+        });
+    }
+
+    async getBalance(accountId: string) {
+        return prisma.balance.findUnique({ where: { accountId }, select: { available: true, escrowed: true, spentToday: true, dayStarted: true } });
+    }
+
+    async getSettledJobs(accountId: string) {
+        const rep = await prisma.reputation.findUnique({ where: { accountId }, select: { settledJobs: true } });
+        return rep?.settledJobs ?? 0;
+    }
+
+    async findOwner(accountId: string) {
+        return prisma.profile.findFirst({ where: { OR: [{ nearAccountId: accountId }, { agentsAccountId: accountId }] }, select: { id: true, nearAccountId: true } });
+    }
+
+    async deposit(accountId: string, profileId: string | null, amount: number, startBalance: number) {
+        return prisma.$transaction(async (tx) => {
+            const row = await tx.balance.findUnique({ where: { accountId }, select: { accountId: true } });
+            const add = new Prisma.Decimal(amount);
+            return tx.balance.upsert({
+                where: { accountId },
+                create: { accountId, profileId, available: row ? add : add.add(startBalance), syncedAt: new Date() },
+                update: { available: { increment: add }, syncedAt: new Date() },
+                select: { available: true, escrowed: true },
+            });
+        }, MONEY_TX);
+    }
+
+    async withdraw(accountId: string, amount: number) {
+        return prisma.$transaction(async (tx) => {
+            const updated = await tx.balance.updateMany({
+                where: { accountId, available: { gte: amount } },
+                data: { available: { decrement: amount }, syncedAt: new Date() },
+            });
+            return updated.count;
+        }, MONEY_TX);
+    }
+
+    async setMandate(ownerId: string, m: MandateInput, approvedAccounts: string[], txHash: string) {
+        return prisma.$transaction(async (tx) => {
+            const data = { ...m, lastTxHash: txHash, syncedAt: new Date() };
+            const row = await tx.mandate.upsert({ where: { ownerId }, create: { ownerId, ...data }, update: data, select: { ownerId: true } });
+            const sellers = await tx.seller.findMany({ where: { nearAccountId: { in: approvedAccounts } }, select: { id: true } });
+            await tx.approvedSeller.deleteMany({ where: { ownerId, sellerId: { notIn: sellers.map((x) => x.id) } } });
+            for (const seller of sellers) {
+                await tx.approvedSeller.upsert({
+                    where: { ownerId_sellerId: { ownerId, sellerId: seller.id } },
+                    create: { ownerId, sellerId: seller.id, addedTx: txHash, addedAt: new Date() },
+                    update: {},
+                });
+            }
+            return row;
+        }, MONEY_TX);
+    }
+
+    async setPaused(ownerId: string, paused: boolean, by: string, txHash: string) {
+        return prisma.$transaction(async (tx) => {
+            const data = { paused, pausedBy: paused ? by : null, pausedAt: paused ? new Date() : null, lastTxHash: txHash, syncedAt: new Date() };
+            return tx.mandate.upsert({
+                where: { ownerId },
+                create: { ownerId, ...MANDATE_DEFAULTS, ...data },
+                update: data,
+                select: { ownerId: true },
+            });
+        });
     }
 
     private async escrow(tx: Tx, accountId: string, profileId: string, amount: Prisma.Decimal, startBalance: number) {
