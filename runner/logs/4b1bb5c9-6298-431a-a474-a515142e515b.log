@@ -1,0 +1,147 @@
+run 4b1bb5c9-6298-431a-a474-a515142e515b
+repo file:///src/j1042
+base 8e35f67d5392c9e0f816beb09841fd9cfaef0fdd
+commit 6302a753d9b25ba62c392cb69ccce2cd048d2f4a
+
+=== step clone (network on) ===
+=== exit 0 in 437 ms ===
+
+=== step checkout (network off) ===
+=== exit 0 in 145 ms ===
+
+=== step build (network off) ===
+   Compiling payroll-vault v0.1.0 (/work/repo)
+    Finished `release` profile [optimized] target(s) in 0.23s
+=== exit 0 in 465 ms ===
+
+=== step test (network off) ===
+   Compiling payroll-vault v0.1.0 (/work/repo)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.56s
+     Running unittests src/lib.rs (/work/target/debug/deps/payroll_vault-ab80ca101d832c94)
+
+running 25 tests
+test fees::tests::fee_on_round_amount ... ok
+test fees::tests::fee_on_zero ... ok
+test fees::tests::fee_rounds_down ... ok
+test fees::tests::fee_split_adds_up ... ok
+test fees::tests::fee_split_two_percent ... ok
+test fees::tests::net_after_fee_value ... ok
+test ledger::tests::deposit_adds ... ok
+test ledger::tests::deposit_zero_rejected ... ok
+test ledger::tests::lock_moves_to_escrow ... ok
+test ledger::tests::refund_returns_to_owner ... ok
+test ledger::tests::release_pays_seller ... ok
+test ledger::tests::release_twice_fails ... ok
+test ledger::tests::withdraw_insufficient ... ok
+test split::tests::even_split ... ok
+test ledger::tests::withdraw_subtracts ... ok
+test split::tests::no_workers_rejected ... ok
+test split::tests::single_worker_gets_all ... ok
+test split::tests::zero_total ... ok
+test split::tests::zero_weight_rejected ... ok
+test units::tests::format_fraction ... ok
+test units::tests::parse_rejects_bad_input ... ok
+test units::tests::format_whole ... ok
+test units::tests::parse_short_fraction ... ok
+test units::tests::to_units_basic ... ok
+test units::tests::to_units_rejects_overflowing_micros ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/split_rounding.rs (/work/target/debug/deps/split_rounding-c8121f731310199e)
+
+running 2 tests
+test test_split_dust_to_last ... ok
+test test_split_rounding ... ok
+
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/vault.rs (/work/target/debug/deps/vault-d7f7901b1f6fc4af)
+
+running 6 tests
+test cannot_overdraw_after_lock ... ok
+test fee_then_split_even ... ok
+test parse_and_format_round_trip ... ok
+test refund_restores_buyer ... ok
+test fund_and_release_full_job ... ok
+test split_two_workers_even ... ok
+
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+   Doc-tests payroll_vault
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== exit 0 in 1781 ms ===
+
+=== step baseline-checkout (network off) ===
+=== exit 0 in 141 ms ===
+
+=== step baseline (network off) ===
+   Compiling payroll-vault v0.1.0 (/work/repo)
+    Finished `test` profile [unoptimized + debuginfo] target(s) in 1.47s
+     Running unittests src/lib.rs (/work/target/debug/deps/payroll_vault-ab80ca101d832c94)
+
+running 25 tests
+test fees::tests::fee_on_round_amount ... ok
+test fees::tests::fee_on_zero ... ok
+test fees::tests::fee_rounds_down ... ok
+test fees::tests::fee_split_adds_up ... ok
+test fees::tests::fee_split_two_percent ... ok
+test fees::tests::net_after_fee_value ... ok
+test ledger::tests::deposit_adds ... ok
+test ledger::tests::deposit_zero_rejected ... ok
+test ledger::tests::lock_moves_to_escrow ... ok
+test ledger::tests::refund_returns_to_owner ... ok
+test ledger::tests::release_pays_seller ... ok
+test ledger::tests::release_twice_fails ... ok
+test ledger::tests::withdraw_insufficient ... ok
+test ledger::tests::withdraw_subtracts ... ok
+test split::tests::even_split ... ok
+test split::tests::no_workers_rejected ... ok
+test split::tests::single_worker_gets_all ... ok
+test split::tests::zero_total ... ok
+test split::tests::zero_weight_rejected ... ok
+test units::tests::format_fraction ... ok
+test units::tests::format_whole ... ok
+test units::tests::parse_rejects_bad_input ... ok
+test units::tests::parse_short_fraction ... ok
+test units::tests::to_units_basic ... ok
+test units::tests::to_units_rejects_overflowing_micros ... ok
+
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+     Running tests/split_rounding.rs (/work/target/debug/deps/split_rounding-c8121f731310199e)
+
+running 2 tests
+test test_split_dust_to_last ... FAILED
+test test_split_rounding ... FAILED
+
+failures:
+
+---- test_split_dust_to_last stdout ----
+
+thread 'test_split_dust_to_last' panicked at tests/split_rounding.rs:13:5:
+assertion `left == right` failed
+  left: [42, 28, 28]
+ right: [42, 28, 30]
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+---- test_split_rounding stdout ----
+
+thread 'test_split_rounding' panicked at tests/split_rounding.rs:7:5:
+assertion `left == right` failed
+  left: 999999
+ right: 1000000
+
+
+failures:
+    test_split_dust_to_last
+    test_split_rounding
+
+test result: FAILED. 0 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test split_rounding`
+=== exit 101 in 1785 ms ===

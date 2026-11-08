@@ -1,0 +1,63 @@
+run 7e3358d7-2e01-4398-bb2b-bef6b2b3731c
+repo file:///src/split
+base 61b0164ccc96dbd5ac1fedd89e291921107980ac
+commit 89d09bc
+
+=== step clone (network on) ===
+=== exit 0 in 1406 ms ===
+
+=== step checkout (network off) ===
+=== exit 0 in 540 ms ===
+
+=== step build (network off) ===
+=== exit 0 in 815 ms ===
+
+=== step test (network off) ===
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+.
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+=== exit 0 in 987 ms ===
+
+=== step baseline-checkout (network off) ===
+=== exit 0 in 252 ms ===
+
+=== step baseline (network off) ===
+
+running 0 tests
+
+test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+
+running 1 test
+test_split_rounding --- FAILED
+
+failures:
+
+---- test_split_rounding stdout ----
+
+thread 'test_split_rounding' panicked at tests/split.rs:6:5:
+assertion `left == right` failed
+  left: 999999
+ right: 1000000
+note: run with `RUST_BACKTRACE=1` environment variable to display a backtrace
+
+
+failures:
+    test_split_rounding
+
+test result: FAILED. 0 passed; 1 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s
+
+error: test failed, to rerun pass `--test split`
+=== exit 101 in 1207 ms ===
