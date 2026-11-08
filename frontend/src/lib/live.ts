@@ -64,12 +64,12 @@ export function leaveLive(): void {
   replace(SPEC, clone(SNAP.SPEC)); replace(OTHER_JOBS, clone(SNAP.OTHER)); replace(DONE_JOBS, clone(SNAP.DONE));
   replace(BIDS, clone(SNAP.BIDS)); replace(HELD as unknown as unknown[], clone(SNAP.HELD)); replace(ARRIVE, clone(SNAP.ARRIVE)); replace(REVIEWERS, clone(SNAP.REVIEWERS));
   setLiveOpenJobs(null);
-  setState({ live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] } });
+  setState({ live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null });
 }
 
 async function refreshAll(first: boolean): Promise<void> {
   if (!isLive()) return;
-  await Promise.allSettled([loadJobs(first), loadOrders(), loadNotes(), loadOpenJobs(), loadThreads()]);
+  await Promise.allSettled([loadJobs(first), loadOrders(), loadNotes(), loadOpenJobs(), loadThreads(), loadMoney()]);
   await loadCurrentJob();
   setState({});
 }
@@ -386,4 +386,70 @@ export async function liveDeliver(ref: string): Promise<void> {
     ? `Delivery ${res.attempt} submitted for ${ref}. The locked tests are running. ${res.attemptsLeft} attempt${res.attemptsLeft === 1 ? '' : 's'} left.`
     : `Delivery ${res.attempt} saved for ${ref}, but the test runner is not reachable right now.`, res.runner === 'queued' ? undefined : 'hold');
   await refreshAll(false);
+}
+
+async function loadMoney(): Promise<void> {
+  const [wallet, limits] = await Promise.all([
+    api<{ available: number; escrowed: number; usedToday: number }>('/wallet/v1', { quiet: true }).catch(() => null),
+    api<{ paused: boolean }>('/mandates/v1', { quiet: true }).catch(() => null),
+  ]);
+  if (!wallet) return;
+  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused) } });
+}
+
+const usdcIn = (id: string): number | undefined => {
+  const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
+  const n = Number((el?.value ?? '').replace(/[^\d.]/g, ''));
+  return n > 0 ? n : undefined;
+};
+
+/** Saves the Limits page through set_mandate. Reads the inputs as they are on screen. */
+export async function liveSaveMandate(): Promise<void> {
+  const s = getState();
+  const hours = usdcIn('m-win');
+  const body = {
+    per_job_cap: usdcIn('m-job'),
+    daily_cap: usdcIn('m-day'),
+    new_seller_cap: usdcIn('m-new'),
+    review_window_hours: hours && [6, 12, 24].includes(hours) ? hours : undefined,
+    categories: Object.keys(s.cats).filter((k) => s.cats[k]),
+    strict: s.strict,
+  };
+  const res = await api<{ txHash: string }>('/mandates/v1', { method: 'PATCH', body }).catch(() => null);
+  if (res) { toast(`Limits saved on-chain with your full-access key (tx ${shortHash(res.txHash)}).`); await refreshAll(false); }
+}
+
+export async function livePause(): Promise<void> {
+  const res = await api('/mandates/v1/pause', { body: {} }).catch(() => null);
+  if (res) { toast('All agents paused. Funding and release calls are stopped.', 'block'); await refreshAll(false); }
+}
+
+export async function liveUnpause(): Promise<boolean> {
+  const res = await api('/mandates/v1/unpause', { body: {} }).catch(() => null);
+  if (!res) return false;
+  toast('Agents are active again.');
+  await refreshAll(false);
+  return true;
+}
+
+export async function liveWithdraw(): Promise<void> {
+  const amount = Number((window.prompt('Withdraw how many USDC?', '') ?? '').replace(/[^\d.]/g, ''));
+  if (!amount) return;
+  const res = await api('/wallet/v1/withdraw', { body: { amount } }).catch(() => null);
+  if (res) { toast(`${amount.toFixed(2)} USDC withdrawn with your full-access key.`); await refreshAll(false); }
+}
+
+/** Mock chain only: adds test USDC so jobs can be funded. */
+export async function liveAddFunds(): Promise<void> {
+  const amount = Number((window.prompt('Add how many test USDC?', '100') ?? '').replace(/[^\d.]/g, ''));
+  if (!amount) return;
+  const res = await api('/wallet/v1/deposit', { body: { amount } }).catch(() => null);
+  if (res) { toast(`${amount.toFixed(2)} test USDC added.`); await refreshAll(false); }
+}
+
+export async function liveRate(stars: number): Promise<void> {
+  const ref = getState().liveJob?.ref;
+  if (!ref) { toast('Open a paid job first.', 'hold'); return; }
+  const res = await api('/reputation/v1/ratings', { body: { job_id: ref, stars } }).catch(() => null);
+  if (res) toast(`${stars} star${stars > 1 ? 's' : ''} saved on ${ref}.`);
 }

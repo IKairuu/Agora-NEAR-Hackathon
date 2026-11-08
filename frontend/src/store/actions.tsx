@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { goLive, isLive, leaveLive, liveAttachRepo, liveBundle, liveDeliver, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
+import { goLive, isLive, leaveLive, liveAddFunds, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -280,14 +280,14 @@ export const act = {
   fund: () => hire(getState().hire || 'patchsmith'),
   send: () => openModal('send'),
   receive: () => openModal('receive'),
-  addfunds: () => openModal('addfunds'),
+  addfunds: () => { if (isLive()) { void liveAddFunds(); return; } openModal('addfunds'); },
   dispute: () => openModal('dispute'),
   unpause: () => openModal('unpause'),
   overcap: () => toast(<><b>Rejected by contract.</b> fund_job 400.00 USDC is over your per-job cap of 50.00. 0 USDC moved.</>, 'block', 5200),
   wrongcat: () => toast(<><b>Rejected by contract.</b> Category "Design" is not on your allowed list.</>, 'block'),
   withdraw: () => toast(<><b>Rejected by NEAR.</b> The agent key has no permission to call withdraw.</>, 'block'),
   deletekey: () => toast('Deleting a key needs your full-access key. You would confirm with Google sign-in here.', 'hold'),
-  withdrawme: () => toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
+  withdrawme: () => isLive() ? void liveWithdraw() : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
   send2: () => { closeModal(); toast('In the prototype nothing is sent. On testnet this is a full-access key transfer.', 'hold'); },
   copyacct: () => { try { void navigator.clipboard.writeText(ME.acct); } catch { /* ignore */ } toast('Copied lumen.testnet.'); },
   intents: () => toast('Quote refreshed: 100.00 USDC on Base becomes 99.71 USDC on NEAR.'),
@@ -315,6 +315,7 @@ export const act = {
   rate: () => {
     const n = getState().stars;
     if (!n) { toast('Pick 1 to 5 stars first.', 'hold'); return; }
+    if (isLive()) { void liveRate(n); return; }
     toast(`${n} star${n > 1 ? 's' : ''} saved. The rating is tied to settled job J-1042.`);
   },
   /** The evidence bundle: spec, commits, test logs and votes in one JSON file. */
@@ -349,9 +350,9 @@ export const act = {
     };
     setTimeout(tick, 550);
   },
-  pause: () => { setState((s) => ({ stage: Math.max(s.stage, 8) })); toast('All agents paused. Funding and release calls are stopped.', 'block'); },
-  unpause2: () => { setState({ modal: null, stage: 7, attack: null }); toast('Key rotated. Agents are active again.'); },
-  savemandate: () => toast('Limits saved on-chain with your full-access key.'),
+  pause: () => { if (isLive()) { void livePause(); return; } setState((s) => ({ stage: Math.max(s.stage, 8) })); toast('All agents paused. Funding and release calls are stopped.', 'block'); },
+  unpause2: () => { if (isLive()) { void liveUnpause().then((ok) => { if (ok) setState({ modal: null, attack: null }); }); return; } setState({ modal: null, stage: 7, attack: null }); toast('Key rotated. Agents are active again.'); },
+  savemandate: () => { if (isLive()) { void liveSaveMandate(); return; } toast('Limits saved on-chain with your full-access key.'); },
   publishseller: () => {
     if (isLive()) { void livePublishSeller().then((ok) => { if (ok) { setState({ sellStep: 0 }); go('seller'); } }); return; }
     setState({ seller: true, sellStep: 0 }); go('seller'); toast('Seller profile published. Your bidding agent is watching matching jobs.');

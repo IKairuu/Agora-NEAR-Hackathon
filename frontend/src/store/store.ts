@@ -42,6 +42,8 @@ export interface State {
   liveJob: { id: string; ref: string } | null;
   liveThreads: Thread[];
   notes: { unread: number; items: LiveNote[] };
+  /** Live balances and pause state from the wallet and limits API. */
+  money: { available: number; escrowed: number; usedToday: number; paused: boolean } | null;
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
 }
 
@@ -70,7 +72,7 @@ let state: State = {
   who: 'patchsmith', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: null,
-  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] },
+  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
   modal: null,
 };
 
@@ -94,9 +96,9 @@ export const hb = (s: State): Bid => BIDS.find((b) => b.key === s.hire) || BIDS[
 /** patchsmith's price drops to the negotiated one once the agent has negotiated. */
 export const priceOf = (s: State, b: Bid) => (b.key === 'patchsmith' && s.stage >= 4 && !s.preNeg ? b.final : b.price);
 export const hPrice = (s: State) => priceOf(s, hb(s));
-export const free = (s: State) => (s.stage >= 5 ? 120 - hPrice(s) : s.stage >= 1 ? 120 : 0);
-export const escrow = (s: State) => (s.stage >= 5 && s.stage < 7 ? hPrice(s) : 0);
-export const paused = (s: State) => s.stage >= 8;
+export const free = (s: State) => (s.live && s.money ? s.money.available : s.stage >= 5 ? 120 - hPrice(s) : s.stage >= 1 ? 120 : 0);
+export const escrow = (s: State) => (s.live && s.money ? s.money.escrowed : s.stage >= 5 && s.stage < 7 ? hPrice(s) : 0);
+export const paused = (s: State) => (s.live ? Boolean(s.money?.paused) : s.stage >= 8);
 
 /* ---------------- toasts ---------------- */
 export interface Toast { id: number; msg: ReactNode; kind: 'ok' | 'hold' | 'block' }
