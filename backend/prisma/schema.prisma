@@ -79,6 +79,11 @@ enum JobStatus {
   refunded
   disputed
   cancelled
+  agreed
+  delivered
+  reviewed
+  released
+  expired
 
   @@map("job_status")
   @@schema("public")
@@ -150,6 +155,8 @@ enum CheckWeight {
 enum DisputeStatus {
   open
   voting
+  recheck
+  escalated
   resolved
 
   @@map("dispute_status")
@@ -184,6 +191,66 @@ enum TxStatus {
   @@schema("public")
 }
 
+enum HireOfferStatus {
+  sent
+  accepted
+  declined
+
+  @@map("hire_offer_status")
+  @@schema("public")
+}
+
+enum MessageSender {
+  agent
+  owner
+  seller
+  system
+
+  @@map("message_sender")
+  @@schema("public")
+}
+
+enum ReviewRunStatus {
+  queued
+  running
+  done
+  failed
+
+  @@map("review_run_status")
+  @@schema("public")
+}
+
+enum ThumbKind {
+  test
+  contract
+  coverage
+  browser
+  csv
+  upgrade
+  diff
+  audit
+
+  @@map("thumb_kind")
+  @@schema("public")
+}
+
+enum GigTone {
+  night
+  paper
+  grad
+
+  @@map("gig_tone")
+  @@schema("public")
+}
+
+enum SavedKind {
+  service
+  seller
+
+  @@map("saved_kind")
+  @@schema("public")
+}
+
 // ─────────────────────────────────────────────────────────────────────────
 // 1. Identity
 // ─────────────────────────────────────────────────────────────────────────
@@ -209,6 +276,9 @@ model Profile {
   isBusiness      Boolean @default(false) @map("is_business")
   location        String?
   bio             String?
+  role            String?
+  mode            String?
+  theme           String?
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -224,6 +294,12 @@ model Profile {
   agentEvents     AgentEvent[]
   guardianAlerts  GuardianAlert[]
   disputesOpened  Dispute[]
+  threadsAsBuyer  Thread[]         @relation("ThreadBuyer")
+  messagesSent    Message[]        @relation("MessageSenderProfile")
+  notifications   Notification[]   @relation("NotificationUser")
+  sellerProfile   SellerProfile?
+  services        Service[]
+  savedItems      SavedItem[]
 
   @@map("profiles")
   @@schema("public")
@@ -284,6 +360,11 @@ model Seller {
   bids              Bid[]
   deliveries        Delivery[]
   completionRecords CompletionRecord[]
+  hireOffers        HireOffer[]
+  threads           Thread[]
+  sellerProfile     SellerProfile?
+  services          Service[]
+  savedBy           SavedItem[]
 
   @@index([ownerId])
   @@map("sellers")
@@ -393,6 +474,8 @@ model Job {
   search          Unsupported("tsvector")?
   /// pgvector embedding for semantic search. Query it with $queryRaw.
   embedding       Unsupported("vector(1536)")?
+  visibility      String                       @default("public")
+  serviceId       String?                      @map("service_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
@@ -412,6 +495,8 @@ model Job {
   completionRecords   CompletionRecord[]
   chainTxs            ChainTx[]
   agentEvents         AgentEvent[]
+  hireOffers          HireOffer[]
+  threads             Thread[]
 
   @@index([buyerId])
   @@index([status])
@@ -449,11 +534,13 @@ model AcceptanceSpec {
   approvedAt   DateTime? @map("approved_at") @db.Timestamptz(6)
   lockedAt     DateTime? @map("locked_at") @db.Timestamptz(6)
   lockTx       String?   @map("lock_tx")
+  holdoutHash  String?   @map("holdout_hash")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  job    Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
-  checks SpecCheck[]
+  job     Job         @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  checks  SpecCheck[]
+  holdout Holdout?
 
   @@unique([jobId, version])
   @@map("acceptance_specs")
@@ -587,21 +674,25 @@ model Milestone {
 }
 
 model Delivery {
-  id          String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  milestoneId String         @map("milestone_id") @db.Uuid
-  attempt     Int            @default(1) @db.SmallInt
-  sellerId    String         @map("seller_id") @db.Uuid
-  commitSha   String         @map("commit_sha")
-  repoUrl     String         @map("repo_url")
-  status      DeliveryStatus @default(submitted)
-  diffStats   Json?          @map("diff_stats") @db.JsonB
-  submitTx    String?        @map("submit_tx")
+  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  milestoneId  String         @map("milestone_id") @db.Uuid
+  attempt      Int            @default(1) @db.SmallInt
+  sellerId     String         @map("seller_id") @db.Uuid
+  commitSha    String         @map("commit_sha")
+  repoUrl      String         @map("repo_url")
+  status       DeliveryStatus @default(submitted)
+  diffStats    Json?          @map("diff_stats") @db.JsonB
+  submitTx     String?        @map("submit_tx")
+  verdict      String?
+  reason       String?
+  filesTouched String[]       @default([]) @map("files_touched")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  milestone Milestone      @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
-  seller    Seller         @relation(fields: [sellerId], references: [id], onDelete: Cascade)
-  votes     ReviewerVote[]
+  milestone  Milestone      @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
+  seller     Seller         @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  votes      ReviewerVote[]
+  reviewRuns ReviewRun[]
 
   @@unique([milestoneId, attempt])
   @@map("deliveries")
@@ -621,11 +712,13 @@ model ReviewerVote {
   model           String?
   durationMs      Int?    @map("duration_ms")
   voteTx          String? @map("vote_tx")
+  reviewRunId     String? @map("review_run_id") @db.Uuid
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  delivery      Delivery @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
-  reviewerAgent Agent    @relation(fields: [reviewerAgentId], references: [id])
+  delivery      Delivery   @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  reviewerAgent Agent      @relation(fields: [reviewerAgentId], references: [id])
+  reviewRun     ReviewRun? @relation(fields: [reviewRunId], references: [id], onDelete: SetNull)
 
   @@unique([deliveryId, reviewerAgentId])
   @@map("reviewer_votes")
@@ -644,6 +737,9 @@ model Dispute {
   sellerAmount  Decimal?       @map("seller_amount") @db.Decimal(20, 6)
   buyerAmount   Decimal?       @map("buyer_amount") @db.Decimal(20, 6)
   resolveTx     String?        @map("resolve_tx")
+  bondAmount    Decimal?       @map("bond_amount") @db.Decimal(20, 6)
+  bondTx        String?        @map("bond_tx")
+  escalatedAt   DateTime?      @map("escalated_at") @db.Timestamptz(6)
   openedAt      DateTime       @default(now()) @map("opened_at") @db.Timestamptz(6)
   resolvedAt    DateTime?      @map("resolved_at") @db.Timestamptz(6)
 
@@ -795,5 +891,215 @@ model IndexerCursor {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
   @@map("indexer_cursor")
+  @@schema("public")
+}
+
+model HireOffer {
+  id       String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId    String          @map("job_id") @db.Uuid
+  bidId    String?         @map("bid_id") @db.Uuid
+  sellerId String          @map("seller_id") @db.Uuid
+  price    Decimal         @db.Decimal(20, 6)
+  status   HireOfferStatus @default(sent)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  job    Job    @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  seller Seller @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@index([sellerId])
+  @@map("hire_offers")
+  @@schema("public")
+}
+
+model Thread {
+  id            String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  jobId         String?   @map("job_id") @db.Uuid
+  buyerId       String    @map("buyer_id") @db.Uuid
+  sellerId      String?   @map("seller_id") @db.Uuid
+  title         String
+  lastMessageAt DateTime? @map("last_message_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  job      Job?      @relation(fields: [jobId], references: [id], onDelete: SetNull)
+  buyer    Profile   @relation("ThreadBuyer", fields: [buyerId], references: [id])
+  seller   Seller?   @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+  messages Message[]
+
+  @@index([buyerId])
+  @@index([sellerId])
+  @@map("threads")
+  @@schema("public")
+}
+
+model Message {
+  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  threadId        String        @map("thread_id") @db.Uuid
+  sender          MessageSender
+  senderProfileId String?       @map("sender_profile_id") @db.Uuid
+  body            String
+  cardType        String?       @map("card_type")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  thread        Thread   @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  senderProfile Profile? @relation("MessageSenderProfile", fields: [senderProfileId], references: [id], onDelete: SetNull)
+
+  @@index([threadId])
+  @@map("messages")
+  @@schema("public")
+}
+
+model Notification {
+  id     String  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId String  @map("user_id") @db.Uuid
+  kind   String
+  title  String
+  body   String?
+  link   String?
+  read   Boolean @default(false)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user Profile @relation("NotificationUser", fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("notifications")
+  @@schema("public")
+}
+
+model Holdout {
+  id          String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  specId      String @unique @map("spec_id") @db.Uuid
+  holdoutHash String @map("holdout_hash")
+  ciphertext  Bytes
+  keyId       String @map("key_id")
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  spec AcceptanceSpec @relation(fields: [specId], references: [id], onDelete: Cascade)
+
+  @@map("holdouts")
+  @@schema("public")
+}
+
+model ReviewRun {
+  id               String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  deliveryId       String          @map("delivery_id") @db.Uuid
+  round            Int             @default(1) @db.SmallInt
+  runId            String?         @map("run_id")
+  status           ReviewRunStatus @default(queued)
+  exitCode         Int?            @map("exit_code")
+  installExit      Int?            @map("install_exit")
+  baselineExitCode Int?            @map("baseline_exit_code")
+  scopeOk          Boolean?        @map("scope_ok")
+  changedFiles     String[]        @default([]) @map("changed_files")
+  logHash          String?         @map("log_hash")
+  logPath          String?         @map("log_path")
+  durationMs       Int?            @map("duration_ms")
+  error            String?
+  result           Json?           @db.JsonB
+  startedAt        DateTime        @default(now()) @map("started_at") @db.Timestamptz(6)
+  finishedAt       DateTime?       @map("finished_at") @db.Timestamptz(6)
+
+  delivery Delivery       @relation(fields: [deliveryId], references: [id], onDelete: Cascade)
+  votes    ReviewerVote[]
+
+  @@unique([deliveryId, round])
+  @@map("review_runs")
+  @@schema("public")
+}
+
+model CouncilMember {
+  id            String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  daoAccount    String   @map("dao_account")
+  nearAccountId String   @map("near_account_id")
+  role          String   @default("council")
+  excludedFor   String[] @default([]) @map("excluded_for")
+  active        Boolean  @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  @@unique([daoAccount, nearAccountId])
+  @@map("council_members")
+  @@schema("public")
+}
+
+model SellerProfile {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId         String    @unique @map("user_id") @db.Uuid
+  sellerId       String?   @unique @map("seller_id") @db.Uuid
+  step           Int       @default(0) @db.SmallInt
+  displayName    String?   @map("display_name")
+  initials       String?
+  country        String?
+  about          String?
+  langs          String[]  @default([])
+  experience     Json?     @db.JsonB
+  githubUsername String?   @map("github_username")
+  skills         String[]  @default([])
+  categories     String[]  @default([])
+  priceFrom      Decimal?  @map("price_from") @db.Decimal(20, 6)
+  days           Int?      @db.SmallInt
+  level          String    @default("New seller")
+  online         Boolean   @default(false)
+  stakeTx        String?   @map("stake_tx")
+  publishedAt    DateTime? @map("published_at") @db.Timestamptz(6)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  user   Profile @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seller Seller? @relation(fields: [sellerId], references: [id], onDelete: SetNull)
+
+  @@map("seller_profiles")
+  @@schema("public")
+}
+
+model Service {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  sellerId  String    @map("seller_id") @db.Uuid
+  title     String
+  thumb     ThumbKind
+  tone      GigTone
+  category  String
+  fromPrice Decimal   @map("from_price") @db.Decimal(20, 6)
+  days      Int       @db.SmallInt
+  prompt    String
+  active    Boolean   @default(true)
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user    Profile     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  seller  Seller      @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+  savedBy SavedItem[]
+
+  @@index([sellerId])
+  @@index([category])
+  @@map("services")
+  @@schema("public")
+}
+
+model SavedItem {
+  id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId    String    @map("user_id") @db.Uuid
+  kind      SavedKind
+  serviceId String?   @map("service_id") @db.Uuid
+  sellerId  String?   @map("seller_id") @db.Uuid
+
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  user    Profile  @relation(fields: [userId], references: [id], onDelete: Cascade)
+  service Service? @relation(fields: [serviceId], references: [id], onDelete: Cascade)
+  seller  Seller?  @relation(fields: [sellerId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, serviceId])
+  @@unique([userId, sellerId])
+  @@map("saved_items")
   @@schema("public")
 }

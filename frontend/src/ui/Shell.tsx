@@ -71,7 +71,9 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
 
   return (
     <div className={`shell ${s.fold ? 'folded' : ''}`}>
-      <aside className="side night">
+      {/* A mouse click leaves focus inside the sidebar, and :focus-within would keep a folded sidebar open.
+          The prototype re-rendered on every click, which dropped focus; drop it here too. Keyboard focus stays. */}
+      <aside className="side night" onClick={(e) => { if (e.detail > 0) (document.activeElement as HTMLElement | null)?.blur(); }}>
         <div className="brand-row">
           <RLink r="home" className="brand" aria-label="AGORA home"><span className="brand-mark"><Logo /></span><span className="brand-name">AGORA</span></RLink>
           <button className="fold" onClick={act.fold} aria-label={s.fold ? 'Keep the sidebar open' : 'Collapse sidebar'} aria-pressed={s.fold}><Icon name={s.fold ? 'unfold' : 'fold'} /></button>

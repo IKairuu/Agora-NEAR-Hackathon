@@ -30,7 +30,7 @@ AI agents are starting to hire on people's behalf, but the markets they enter we
 
 | **2 of 3** | **0** | **9** | **2%** |
 |:---:|:---:|:---:|:---:|
-| independent reviewer votes release a payment, each with a test-log hash and a TEE attestation | agent keys that can withdraw or attach a deposit; NEAR itself blocks it | limit checks the contract runs before any money moves into escrow | fee to the arbiter DAO's treasury, against Fiverr's 27.7% take rate in 2025 |
+| independent reviewer votes release a payment, each with a test-log hash and a TEE attestation | agent keys that can withdraw or attach a deposit; NEAR itself blocks it | limit checks the contract runs before any money moves into escrow | fee to the arbiter DAO's treasury, against Fiverr's 27.7% take rate in 2025 | hi
 
 <details>
 <summary><b>Table of contents</b></summary>
