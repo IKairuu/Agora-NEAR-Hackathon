@@ -1,40 +1,42 @@
 import { useRef, type ChangeEvent, type ReactNode } from 'react';
-import { BIDS, CATS, COUNTRIES, GIGS, ME, PAYOUTS, SELL_STEPS, SKILLS, usd } from '../data/sample';
+import { CATS, COUNTRIES, gigBy, GIGS, ME, PAYOUTS, SELL_STEPS, sellerDir, SKILLS, usd } from '../data/sample';
 import { act } from '../store/actions';
 import { setState, toast, useApp, type State } from '../store/store';
 import { Icon, Tile, type IconName } from '../ui/icons';
-import { Gate, Head, Review, RLink, SignInButton, T, Thumb } from '../ui/parts';
+import { Gate, Head, levelClass, Review, RLink, SignInButton, T, Thumb } from '../ui/parts';
 import { Shell } from '../ui/Shell';
 
-/* ---------------- seller profile (patchsmith) ---------------- */
+/* ---------------- a seller's profile, from the sellers directory ---------------- */
+const RECORDS: [string, string, string][] = [['#391', 'Fix NEP-141 refund on failed transfer', '28.00'], ['#377', 'Add view method for escrow totals', '15.00'], ['#360', 'Split dust bug in payroll vault', '22.00'], ['#341', 'Storage deposit check in register()', '12.00'], ['#329', 'Gas estimate for batch payouts', '40.00']];
 export function Profile() {
   const s = useApp();
-  const b = BIDS[0], extra = s.stage >= 7 ? 1 : 0;
-  const saved = s.liked.includes('g1');
-  const recs = ([['#412', 'Make test_split_rounding pass', '32.00', s.stage >= 7], ['#391', 'Fix NEP-141 refund on failed transfer', '28.00', true], ['#377', 'Add view method for escrow totals', '15.00', true], ['#360', 'Split dust bug in payroll vault', '22.00', true], ['#341', 'Storage deposit check in register()', '12.00', true], ['#329', 'Gas estimate for batch payouts', '40.00', true]] as const).filter((r) => r[3]);
+  const p = sellerDir(s.who || 'patchsmith'), isP = p.key === 'patchsmith', extra = isP && s.stage >= 7 ? 1 : 0, g = gigBy(p.gig) || GIGS[0];
+  const all: [string, string, string][] = [...(extra ? [['#412', 'Make test_split_rounding pass', '32.00'] as [string, string, string]] : []), ...RECORDS];
+  const recs = all.slice(0, Math.max(1, Math.min(5, p.settled)));
+  const saved = s.liked.includes(p.gig);
   return (
     <Shell cur="profile">
-      <Head crumbs={<><RLink r="explore">Talent</RLink> / patchsmith</>} title="patchsmith" actions={<>
-        <button className={`btn ${saved ? 'on' : ''}`} onClick={() => act.like('g1')} aria-pressed={saved}><Icon name="heart" />{saved ? 'Saved' : 'Save'}</button>
+      <Head crumbs={<><RLink r="explore" onClick={() => setState({ exTab: 'sellers' })}>Sellers</RLink> / {p.name}</>} title={p.name} actions={<>
+        <button className={`btn ${saved ? 'on' : ''}`} onClick={() => act.like(p.gig)} aria-pressed={saved}><Icon name="heart" />{saved ? 'Saved' : 'Save'}</button>
         <RLink r="chat" className="btn"><Icon name="chat" />Message</RLink>
-        <RLink r="post" className="btn primary">Invite to a job</RLink>
+        <RLink r="ask" className="btn primary">Invite to a job</RLink>
       </>} />
       <div className="panel prof-top">
-        <div className="cover night-cover" aria-hidden="true"><Thumb g={GIGS[0]} /></div>
+        <div className="cover night-cover" aria-hidden="true"><Thumb g={g} /></div>
         <div className="prof-row">
-          <span className="avatar xl ag">PA</span>
+          <span className={`avatar xl ${p.kind === 'agent' ? 'ag' : ''}`}>{p.initials}</span>
           <div style={{ flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column', gap: 6 }}>
-            <div className="row"><span className="pill info">AI agent</span><span className="mono muted xsmall">{b.acct}</span></div>
-            <span className="muted">Run by Mara Ilves. Rust and NEAR SDK fixes, test writing, reasoning in a TEE.</span>
-            <div className="row"><T name="NEP-171" tip="Non-transferable completion records" /><span className="muted xsmall">Payout on NEAR or Ethereum with Chain Signatures</span></div>
+            <div className="row"><span className={`pill ${p.kind === 'agent' ? 'info' : 'acc'}`}>{p.kind === 'agent' ? 'AI agent' : 'Developer'}</span><span className={`lvl ${levelClass(p.level)}`}>{p.level}</span><span className="mono muted xsmall">{p.acct}</span></div>
+            <span className="muted">{p.about}</span>
+            <div className="row"><T name="NEP-171" tip="Non-transferable completion records" /><span className="muted xsmall">Speaks {p.langs} · {p.online ? 'Online now' : 'Replies within a day'}</span></div>
           </div>
         </div>
       </div>
       <div className="tally">
-        <div><span className="lbl">Settled jobs</span><b className="num">{b.settled + extra}</b><span className="sub">from {b.buyers} distinct buyers</span></div>
-        <div><span className="lbl">Tests pass first try</span><b className="num">92%</b><span className="sub">reviewer-verified</span></div>
-        <div><span className="lbl">Settled volume</span><b className="num">{usd(1184 + extra * 32)}<span className="u">USDC</span></b><span className="sub">all time</span></div>
-        <div><span className="lbl">Disputes and refunds</span><b className="num">1 and 1</b><span className="sub">1 split by the DAO</span></div>
+        <div><span className="lbl">Settled jobs</span><b className="num">{p.settled + extra}</b><span className="sub">from {p.buyers} distinct buyers</span></div>
+        <div><span className="lbl">Tests pass first try</span><b className="num">{p.pass}%</b><span className="sub">reviewer-verified</span></div>
+        <div><span className="lbl">Settled volume</span><b className="num">{usd(p.volume + extra * 32)}<span className="u">USDC</span></b><span className="sub">all time</span></div>
+        <div><span className="lbl">Rating</span><b className="num">{p.rating.toFixed(1)}<span className="u">of 5</span></b><span className="sub">from {p.settled} settled jobs</span></div>
       </div>
       <div className="grid g-main">
         <div className="panel"><div className="panel-h"><h2>Completion records</h2><span className="muted xsmall">Minted by the contract on settlement. Can't be bought or moved.</span></div>
@@ -44,9 +46,9 @@ export function Profile() {
           </table></div>
         </div>
         <div className="panel"><div className="panel-h"><h3>Reviews</h3><span className="muted xsmall">Only from settled jobs</span></div><div className="panel-b">
-          {s.stage >= 7 && <Review who="Lumen Labs" txt="Fixed the split and added the dust test. Second commit was clean." when="just now" />}
-          <Review who="Pollen Grants" txt="Delivered in under a day and explained the refund edge case." when="3 days ago" />
-          <Review who="Ostrich DAO" txt="Good fix. Had to clarify scope once, settled through the DAO with a split." when="2 weeks ago" />
+          {isP && s.stage >= 7 && <Review who="Lumen Labs" txt="Fixed the split and added the dust test. Second commit was clean." when="just now" />}
+          <Review who="Pollen Grants" txt="Delivered in under a day and explained the edge case." when="3 days ago" />
+          {p.settled > 1 && <Review who="Ostrich DAO" txt="Good work. Had to clarify scope once." when="2 weeks ago" />}
           <p className="muted xsmall">Ratings sit below objective outcomes because ratings drift upward over time.</p>
         </div></div>
       </div>
@@ -113,7 +115,7 @@ function SellLanding() {
   const faq: [string, string][] = [
     ['Do I need a crypto wallet?', 'No. Sign in with Google, GitHub or email and AGORA creates a NEAR account for you. You can connect your own wallet later.'],
     ['Can a coding agent do the work?', 'Yes. Tell us in your profile. The agent gets a key that can only bid and submit deliveries, and you stay responsible for it.'],
-    ['What if the buyer disagrees?', 'Reviewers run the locked tests. If the spec itself is unclear, the milestone freezes and an arbiter DAO decides with the logs as evidence.'],
+    ['What if the buyer disagrees?', 'The locked tests decide, not the buyer. If you think a verdict was wrong, 3 fresh reviewers re-check it for free; only then can either side ask the DAO, with a small bond.'],
     ['How fast is payment?', 'The contract releases USDC right after the second reviewer approves, usually a few seconds.'],
   ];
   return (
@@ -129,12 +131,12 @@ function SellLanding() {
           <p className="muted">Sell your coding work on jobs where tests decide when you're done, and the money waits in escrow before you start.</p>
           <ol className="sl-steps">{steps.map(([b, t]) => <li key={b}><b>{b}</b><span className="muted small">{t}</span></li>)}</ol>
           <button className="btn primary lg" onClick={act.sellstart}>Let's do this</button>
-          <span className="muted xsmall">Free to join. AGORA takes a small fee only from released payments.</span>
+          <span className="muted xsmall">Free to join. A 2% fee on released payments goes to the DAO treasury.</span>
         </div>
       </section>
       <section className="sl-facts night">
         <div><b className="num">0</b><span>chargebacks. Released USDC is final.</span></div>
-        <div><b className="num">72 h</b><span>auto-release if a buyer goes silent after review.</span></div>
+        <div><b className="num">2 of 3</b><span>reviewer approvals pay you. The buyer can't hold the money back.</span></div>
         <div><b className="num">0 gas</b><span>for bids and deliveries. The relayer pays.</span></div>
         <div><b className="num">First-job pool</b><span>for sellers with fewer than 3 settled jobs.</span></div>
       </section>
@@ -316,7 +318,7 @@ export function Sell() {
 export function Seller() {
   const s = useApp();
   const matching: [string, string, string][] = [
-    ['Make test_split_rounding pass', 'under 40', s.stage >= 7 ? 'Won, paid' : s.stage >= 4 ? 'Won, in escrow' : 'Bid 36.00'],
+    ['Make test_split_rounding pass', 'under 40', s.stage >= 7 ? 'Won, paid' : s.stage >= 5 ? 'Won, payment protected' : s.stage >= 4 ? 'Offer sent' : 'Bid 36.00'],
     ['Add pagination to get_jobs', '25–45', 'Bid 31.00'],
     ['Write tests for refund callback', '15–25', 'Bid 18.00'],
     ['Fix Safari wallet modal', '30–60', 'Skipped, React not in skills'],
@@ -326,7 +328,7 @@ export function Seller() {
       <Head title="Seller desk" sub="Your bidding agent finds jobs and bids inside the rules you set here." actions={<RLink r="sell" className="btn" onClick={() => setState({ sellStep: 1 })}>Edit seller profile</RLink>} />
       <div className="tally">
         <div><span className="lbl">Earned this week</span><b className="num">{s.stage >= 7 ? '92.00' : '60.00'}<span className="u">USDC</span></b><span className="sub">released, final</span></div>
-        <div><span className="lbl">In escrow for you</span><b className="num">{s.stage >= 5 && s.stage < 7 ? '32.00' : '0.00'}<span className="u">USDC</span></b><span className="sub">{s.stage >= 5 && s.stage < 7 ? 'J-1042' : 'nothing pending'}</span></div>
+        <div><span className="lbl">Protected for you</span><b className="num">{s.stage >= 5 && s.stage < 7 ? '32.00' : '0.00'}<span className="u">USDC</span></b><span className="sub">{s.stage >= 5 && s.stage < 7 ? 'J-1042' : 'nothing pending'}</span></div>
         <div><span className="lbl">Open bids</span><b className="num">3</b><span className="sub">by your bidding agent</span></div>
         <div><span className="lbl">Win rate</span><b className="num">38%</b><span className="sub">last 30 days</span></div>
       </div>
@@ -358,42 +360,48 @@ export function Seller() {
   );
 }
 
-/* ---------------- disputes ---------------- */
+/* ---------------- disputes: one simple ladder, re-check then DAO vote then result ---------------- */
+const DAO_COUNCIL: [string, string, string, boolean][] = [['aria', 'aria.near', 'Rust auditor', true], ['bo', 'bo-dev.near', 'Front-end lead', false], ['chen', 'chen.near', 'Protocol engineer', false], ['dami', 'dami.near', 'QA engineer', false]];
+function Step({ n, state, title, line, children }: { n: number; state: 'done' | 'now' | 'next'; title: string; line: string; children?: ReactNode }) {
+  return (
+    <li className={`ds ${state}`}>
+      <span className="ds-n" aria-hidden="true">{state === 'done' ? <Icon name="check" /> : n}</span>
+      <div className="ds-b">
+        <div className="ds-t"><h3>{title}</h3><span className="ds-st">{state === 'done' ? 'Done' : state === 'now' ? 'Now' : 'Next'}</span></div>
+        <p className="muted small">{line}</p>
+        {children}
+      </div>
+    </li>
+  );
+}
 export function Dispute() {
   const s = useApp();
-  const ruled = s.dTab === 'ruled';
-  const votes: [string, number, string][] = [['Approve', ruled ? 4 : 3, ''], ['Reject', 1, 'block'], ['Not voted', ruled ? 0 : 1, 'hold']];
+  const ruled = s.dTab === 'ruled', votes = ruled ? 2 : 1;
+  const voters = DAO_COUNCIL.filter((m) => !m[3]), out = DAO_COUNCIL.find((m) => m[3])!;
   return (
     <Shell cur="dispute">
-      <Head title="Disputes" sub="A dispute freezes one milestone. Only the arbiter DAO can release, refund or split it." actions={<T name="Sputnik DAO" tip="arbiter.sputnik-dao.testnet is the only account allowed to call resolve_dispute" />} />
-      <div className="tabs" role="tablist">
-        <button role="tab" aria-selected={!ruled} className={!ruled ? 'on' : ''} onClick={() => setState({ dTab: 'open' })}>Open, 1</button>
-        <button role="tab" aria-selected={ruled} className={ruled ? 'on' : ''} onClick={() => setState({ dTab: 'ruled' })}>Ruled, 14</button>
-      </div>
-      <div className="grid g-main">
-        <div className="panel"><div className="panel-h"><span className={`pill ${ruled ? 'ok' : 'hold'}`}>{ruled ? 'Ruled, split 70/30' : 'Voting, 1 day left'}</span><h2>J-0977, responsive job list on mobile</h2></div><div className="panel-b">
-          <dl className="kv"><dt>Buyer</dt><dd className="mono">tidewater.testnet</dd><dt>Seller</dt><dd className="mono">ivarga.testnet</dd><dt>Frozen</dt><dd className="num">Milestone 2, 30.00 USDC</dd><dt>Claim</dt><dd>Buyer says the layout breaks at 360px; seller says 360px was not in the spec.</dd></dl>
-          <h3>Evidence bundle</h3>
-          <div className="tablewrap"><table><tbody>
-            <tr><td>Acceptance spec</td><td className="mono muted">spec 2d81…be0c</td><td><span className="pill">Viewports 390, 768, 1280</span></td></tr>
-            <tr><td>Reviewer A</td><td className="mono muted">log 0x11fa…</td><td><span className="pill ok">Approve</span></td></tr>
-            <tr><td>Reviewer B</td><td className="mono muted">log 0x7c02…</td><td><span className="pill ok">Approve</span></td></tr>
-            <tr><td>Reviewer C</td><td className="mono muted">log 0xa9d4…</td><td><span className="pill block">Reject, 360px overflow</span></td></tr>
-            <tr><td>Rerun command</td><td className="mono muted" colSpan={2}>npx playwright test --project=mobile</td></tr>
-          </tbody></table></div>
-          <p className="muted small">Reviewer logs are hashed on-chain, so any DAO member can rerun the tests and get the same result.</p>
-        </div></div>
-        <div className="stack">
-          <div className="panel"><div className="panel-h"><h3>DAO proposal #57</h3></div><div className="panel-b">
-            <p className="small">Split: 70% to seller (in-spec viewports pass), 30% refund to buyer.</p>
-            {votes.map(([l, n, k]) => <div key={l} style={{ display: 'flex', flexDirection: 'column', gap: 6 }}><div className="row small"><span>{l}</span><b className="num" style={{ marginLeft: 'auto', fontWeight: 500 }}>{n} of 5</b></div><div className={`bar ${k}`}><i style={{ transform: `scaleX(${n / 5})` }} /></div></div>)}
-            {ruled
-              ? <div className="banner ok"><Icon name="check" /><div className="grow"><b style={{ fontWeight: 500 }}>Executed</b><span className="muted">21.00 USDC to seller, 9.00 USDC refunded. The contract updated both reputations.</span></div></div>
-              : <button className="btn primary" onClick={act.daovote}>Cast the 4th vote as a DAO member</button>}
-            <span className="mono muted xsmall">arbiter.sputnik-dao.testnet, 5 members, 3 of 5 to pass</span>
-          </div></div>
-          <div className="panel"><div className="panel-b"><b style={{ fontWeight: 500 }}>Who can rule</b><p className="muted small">Not AGORA, not the reviewers, not either party. The contract accepts a ruling only from the DAO account after a proposal passes.</p></div></div>
+      <Head title="Disputes" sub="Most disputes end at a free re-check. Only if that doesn't settle it does the DAO vote." actions={<T name="Sputnik DAO" tip="The arbiter DAO's proposal is the only way resolve_dispute can be called" />} />
+      <div className="dsp">
+        <div className="dsp-head">
+          <span className={`pill ${ruled ? 'ok' : 'hold'}`}>{ruled ? 'Decided' : 'DAO voting, 2 days left'}</span>
+          <h2>J-0977 · Clarify fee rounding in the payouts view</h2>
+          <span className="muted small">You and <button className="as-link sname" onClick={() => act.who('rustwright')}>rustwright</button>, 20.00 USDC frozen</span>
         </div>
+        <div className="dsp-claim"><span className="pill">The tests were wrong</span><p><b>rustwright:</b> “The locked test expects 0.34 USDC, but the spec says round half up, which gives 0.35. My code follows the spec.”</p></div>
+        <ol className="ds-list">
+          <Step n={1} state="done" title="Free re-check" line="3 fresh reviewers on different AI models re-ran every test. Same result: one locked test fails, and 2 of 3 flagged that the test contradicts the spec." />
+          <Step n={2} state={ruled ? 'done' : 'now'} title="DAO vote" line="rustwright put down a 1.00 USDC bond to ask the DAO. It comes back if the claim holds. 2 of 3 votes decide.">
+            <div className="ds-vote"><div className="row small"><span>{votes} of 3 votes</span><span className="muted" style={{ marginLeft: 'auto' }}>2 needed</span></div><div className="bar ok"><i style={{ transform: `scaleX(${votes / 3})` }} /></div></div>
+            <div className="ds-who">{voters.map((m, i) => <span key={m[0]} className="ds-m"><span className="avatar xs">{m[1].slice(0, 2).toUpperCase()}</span><span className="mono xsmall">{m[1]}</span>{i < votes && <Icon name="check" className="ok" />}</span>)}</div>
+            <p className="muted xsmall">{out[1]} sits this one out automatically: they have traded with you before.</p>
+            {!ruled && <button className="btn primary sm" onClick={act.daovote}>Cast the 2nd vote, demo</button>}
+          </Step>
+          <Step n={3} state={ruled ? 'done' : 'next'} title="Result" line={ruled ? 'Split 70/30. The test was wrong; the rest of the work passed.' : 'The contract pays out exactly what the vote says. Nobody at AGORA can move the money.'}>
+            {ruled && <div className="banner ok"><Icon name="check" /><div className="grow"><b style={{ fontWeight: 500 }}>14.00 USDC to rustwright, 6.00 USDC back to you</b><span className="muted">The 1.00 USDC bond went back to rustwright. Both records were updated.</span></div></div>}
+          </Step>
+        </ol>
+        <details className="ds-ev"><summary><Icon name="down" />Evidence, attached automatically<Icon name="chev" className="dl-chev" /></summary><div className="ds-evb"><p className="small muted">The spec and its hash, both commits, every test log and all reviewer votes with attestations.</p><button className="btn sm" onClick={act.bundle}><Icon name="down" />Download evidence bundle</button></div></details>
+        <div className="ds-treasury"><div><span className="lbl">DAO treasury</span><b className="num">1,284.40<span className="u">USDC</span></b></div><p className="muted small">Filled by a 2% fee on released payments and by lost bonds. It pays the arbiters and the first-job pool. Sample figures.</p></div>
       </div>
     </Shell>
   );

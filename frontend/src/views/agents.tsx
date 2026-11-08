@@ -1,6 +1,6 @@
 import { ATTACK, CATS, ME, usd } from '../data/sample';
 import { act } from '../store/actions';
-import { escrow, free, paused, setState, useApp } from '../store/store';
+import { escrow, free, hb, hPrice, paused, setState, useApp } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
 import { Check, Feed, Gate, Head, RLink, SignInButton, T } from '../ui/parts';
 import { Shell } from '../ui/Shell';
@@ -40,7 +40,7 @@ export function Agents() {
         })}
       </div>
       <div className="grid g-main">
-        <div className="panel"><div className="panel-h"><h2>Stolen key drill</h2><div className="r"><span className="muted xsmall">What an attacker with your transaction key can do</span></div></div><div className="panel-b">
+        {s.tour >= 0 && <div className="panel"><div className="panel-h"><h2>Stolen key drill</h2><div className="r"><span className="muted xsmall">What an attacker with your transaction key can do</span></div></div><div className="panel-b">
           {s.attack ? (
             <>
               <div className="tablewrap"><table>
@@ -57,7 +57,7 @@ export function Agents() {
               <button className="btn danger" onClick={act.attack} style={{ alignSelf: 'flex-start' }} disabled={isPaused}><Icon name="bolt" />Run the drill</button>
             </>
           )}
-        </div></div>
+        </div></div>}
         <div className="panel"><div className="panel-h"><h2>Timeline</h2></div><div className="panel-b" style={{ paddingBlock: 4 }}><Feed /></div></div>
       </div>
     </Shell>
@@ -75,10 +75,10 @@ export function Mandate() {
         <div className="stack">
           <div className="panel"><div className="panel-h"><h2>Spending</h2><div className="r"><T name="Contract-enforced" tip="Checked by the marketplace contract, not by the agent" /></div></div><div className="panel-b">
             <div className="grid g-2">
-              <div className="field"><label htmlFor="m-job">Per-job cap</label><input className="input num" id="m-job" defaultValue="50.00 USDC" /></div>
-              <div className="field"><label htmlFor="m-day">Daily cap</label><input className="input num" id="m-day" defaultValue="120.00 USDC" /><div className="bar"><i style={{ transform: `scaleX(${s.stage >= 5 ? 0.27 : 0})` }} /></div><span className="hint">{s.stage >= 5 ? '32.00' : '0.00'} used today</span></div>
-              <div className="field"><label htmlFor="m-new">New-seller value cap</label><input className="input num" id="m-new" defaultValue="25.00 USDC" /><span className="hint">For sellers with fewer than 3 settled jobs. The first-job pool covers the gap.</span></div>
-              <div className="field"><label htmlFor="m-win">Review window</label><select className="input" id="m-win"><option>72 hours, then auto-release</option><option>48 hours</option><option>7 days</option></select></div>
+              <div className="field"><label htmlFor="m-job">Per-job cap</label><input className="input num" id="m-job" placeholder="e.g. 50.00 USDC" defaultValue="50.00 USDC" /></div>
+              <div className="field"><label htmlFor="m-day">Daily cap</label><input className="input num" id="m-day" placeholder="e.g. 120.00 USDC" defaultValue="120.00 USDC" /><div className="bar"><i style={{ transform: `scaleX(${s.stage >= 5 ? 0.27 : 0})` }} /></div><span className="hint">{s.stage >= 5 ? '32.00' : '0.00'} used today</span></div>
+              <div className="field"><label htmlFor="m-new">New-seller value cap</label><input className="input num" id="m-new" placeholder="e.g. 25.00 USDC" defaultValue="25.00 USDC" /><span className="hint">For sellers with fewer than 3 settled jobs. The first-job pool covers the gap.</span></div>
+              <div className="field"><label htmlFor="m-win">If reviewers stall</label><select className="input" id="m-win"><option>12 hours, then a fresh re-check</option><option>6 hours</option><option>24 hours</option></select></div>
             </div>
             <div className="field"><span className="lab">Allowed categories</span><div className="chips">{CATS.map(([k, label]) => <button key={k} className={`chip ${s.cats[k] ? 'on' : ''}`} aria-pressed={!!s.cats[k]} onClick={() => setState({ cats: { ...s.cats, [k]: !s.cats[k] } })}>{label}</button>)}</div></div>
             <div className="row" style={{ flexWrap: 'nowrap' }}>
@@ -98,10 +98,10 @@ export function Mandate() {
             </table></div>
             <div className="panel-b"><p className="muted xsmall">Agent keys can't withdraw and can't attach a deposit. NEAR enforces this at the protocol level. Deleting <span className="mono">agents.lumen.testnet</span> removes every agent key at once.</p></div>
           </div>
-          <div className="panel"><div className="panel-h"><h2>Test your limits</h2></div><div className="panel-b">
+          {s.tour >= 0 && <div className="panel"><div className="panel-h"><h2>Test your limits</h2></div><div className="panel-b">
             <p className="muted">Ask your transaction agent to fund a job that breaks a rule and watch the contract refuse it.</p>
             <div className="row"><button className="btn" onClick={act.overcap}>Fund 400 USDC job</button><button className="btn" onClick={act.wrongcat}>Fund a design job</button><button className="btn" onClick={act.withdraw}>Agent tries to withdraw</button></div>
-          </div></div>
+          </div></div>}
         </div>
         <div className="stack">
           <div className="panel"><div className="panel-h"><h3>Checks on every funding call</h3></div><div className="panel-b">
@@ -124,8 +124,8 @@ export function Wallet() {
   const total = free(s) + escrow(s);
   const [d, c] = usd(total).split('.');
   const hist: [IconName, string, string, string, string, string][] = [];
-  if (s.stage >= 7) hist.push(['up', 'Released to patchsmith', 'J-1042, from escrow', '−32.00', '16:31', '9xQe…f2A']);
-  if (s.stage >= 5) hist.push(['lock', 'Locked in escrow', 'J-1042', '32.00', '16:12', '4Lmc…a71']);
+  if (s.stage >= 7) hist.push(['up', 'Released to ' + hb(s).name, 'J-1042, from Protected payment', '−' + usd(hPrice(s)), '16:31', '9xQe…f2A']);
+  if (s.stage >= 5) hist.push(['lock', 'Moved to Protected payment', 'J-1042', usd(hPrice(s)), '16:12', '4Lmc…a71']);
   hist.push(['down', 'Deposit', 'ft_transfer_call from your NEAR wallet', '+120.00', '15:58', 'H2ty…0pe']);
   return (
     <Shell cur="wallet">
@@ -134,7 +134,7 @@ export function Wallet() {
           <button className="acct" onClick={act.copyacct} aria-label="Copy account name">{ME.acct}<Icon name="copy" /></button>
           <span className="lbl">Total balance</span>
           <span className="total num">${d}<span className="c">.{c}</span></span>
-          <span className="sub">{usd(free(s))} available{escrow(s) ? `, ${usd(escrow(s))} in escrow` : ''}</span>
+          <span className="sub">{usd(free(s))} available{escrow(s) ? `, ${usd(escrow(s))} protected` : ''}</span>
           <div className="wal-acts">
             <button className="pri" onClick={act.addfunds}><i><Icon name="plus" /></i>Add funds</button>
             <button onClick={act.send}><i><Icon name="up" /></i>Send</button>
@@ -149,7 +149,7 @@ export function Wallet() {
         {s.walTab === 'assets' ? (
           <div className="panel">
             <div className="asset"><span className="tok">USDC</span><div><b style={{ fontWeight: 500 }}>USD Coin</b><div className="muted xsmall">Available to fund jobs</div></div><div className="v"><b>{usd(free(s))}</b><span className="muted xsmall">${usd(free(s))}</span></div></div>
-            <div className="asset"><span className="tok lock"><Icon name="lock" /></span><div><b style={{ fontWeight: 500 }}>USDC in escrow</b><div className="muted xsmall">{escrow(s) ? 'Held by the contract for J-1042' : 'Nothing locked'}</div></div><div className="v"><b>{usd(escrow(s))}</b><span className="muted xsmall">${usd(escrow(s))}</span></div></div>
+            <div className="asset"><span className="tok lock"><Icon name="lock" /></span><div><b style={{ fontWeight: 500 }}>Protected payment</b><div className="muted xsmall">{escrow(s) ? 'Held by the contract for J-1042' : 'Nothing locked'}</div></div><div className="v"><b>{usd(escrow(s))}</b><span className="muted xsmall">${usd(escrow(s))}</span></div></div>
             <div className="asset"><span className="tok near">N</span><div><b style={{ fontWeight: 500 }}>NEAR</b><div className="muted xsmall">Gas, paid for you by the AGORA relayer</div></div><div className="v"><b>0.00</b><span className="muted xsmall">0.0041 covered</span></div></div>
           </div>
         ) : (

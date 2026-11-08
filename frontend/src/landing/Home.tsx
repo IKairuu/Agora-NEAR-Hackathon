@@ -5,7 +5,7 @@ import { act, go } from '../store/actions';
 import { setState, useApp } from '../store/store';
 import { Icon, Logo } from '../ui/icons';
 import { Check, RLink } from '../ui/parts';
-import { CharacterField } from './CharacterField';
+import { AgentNetwork } from './AgentNetwork';
 
 /** In-page anchor that scrolls smoothly (or instantly with reduced motion). */
 function ScrollLink({ to, children, className }: { to: string; children: ReactNode; className?: string }) {
@@ -30,7 +30,7 @@ function LandingNav() {
       <div className="acts2">
         {stage >= 1 ? (
           <>
-            <RLink r="jobs" className="lk">Your jobs</RLink>
+            <RLink r="jobs" className="lk">Job requests</RLink>
             <RLink r="ask" className="btn primary">Open the app</RLink>
             <RLink r="profile" className="me-btn" aria-label="Your profile"><span className="avatar">{ME.initials}</span><i className="online" aria-hidden="true" /></RLink>
           </>
@@ -38,8 +38,7 @@ function LandingNav() {
           <>
             <button className="btn glassy demo" onClick={act.tour}><Icon name="play" />Demo</button>
             <a className="lk" href="/sell" onClick={(e) => { e.preventDefault(); act.signsell(); }}>Become a seller</a>
-            <button className="lk si" onClick={act.signin}>Sign in</button>
-            <button className="btn primary" onClick={act.signin}>Join</button>
+            <button className="btn primary si" onClick={act.signin}>Sign in</button>
           </>
         )}
       </div>
@@ -47,28 +46,21 @@ function LandingNav() {
   );
 }
 
+/** One search bar with popular requests under it, inside the liquid glass panel. */
 function HeroSearch() {
-  const { hsTab } = useApp();
   const [q, setQ] = useState('');
   const input = useRef<HTMLInputElement>(null);
-  const submit = (e: FormEvent) => { e.preventDefault(); act.heroGo(q.trim(), () => input.current?.focus()); };
+  const focus = () => input.current?.focus();
+  const submit = (e: FormEvent) => { e.preventDefault(); act.heroGo(q.trim(), focus); };
   return (
     <form className="hsearch" role="search" onSubmit={submit}>
       <div className="hs-in">
-        <label className="visually-hidden" htmlFor="hero-in">Describe the job</label>
-        <input id="hero-in" ref={input} autoComplete="off" placeholder="Describe a bug, a test or a small feature" value={q} onChange={(e) => setQ(e.target.value)} />
-        <button type="submit" className="hs-go" aria-label="Start the request"><Icon name="explore" /></button>
+        <Icon name="explore" className="hs-ic" />
+        <label className="visually-hidden" htmlFor="hero-in">Search services, or describe the job</label>
+        <input id="hero-in" ref={input} autoComplete="off" placeholder="Search services, or describe a bug or small feature" value={q} onChange={(e) => setQ(e.target.value)} />
+        <button type="submit" className="hs-go" aria-label="Search"><Icon name="arrow" /></button>
       </div>
-      <div className="hs-tabs" role="tablist" aria-label="Suggestions">
-        {([['quick', 'explore', 'Quick search'], ['trend', 'trend', 'Trending']] as const).map(([id, icon, label]) => (
-          <button key={id} type="button" role="tab" aria-selected={hsTab === id} onClick={() => setState({ hsTab: id })}><Icon name={icon} />{label}</button>
-        ))}
-      </div>
-      <ul className="hs-list">
-        {HS[hsTab].map((s) => (
-          <li key={s}><button type="button" onClick={() => act.heroGo(s, () => input.current?.focus())}><span>{s}</span><Icon name="arrow" /></button></li>
-        ))}
-      </ul>
+      <div className="hs-pop"><span>Popular:</span>{HS.quick.map((t) => <button key={t} type="button" className="hs-chip" onClick={() => act.heroGo(t, focus)}>{t}</button>)}</div>
     </form>
   );
 }
@@ -131,9 +123,9 @@ function Walk() {
 }
 
 const LIVE: { pill: [string, string]; on: number; body: [('ok' | 'hold'), string][]; al: string; amt: string }[] = [
-  { pill: ['', 'Posted'], on: 1, body: [['ok', 'Spec writer added 2 failing tests'], ['ok', 'Spec hash locked on-chain']], al: 'Budget', amt: 'under 40' },
+  { pill: ['', 'Requested'], on: 1, body: [['ok', 'Spec writer added 2 failing tests'], ['ok', 'Spec hash locked on-chain']], al: 'Budget', amt: 'under 40' },
   { pill: ['info', '4 bids, 2 held'], on: 2, body: [['ok', 'Developers and agents bid 33 to 38'], ['hold', 'Off-platform lure held']], al: 'Median bid', amt: '35.50' },
-  { pill: ['acc', 'In escrow'], on: 3, body: [['ok', 'Agreed with patchsmith after 2 rounds'], ['ok', '9 limit checks passed']], al: 'Locked', amt: '32.00' },
+  { pill: ['acc', 'Payment protected'], on: 3, body: [['ok', 'Agreed with patchsmith after 2 rounds'], ['ok', '9 limit checks passed']], al: 'Locked', amt: '32.00' },
   { pill: ['info', 'Reviewing'], on: 4, body: [['ok', 'Reviewer A approved'], ['ok', 'Reviewer B approved']], al: 'Locked', amt: '32.00' },
   { pill: ['ok', 'Released'], on: 5, body: [['ok', 'Paid 1.6 s after the second approval'], ['ok', 'Completion record #412 minted']], al: 'Paid to seller', amt: '32.00' },
 ];
@@ -196,7 +188,7 @@ export function Home() {
       <LandingNav />
 
       <section className="hero night">
-        <CharacterField reduce={reduce} />
+        <AgentNetwork reduce={reduce} />
         <div className="fieldstill" aria-hidden="true" />
         <div className="container hero-c">
           {stage >= 1 && <span className="wb">Welcome back, {ME.name}</span>}
@@ -206,7 +198,7 @@ export function Home() {
         </div>
         <div className="cats container" aria-label="Browse by category">
           {HERO_CATS.map(([icon, label, cat]) => (
-            <button key={label} className="cat" onClick={() => { setState({ f: { cat } }); go('explore'); }}><Icon name={icon} /><b>{label}</b></button>
+            <button key={label} className="cat" onClick={() => { setState({ exTab: 'services', f: { cat } }); go('explore'); }}><Icon name={icon} /><b>{label}</b></button>
           ))}
         </div>
       </section>

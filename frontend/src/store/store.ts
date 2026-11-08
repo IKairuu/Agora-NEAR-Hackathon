@@ -1,5 +1,5 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
-import { ORDERS, type FilterKey, type Order, type OtherJob } from '../data/sample';
+import { BIDS, ORDERS, type Bid, type FilterKey, type Order, type OtherJob } from '../data/sample';
 
 /*
  * App state, mirroring the prototype's `S` object.
@@ -9,7 +9,7 @@ import { ORDERS, type FilterKey, type Order, type OtherJob } from '../data/sampl
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
-  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer';
+  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick';
 export interface State {
   stage: number;
   tour: number; tourMin: boolean;
@@ -24,7 +24,13 @@ export interface State {
   liked: string[]; newJobs: OtherJob[]; nextJob: number; svc: string;
   sort: 'best' | 'rating' | 'price'; f: Partial<Record<FilterKey, string>>; q: string; online: boolean; newOnly: boolean;
   signVia: string; sellCoder: 'me' | 'agent'; expOpen: string; cvFile: string; avatarImg: string; coverImg: string; ghLinked: boolean;
-  hsTab: 'quick' | 'trend'; fold: boolean;
+  fold: boolean;
+  /* v9: New request chat, hiring and job requests */
+  hire: string; offerSt: '' | 'wait' | 'accepted' | 'declined'; declined: string[]; preNeg: boolean;
+  asked: boolean; askText: string; bidsShown: number; streamId: number; jf: string;
+  extra: { id: string; text: string; t: string; posted: boolean }[];
+  who: string; oj: number; exTab: 'services' | 'sellers'; ssort: 'rating' | 'jobs' | 'price'; fromHero: string;
+  stars: number; dReason: string; mail: string; walletLinked: boolean;
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
 }
 
@@ -47,7 +53,11 @@ let state: State = {
   liked: ['g3'], newJobs: [], nextJob: 1043, svc: 'g1',
   sort: 'best', f: {}, q: '', online: false, newOnly: false,
   signVia: '', sellCoder: 'me', expOpen: 'cv', cvFile: '', avatarImg: '', coverImg: '', ghLinked: false,
-  hsTab: 'quick', fold: storage.get('agora-fold') === '1',
+  fold: storage.get('agora-fold') === '1',
+  hire: 'patchsmith', offerSt: '', declined: [], preNeg: false,
+  asked: false, askText: '', bidsShown: 0, streamId: 0, jf: 'all', extra: [],
+  who: 'patchsmith', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
+  stars: 0, dReason: '', mail: '', walletLinked: false,
   modal: null,
 };
 
@@ -66,8 +76,13 @@ export function useApp(): State {
 }
 
 /* derived values */
-export const free = (s: State) => (s.stage >= 5 ? 88 : s.stage >= 1 ? 120 : 0);
-export const escrow = (s: State) => (s.stage >= 5 && s.stage < 7 ? 32 : 0);
+/** The seller the buyer chose from the offers list (default: the agent's pick). */
+export const hb = (s: State): Bid => BIDS.find((b) => b.key === s.hire) || BIDS[0];
+/** patchsmith's price drops to the negotiated one once the agent has negotiated. */
+export const priceOf = (s: State, b: Bid) => (b.key === 'patchsmith' && s.stage >= 4 && !s.preNeg ? b.final : b.price);
+export const hPrice = (s: State) => priceOf(s, hb(s));
+export const free = (s: State) => (s.stage >= 5 ? 120 - hPrice(s) : s.stage >= 1 ? 120 : 0);
+export const escrow = (s: State) => (s.stage >= 5 && s.stage < 7 ? hPrice(s) : 0);
 export const paused = (s: State) => s.stage >= 8;
 
 /* ---------------- toasts ---------------- */

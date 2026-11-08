@@ -1,9 +1,11 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { gigBy, ME, OTHER_JOBS, ROLES, sellerBy, usd, VIA, BIDS } from '../data/sample';
+import { DONE_JOBS, gigBy, ME, OTHER_JOBS, ROLES, usd, VIA } from '../data/sample';
 import { act, orderAct, TOUR } from '../store/actions';
-import { closeModal, free, setState, useApp, useToasts } from '../store/store';
+import { closeModal, free, hPrice, setState, useApp, useToasts } from '../store/store';
 import { GoogleIcon, Icon, Tile } from './icons';
 import { Check, T } from './parts';
+
+const WALLETS = [['Meteor Wallet', 'Browser extension and web'], ['HOT Wallet', 'Mobile and Telegram'], ['MyNearWallet', 'Web wallet'], ['Ledger', 'Hardware wallet']];
 
 /* ---------------- modals ---------------- */
 function Frame({ cls = '', children }: { cls?: string; children: ReactNode }) {
@@ -29,10 +31,11 @@ function SignIn() {
     <Frame cls="auth-m">
       <div className="auth">
         <Tile size="lg" />
-        <h2>Sign in or create an account</h2>
-        <p className="muted">Use an account you already have. AGORA sets up a NEAR account for you, with no seed phrase and no gas.</p>
+        <h2>Sign in</h2>
+        <p className="muted">New here? Signing in creates your account. AGORA makes a NEAR account for you: no password, no seed phrase, no gas.</p>
         <button className="btn wide" onClick={() => act.signVia('google')}><GoogleIcon />Continue with Google</button>
         <button className="btn wide" onClick={() => act.signVia('github')}><Icon name="github" />Continue with GitHub</button>
+        <button className="btn wide" onClick={act.passkey}><Icon name="lock" />Continue with a passkey</button>
         <div className="or"><span>or</span></div>
         <form className="mailrow" onSubmit={submit}>
           <label className="visually-hidden" htmlFor="mail-in">Email</label>
@@ -47,20 +50,57 @@ function SignIn() {
   );
 }
 
-function Wallets() {
-  const list = [['Meteor Wallet', 'Browser extension and web'], ['HOT Wallet', 'Mobile and Telegram'], ['MyNearWallet', 'Web wallet'], ['Ledger', 'Hardware wallet']];
+/** The 6-digit email code. Prototype: any 6 digits work. */
+function Code() {
+  const { mail } = useApp();
+  const [code, setCode] = useState('');
+  return (
+    <Frame cls="auth-m">
+      <div className="auth">
+        <Tile size="lg" />
+        <h2>Check your email</h2>
+        <p className="muted">We sent a 6-digit code to <b>{mail || 'your inbox'}</b>. It expires in 10 minutes.</p>
+        <form className="stack" onSubmit={(e) => { e.preventDefault(); act.signCode(code); }}>
+          <label className="visually-hidden" htmlFor="code-in">6-digit code</label>
+          <input className="input otp num" id="code-in" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="000000" value={code} onChange={(e) => setCode(e.target.value)} />
+          <button className="btn primary wide" type="submit">Verify and continue</button>
+        </form>
+        <div className="row" style={{ justifyContent: 'center' }}><button className="lk" onClick={act.passkey}>Use a passkey instead</button><button className="lk" onClick={act.resend}>Resend code</button></div>
+        <p className="muted xsmall">AGORA never asks for a password. A one-time code or a passkey can't be reused or leaked. Prototype: any 6 digits work.</p>
+      </div>
+    </Frame>
+  );
+}
+
+/** After sign-in: the NEAR account is ready; connecting a wallet is optional. */
+function WalletStep() {
+  return (
+    <Frame cls="auth-m">
+      <div className="auth">
+        <Tile size="lg" />
+        <h2>Your NEAR account is ready</h2>
+        <p className="muted">We created <b className="mono">{ME.acct}</b> and a sub-account for your agents. Gas is on us.</p>
+        <div className="banner"><Icon name="wallet" /><div className="grow"><b style={{ fontWeight: 500 }}>Already have a NEAR wallet?</b><span className="muted small">Connect it to fund jobs from it. Optional: you can add USDC from another chain later. Sellers add a payout wallet only when they withdraw.</span></div></div>
+        <button className="btn wide ghost-line" onClick={act.walletpick}><Icon name="wallet" />Connect a NEAR wallet</button>
+        <button className="btn primary wide" onClick={act.signin2}>Skip for now</button>
+      </div>
+    </Frame>
+  );
+}
+
+function Wallets({ onPick, back }: { onPick: () => void; back: () => void }) {
   return (
     <Frame>
       <h2>Connect a NEAR wallet</h2>
       <p className="muted">Your wallet keeps its own keys. AGORA never sees your seed phrase.</p>
       <div className="wallets">
-        {list.map((w) => (
-          <button key={w[0]} className="wl" onClick={() => act.signVia('wallet')}>
+        {WALLETS.map((w) => (
+          <button key={w[0]} className="wl" onClick={onPick}>
             <span className="avatar ag">{w[0].slice(0, 1)}</span><span><b>{w[0]}</b><span className="muted xsmall">{w[1]}</span></span><Icon name="ext" />
           </button>
         ))}
       </div>
-      <div className="acts"><button className="btn" onClick={act.signin}>Back</button></div>
+      <div className="acts"><button className="btn" onClick={back}>Back</button></div>
     </Frame>
   );
 }
@@ -84,27 +124,13 @@ function RolePicker() {
   );
 }
 
-function Fund() {
-  const s = useApp();
-  const b = sellerBy(s.chatWith) || BIDS[0];
-  const checks = ['Not paused', `${usd(b.final)} within per-job cap 50.00`, `Today 0.00 plus ${usd(b.final)} within daily cap 120.00`, 'Category: smart contracts', `No fraud flag on ${b.name} (${b.fraud}/100)`, 'Price check cleared', 'Free balance 120.00'];
-  return (
-    <Frame>
-      <h2>Fund escrow</h2>
-      <p className="muted">Your transaction agent will call <span className="mono">fund_job</span> for {b.name}. The contract checks your limits first.</p>
-      <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>{checks.map((c) => <Check key={c}>{c}</Check>)}</div>
-      <div className="acts"><Cancel /><button className="btn primary" onClick={act.fund2}>Lock {usd(b.final)} USDC</button></div>
-    </Frame>
-  );
-}
-
 function Send() {
   const s = useApp();
   return (
     <Frame>
       <h2>Send USDC</h2>
       <div className="field"><label htmlFor="snd-to">To</label><input className="input mono" id="snd-to" placeholder="name.near or name.testnet" /></div>
-      <div className="field"><label htmlFor="snd-amt">Amount</label><input className="input num" id="snd-amt" defaultValue="10.00" /><span className="hint">{usd(free(s))} USDC available</span></div>
+      <div className="field"><label htmlFor="snd-amt">Amount</label><input className="input num" id="snd-amt" placeholder="0.00" defaultValue="10.00" /><span className="hint">{usd(free(s))} USDC available</span></div>
       <div className="banner hold"><Icon name="lock" /><div className="grow"><span>Sending needs your full-access key. Agent keys can't send.</span></div></div>
       <div className="acts"><Cancel /><button className="btn primary" onClick={act.send2}>Confirm with Google</button></div>
     </Frame>
@@ -128,22 +154,27 @@ function AddFunds() {
       <div className="row"><h2>Add funds</h2><T name="NEAR Intents" tip="Cross-chain pay-in settled as USDC on NEAR" /></div>
       <div className="grid g-2">
         <div className="field"><label htmlFor="w-from">From</label><select className="input" id="w-from">{['USDC on Base', 'USDC on Arbitrum', 'ETH on Ethereum', 'SOL on Solana', 'USDC on NEAR'].map((o) => <option key={o}>{o}</option>)}</select></div>
-        <div className="field"><label htmlFor="w-amt">Amount</label><input className="input num" id="w-amt" defaultValue="100.00" /></div>
+        <div className="field"><label htmlFor="w-amt">Amount</label><input className="input num" id="w-amt" placeholder="0.00" defaultValue="100.00" /></div>
       </div>
       <div className="banner info"><Icon name="bolt" /><div className="grow"><b style={{ fontWeight: 500 }}>You receive 99.71 USDC on NEAR</b><span className="muted">About 40 seconds, fee 0.29, quote expires in 2 min</span></div></div>
-      <p className="muted xsmall">Intents has no testnet, so this prototype shows dry-run quotes only.</p>
-      <div className="acts"><Cancel /><button className="btn primary" onClick={act.intents}>Get dry-run quote</button></div>
+      <p className="muted xsmall">Intents runs on mainnet only. The demo makes one real 1 USDC payment and links it in the README; everything else here runs on testnet.</p>
+      <div className="acts"><button className="btn" onClick={act.intents}>Refresh quote</button><button className="btn primary" onClick={act.intentspay}>Pay with NEAR Intents</button></div>
     </Frame>
   );
 }
 
+const REASONS = ['The tests were wrong', 'The review or test run failed', 'Deadline or no delivery'];
 function Dispute() {
+  const s = useApp();
   return (
     <Frame>
-      <h2>Open a dispute?</h2>
-      <p className="muted">This freezes the 32.00 USDC milestone and sends the spec, commits and reviewer logs to the arbiter DAO. Auto-release stops until the DAO rules.</p>
-      <div className="field"><label htmlFor="d-why">What went wrong</label><textarea className="input" id="d-why" placeholder="Explain in a sentence or two" /></div>
-      <div className="acts"><Cancel /><button className="btn danger" onClick={act.dispute2}>Freeze and send to DAO</button></div>
+      <h2>Open a dispute</h2>
+      <p className="muted">This freezes the {usd(hPrice(s))} USDC payment. First, 3 fresh reviewers re-check everything for free. If you still disagree, you can ask the DAO with a small bond you get back if you're right.</p>
+      <div className="field"><span className="lbl-t">What went wrong?</span>
+        <div className="chips">{REASONS.map((r) => <button key={r} type="button" className={`chip ${s.dReason === r ? 'on' : ''}`} aria-pressed={s.dReason === r} onClick={() => setState({ dReason: r })}>{r}</button>)}</div>
+      </div>
+      <div className="field"><label htmlFor="d-why">One line, in your words</label><input className="input" id="d-why" placeholder="e.g. The locked test expects the wrong rounding" /></div>
+      <div className="acts"><Cancel /><button className="btn danger" onClick={act.dispute2}>Start free re-check</button></div>
     </Frame>
   );
 }
@@ -168,10 +199,10 @@ function RequestService() {
     <Frame>
       <h2>Request this service</h2>
       <p className="muted">{g.seller} gets this first. Your agent writes the tests from it, and escrow funds only if they accept.</p>
-      <div className="field"><label htmlFor="rq-repo">Repository</label><input className="input" id="rq-repo" defaultValue="github.com/lumen-labs/payroll-vault" /></div>
-      <div className="field"><label htmlFor="rq-what">What's broken or needed</label><textarea className="input" id="rq-what" value={what} onChange={(e) => setWhat(e.target.value)} /></div>
+      <div className="field"><label htmlFor="rq-repo">Repository</label><input className="input" id="rq-repo" placeholder="github.com/you/repo" defaultValue="github.com/lumen-labs/payroll-vault" /></div>
+      <div className="field"><label htmlFor="rq-what">What's broken or needed</label><textarea className="input" id="rq-what" placeholder="What is broken, and what done looks like" value={what} onChange={(e) => setWhat(e.target.value)} /></div>
       <div className="grid g-2">
-        <div className="field"><label htmlFor="rq-b">Budget</label><input className="input num" id="rq-b" defaultValue={`${g.from}.00 USDC`} /></div>
+        <div className="field"><label htmlFor="rq-b">Budget</label><input className="input num" id="rq-b" placeholder="e.g. 25.00 USDC" defaultValue={`${g.from}.00 USDC`} /></div>
         <div className="field"><label htmlFor="rq-d">Deliver within</label><select className="input" id="rq-d"><option>{g.days === 1 ? '1 day' : g.days + ' days'}</option><option>1 week</option></select></div>
       </div>
       <div className="acts"><Cancel /><button className="btn primary" onClick={() => act.reqsvc2(what.trim())}>Send request</button></div>
@@ -181,7 +212,7 @@ function RequestService() {
 
 function OtherJob({ id }: { id: string }) {
   const { newJobs } = useApp();
-  const j = [...newJobs, ...OTHER_JOBS].find((x) => x.id === id);
+  const j = [...newJobs, ...OTHER_JOBS, ...DONE_JOBS].find((x) => x.id === id);
   if (!j) return null;
   return (
     <Frame>
@@ -190,7 +221,7 @@ function OtherJob({ id }: { id: string }) {
       <dl className="kv">
         <dt>Category</dt><dd>{j.cat}</dd><dt>Budget</dt><dd>{j.budget} USDC</dd>
         {j.who && <><dt>Seller</dt><dd>{j.who}</dd></>}
-        <dt>Status</dt><dd>{j.note}</dd>
+        {j.note && <><dt>Status</dt><dd>{j.note}</dd></>}
       </dl>
       <p className="muted xsmall">Sample job. The full walkthrough runs on J-1042.</p>
       <div className="acts"><button className="btn primary" onClick={closeModal}>Close</button></div>
@@ -210,10 +241,10 @@ function Offer({ id }: { id: string }) {
       <p className="muted">{o.buyer} asked: {o.title}. If they accept, the tests are locked and escrow is funded before you start.</p>
       <form className="stack" onSubmit={(e) => { e.preventDefault(); orderAct.sendOffer(id, price, days); }}>
         <div className="grid g-2">
-          <div className="field"><label htmlFor="of-p">Your price</label><input className="input num" id="of-p" value={price} onChange={(e) => setPrice(e.target.value)} /></div>
+          <div className="field"><label htmlFor="of-p">Your price</label><input className="input num" id="of-p" placeholder="e.g. 42.00 USDC" value={price} onChange={(e) => setPrice(e.target.value)} /></div>
           <div className="field"><label htmlFor="of-d">Delivery</label><select className="input" id="of-d" value={days} onChange={(e) => setDays(e.target.value)}><option>1 day</option><option>2 days</option><option>3 days</option></select></div>
         </div>
-        <div className="field"><label htmlFor="of-n">Note to the buyer</label><textarea className="input" id="of-n" rows={3} defaultValue="I can reproduce it on Safari 18. I will add one extra test for the 390 px layout." /></div>
+        <div className="field"><label htmlFor="of-n">Note to the buyer</label><textarea className="input" id="of-n" rows={3} placeholder="A short note: how you will do it" defaultValue="I can reproduce it on Safari 18. I will add one extra test for the 390 px layout." /></div>
         <div className="acts"><button type="button" className="btn ghost" data-close="1" onClick={closeModal}>Cancel</button><button type="submit" className="btn primary">Send offer</button></div>
       </form>
     </Frame>
@@ -225,9 +256,11 @@ export function ModalHost() {
   if (!modal) return null;
   switch (modal.kind) {
     case 'signin': return <SignIn />;
-    case 'wallets': return <Wallets />;
+    case 'code': return <Code />;
+    case 'walletstep': return <WalletStep />;
+    case 'walletpick': return <Wallets onPick={act.walletlinked} back={act.walletstep} />;
+    case 'wallets': return <Wallets onPick={() => act.signVia('wallet')} back={act.signin} />;
     case 'role': return <RolePicker />;
-    case 'fund': return <Fund />;
     case 'send': return <Send />;
     case 'receive': return <Receive />;
     case 'addfunds': return <AddFunds />;
@@ -236,6 +269,7 @@ export function ModalHost() {
     case 'reqsvc': return <RequestService />;
     case 'ojob': return <OtherJob id={modal.props?.id ?? ''} />;
     case 'offer': return <Offer id={modal.props?.id ?? ''} />;
+    default: return null;
   }
 }
 

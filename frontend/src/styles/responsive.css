@@ -11,3 +11,11 @@
   .top { gap: var(--space-2xs); padding-inline: var(--space-sm); }
   .top-right { gap: var(--space-3xs); }
 }
+
+/* Small phones (up to 384px): long held-offer pills, the offer price row and gig-card
+   level badges were clipped at the card edge. Let them wrap instead. */
+@media (max-width: 24rem) {
+  .orow2 .pill { white-space: normal; }
+  .or-p { flex-wrap: wrap; row-gap: var(--space-2xs); }
+  .gig-grid .gig-by { flex-wrap: wrap; row-gap: var(--space-3xs); }
+}
