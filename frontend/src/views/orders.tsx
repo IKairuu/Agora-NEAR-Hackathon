@@ -40,7 +40,7 @@ export function Orders() {
   const active = s.orders.filter((o) => o.st < 4), req = s.orders.filter((o) => o.st === 0), done = s.orders.filter((o) => o.st === 4);
   const list = s.oTab === 'req' ? req : s.oTab === 'done' ? done : active;
   const inEscrow = sum(s.orders.filter((o) => o.st === 2 || o.st === 3));
-  const tabs: [State['oTab'], string, number][] = [['active', 'Active', active.length], ['req', 'Requests', req.length], ['done', 'Completed', done.length]];
+  const tabs: [State['oTab'], string, number][] = [['active', 'Active', active.length], ['req', 'Incoming', req.length], ['done', 'Completed', done.length]];
   return (
     <Shell cur="orders">
       <Head title="Orders" sub="Jobs buyers hired you for. Escrow is funded before you start, and the locked tests decide when you get paid." actions={<RLink r="openjobs" className="btn"><Icon name="explore" />Find open jobs</RLink>} />
@@ -49,8 +49,8 @@ export function Orders() {
       )}
       <div className="tally o-tally">
         <div><span className="lbl">Active</span><b className="num">{active.length}</b></div>
-        <div><span className="lbl">New requests</span><b className="num">{req.length}</b></div>
-        <div><span className="lbl">In escrow for you</span><b className="num">{usd(inEscrow)}<span className="u">USDC</span></b></div>
+        <div><span className="lbl">Incoming</span><b className="num">{req.length}</b></div>
+        <div><span className="lbl">Protected for you</span><b className="num">{usd(inEscrow)}<span className="u">USDC</span></b></div>
         <div><span className="lbl">Paid this month</span><b className="num">{usd(sum(done))}<span className="u">USDC</span></b></div>
       </div>
       <div className="tabs" role="tablist">

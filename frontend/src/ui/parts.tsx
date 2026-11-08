@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, type LinkProps } from 'react-router';
-import { GIGS, OTHER_JOBS, type Gig, type OtherJob } from '../data/sample';
+import { dirKey, GIGS, LIFE, OTHER_JOBS, sellerBy, usd, type Gig, type OtherJob } from '../data/sample';
 import { act, pathOf } from '../store/actions';
-import { getState, openModal, useApp } from '../store/store';
+import { getState, hb, hPrice, openModal, useApp, type State } from '../store/store';
 import { Icon, type IconName } from './icons';
 
 /** In-app link by prototype route name ('ask', 'jobs', ...). */
@@ -30,11 +30,24 @@ export function Gate({ msg, children }: { msg: string; children?: ReactNode }) {
 }
 export const SignInButton = ({ label = 'Sign in' }: { label?: string }) => <button className="btn primary" onClick={act.signin}>{label}</button>;
 
+/** The eight lifecycle nodes; `at` is the current one. */
+export function Nodes({ at, blocked }: { at: number; blocked?: boolean }) {
+  return (
+    <ol className="nodes" aria-label={`Stage ${Math.min(at + 1, 8)} of 8`}>
+      {LIFE.map((x, i) => <li key={x} className={i < at ? 'done' : i === at ? (blocked ? 'stop' : 'now') : ''}><i aria-hidden="true">{i < at && <Icon name="check" />}</i><span>{x}</span></li>)}
+    </ol>
+  );
+}
 export function Lifecycle() {
   const { stage } = useApp();
-  const st = ['Posted', 'Bids', 'Negotiate', 'Funded', 'Delivered', 'Reviewed', 'Released', 'Settled'];
   const at = stage >= 7 ? 8 : stage >= 6 ? 4 : stage >= 5 ? 3 : stage >= 4 ? 3 : stage >= 3 ? 1 : stage >= 2 ? 1 : 0;
-  return <div className="life">{st.map((s, i) => <div key={s} className={i < at ? 'done' : i === at ? 'now' : ''}>{s}</div>)}</div>;
+  return <div className="life-n"><Nodes at={at} blocked={stage >= 8} /></div>;
+}
+
+/** A seller's name: a link to their profile when they are in the directory. */
+export function SName({ name, cls = '' }: { name: string; cls?: string }) {
+  const k = dirKey(name);
+  return k ? <button className={`as-link sname ${cls}`.trim()} onClick={() => act.who(k)}>{name}</button> : <b>{name}</b>;
 }
 
 export function Mk({ k }: { k: 'ok' | 'hold' | 'block' }) {
@@ -63,25 +76,35 @@ export function Review({ who, txt, when }: { who: string; txt: string; when: str
   );
 }
 
-export function Feed({ short }: { short?: boolean }) {
-  const { stage } = useApp();
-  const items: { t: string; who: string; txt: string; k: string }[] = [];
+interface FeedItem { t: string; who: string; txt: string; k: string }
+/** Agent activity, newest first. Also feeds the demo job's activity log. */
+export function feedItems(s: State): FeedItem[] {
+  const { stage } = s;
+  const items: FeedItem[] = [];
   const add = (t: string, who: string, txt: string, k = '') => items.push({ t, who, txt, k });
+  const H = hb(s), A = usd(hPrice(s));
   if (stage >= 8) add('16:42:19', 'Guardian', 'Paused all agents after 6 rejected calls in 40 seconds from the transaction key.', 'block');
-  if (stage >= 7) { add('16:31:05', 'Contract', 'Released 32.00 USDC to patchsmith.agents.testnet. Completion record #412 minted.', 'ok'); add('16:31:04', 'Reviewer B', 'Approved commit e5f1d07 (2 of 3). Attestation recorded.', 'ok'); }
+  if (stage >= 7) { add('16:31:05', 'Contract', `Released ${A} USDC to ${H.acct}. Completion record #412 minted.`, 'ok'); add('16:31:04', 'Reviewer B', 'Approved commit e5f1d07 (2 of 3). Attestation recorded.', 'ok'); }
   if (stage >= 6) add('16:24:40', 'Reviewers', 'Rejected commit 3b9c2aa: it edited the locked test. 0 of 3 approved.', 'block');
-  if (stage >= 5) add('16:12:02', 'Transaction', 'Funded J-1042: 32.00 USDC into escrow. 9 mandate checks passed.', 'ok');
-  if (stage >= 4) add('16:11:40', 'Buyer agent', 'Picked patchsmith at 32.00 USDC and opened a chat with three basic questions.');
-  if (stage >= 3) { add('16:08:13', 'Fraud and lure', 'Held 2 bids: one asked for off-platform payment, one priced 94% below reference.', 'hold'); add('16:07:55', 'Buyer agent', 'Waiting for at least 3 offers before shortlisting. 4 valid so far.'); }
-  if (stage >= 2) add('16:03:20', 'Spec writer', 'Wrote 2 failing tests and 6 acceptance checks for J-1042. You approved them.');
+  if (stage >= 5) { add('16:12:02', 'Transaction agent', `Moved ${A} USDC into Protected payment for J-1042. 9 limit checks passed.`, 'ok'); add('16:12:01', H.name, 'Accepted the hire offer.', 'ok'); }
+  if (stage >= 4 && (s.offerSt || stage >= 5)) add('16:11:52', 'Buyer agent', `Sent the hire offer to ${H.name}: ${A} USDC, tests locked. Waiting for an answer.`);
+  s.declined.filter((k) => k !== s.hire).slice().reverse().forEach((k) => { const x = sellerBy(k)!; add('16:11:50', x.name, 'Declined the hire offer. Nothing was locked.', 'block'); add('16:11:45', 'Buyer agent', `Sent the hire offer to ${x.name}.`); });
+  if (stage >= 4 && !s.preNeg) add('16:11:40', 'Buyer agent', 'Negotiated patchsmith from 36.00 to 32.00 USDC, under the 35.50 median.');
+  if (stage >= 3) { add('16:08:13', 'Fraud and lure agent', 'Held 2 offers: one asked for off-platform payment, one priced 94% below the usual price.', 'hold'); add('16:07:55', 'Buyer agent', '3 valid offers in. You can choose now.'); }
+  if (stage >= 2) add('16:03:20', 'Spec writer', 'You locked 2 failing tests and 6 checks for J-1042. Sent privately to 9 matching sellers.');
   if (stage >= 1) add('16:01:02', 'Account', 'Created lumen.testnet and agents.lumen.testnet. Gas paid by relayer.');
+  return items;
+}
+export function Feed({ short }: { short?: boolean }) {
+  const s = useApp();
+  const items = feedItems(s);
   const list = short ? items.slice(0, 5) : items;
   if (!list.length) return <p className="muted" style={{ padding: '12px 0' }}>Nothing yet.</p>;
   const icon = (k: string): IconName => (k === 'block' ? 'x' : k === 'hold' ? 'warn' : k === 'ok' ? 'check' : 'bolt');
   return (
     <div className="feed">
       {list.map((i) => (
-        <div className="feed-i" key={i.t + i.who}>
+        <div className="feed-i" key={i.t + i.who + i.txt}>
           <Icon name={icon(i.k)} className={i.k} />
           <div><b style={{ fontWeight: 500 }}>{i.who}</b> <span className="muted">{i.txt}</span></div>
           <time>{i.t}</time>
@@ -138,7 +161,7 @@ export function GigCard({ g }: { g: Gig }) {
       <button className="gig-pic" onClick={() => act.openGig(g.id)} aria-label={`Request: ${g.title}`}><Thumb g={g} /></button>
       <button className={`heart ${on ? 'on' : ''}`} onClick={() => act.like(g.id)} aria-pressed={on} aria-label={on ? 'Remove from saved' : 'Save'}><Icon name="heart" /></button>
       <div className="gig-by">
-        <span className={`avatar xs ${g.kind === 'agent' ? 'ag' : ''}`}>{g.initials}</span><b>{g.seller}</b>
+        <span className={`avatar xs ${g.kind === 'agent' ? 'ag' : ''}`}>{g.initials}</span><SName name={g.seller} />
         {g.kind === 'agent' && <span className="lvl">Agent</span>}
         <span className={`lvl ${levelClass(g.level)}`}>{g.level}</span>
       </div>

@@ -5,7 +5,7 @@ import { setNavigate } from './store/actions';
 import { SvgDefs } from './ui/icons';
 import { ModalHost, Toasts, Tour } from './ui/Overlays';
 import { Agents, Mandate, Wallet } from './views/agents';
-import { Ask, Dash, Explore, Jobs, Post, Saved, Svc } from './views/hire';
+import { Ask, Dash, Explore, Jobs, Ojob, Post, Saved, Svc } from './views/hire';
 import { Chat, Job, Room } from './views/job';
 import { Dispute, Profile, Sell, Seller } from './views/market';
 import { Orders } from './views/orders';
@@ -37,6 +37,7 @@ const router = createBrowserRouter([{
     { path: '/explore', element: <Explore /> },
     { path: '/openjobs', element: <Explore sell /> },
     { path: '/orders', element: <Orders /> },
+    { path: '/ojob', element: <Ojob /> },
     { path: '/svc', element: <Svc /> },
     { path: '/saved', element: <Saved /> },
     { path: '/post', element: <Post /> },
