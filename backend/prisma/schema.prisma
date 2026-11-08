@@ -572,6 +572,7 @@ model Bid {
   price               Decimal                  @db.Decimal(20, 6)
   /// Postgres interval. Unsupported: write it with $executeRaw.
   deliveryEta         Unsupported("interval")? @map("delivery_eta")
+  deliveryDays        Int?                     @map("delivery_days") @db.SmallInt
   note                String?
   proposedMilestones  Json?                    @map("proposed_milestones") @db.JsonB
   status              BidStatus                @default(pending_check)
