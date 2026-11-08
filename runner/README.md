@@ -43,13 +43,26 @@ Every step runs in a fresh container with:
 
 Locked test files live outside the shared work directory and are bind-mounted read-only, so delivered code, including build scripts, cannot change them. The work directory is deleted after every run.
 
-## Smoke test
+## J-1042 fixture
 
-`AGORA_RUNNER_DEV_REPO_DIR` lets the runner clone local repositories as `file:///src/<name>`. Use it only for local testing.
+[fixtures/j1042](fixtures/j1042) is a small payroll crate whose `split_payment` loses dust. It has 31 passing tests and 2 named failing tests in `tests/split_rounding.rs`. Four deliveries are stored as files that replace the base files:
+
+| Delivery | What it does | Expected |
+| --- | --- | --- |
+| `good` | Gives the remainder to the last worker | pass: 33 of 33 tests, scope ok |
+| `wrong-fix` | Gives the remainder to the first worker | fail: `test_split_dust_to_last` fails |
+| `out-of-scope` | Correct fix, plus a planted change in `src/fees.rs` | fail: tests pass, scope fails |
+| `edits-test` | Weakens the locked test instead of fixing the bug | fail: the locked test still runs |
+
+The test script builds a git repository from these files with fixed commit hashes and sends every case to `/run`. Set `AGORA_RUNNER_DEV_REPO_DIR` to the absolute path of `.fixtures` and create the folder before you start the runner. Dev mode lets the runner clone local repositories as `file:///src/<name>`, so use it only for local testing.
 
 ```sh
-npm run smoke -- file:///src/<repo> <baseCommit> <goodCommit> <cheatCommit> tests/<file>.rs <path-to-locked-test>
+mkdir -p .fixtures
+npm start
+npm run test:j1042
 ```
+
+Use `cargo test --no-fail-fast` as the test command, so every test binary runs even after one fails.
 
 ## Limits
 

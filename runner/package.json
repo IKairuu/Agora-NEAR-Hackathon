@@ -8,7 +8,7 @@
         "start": "node dist/main.js",
         "dev": "tsx watch src/main.ts",
         "image": "docker build -t agora-runner-rust images/rust",
-        "smoke": "tsx scripts/smoke.ts"
+        "test:j1042": "tsx scripts/j1042.ts"
     },
     "dependencies": {
         "dotenv": "^16.6.1",
