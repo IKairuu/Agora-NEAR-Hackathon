@@ -2,7 +2,7 @@
 
 Owner: Member A. This file is the contract between the Rust contract, A's `chain/` module, the indexer, and Members B, C and D. Method names, arguments and event names change only with notice to the whole team.
 
-Status: Phase 0 draft, 2026-11-08. Implemented so far: `new`, `get_config`, `is_paused`.
+Status: Phase 0 draft, 2026-11-08. Implemented so far: setup and config, balances, deposit, `withdraw`, mandate, `pause`, `unpause`, `register_seller`, `post_job`, `place_bid`, `set_bid_flags`, and their views.
 
 ## 1. Basics
 
@@ -44,6 +44,7 @@ The contract maps `agents.<owner>` to `<owner>`: a call from `agents.alice.testn
 | `new` (init) | `owner_id, usdc_token, dao_account` | Contract account | Once only |
 | `set_reviewers` | `reviewers: [AccountId; 3]` | Config owner | 1y |
 | `set_fraud_oracle` | `oracle_id` | Config owner | 1y |
+| `register_seller` | `account_id` | Config owner (the platform, after C's seller onboarding) | 1y. Only registered sellers can bid |
 | `ft_on_transfer` | `sender_id, amount, msg` | USDC contract only | `msg`: `"deposit"`, `"dispute_bond:<job_id>"` or `"starter_stake"`. Credits the sender's free balance. Returns `"0"` (keeps all) |
 | `withdraw` | `amount` | Owner | 1y. Only free balance. Sends USDC with `ft_transfer` |
 
@@ -62,8 +63,8 @@ Mandate defaults (from the prototype Limits page): per-job cap 50 USDC, daily ca
 | Method | Arguments | Caller | Rules |
 |---|---|---|---|
 | `post_job` | `category, budget_hint, spec_hash, deadline` | Buyer or buyer's agent | Returns `job_id`. Emits `job_posted` |
-| `place_bid` | `job_id, price, days` | Seller or bidding agent | Moves no money. Returns `bid_id`. Emits `bid_placed` |
-| `set_bid_flags` | `job_id, bid_id, price_check_ok: bool, fraud_score: u8, held: bool` | Fraud oracle only | Emits `bid_flagged` |
+| `place_bid` | `job_id, price, days` | Seller or bidding agent | Registered sellers only. Max 20 bids per job, 1 bid per seller per job, max 10 open bids per seller (bid spam). Moves no money. Returns `bid_id`. Emits `bid_placed` |
+| `set_bid_flags` | `job_id, bid_id, price_check_ok: bool, fraud_score: u8, held: bool` | Fraud oracle only | Fraud score 0 to 100; 70 or more counts as a high fraud flag. Emits `bid_flagged` (with `high_fraud`) |
 | `accept_offer` | `job_id, bid_id, price, spec_hash, holdout_hash, attempts, deadline` | Buyer or buyer's agent | Seller must not be the buyer or the buyer's agent (self-dealing). Locks the terms. Emits `offer_accepted` |
 | `fund_job` | `job_id` | Buyer or buyer's agent | Runs the nine checks (section 4), moves price from free balance to escrow, adds it to used today. Emits `job_funded` |
 | `submit_delivery` | `job_id, commit_hash` | Hired seller or their agent | Uses one attempt. Assigns the three reviewers. Emits `delivery_submitted` |
@@ -85,7 +86,7 @@ Mandate defaults (from the prototype Limits page): per-job cap 50 USDC, daily ca
 
 ### Views (free, no signature)
 
-`get_config()`, `is_paused(account_id)`, `get_balance(account_id) -> { free, escrowed }`, `get_mandate(account_id)`, `get_used_today(account_id)`, `get_job(job_id)`, `get_bids(job_id)`, `get_votes(job_id)`, `get_reputation(account_id) -> { settled, disputes, rating_sum, rating_count }`.
+`get_config()`, `is_seller(account_id)`, `is_paused(account_id)`, `get_balance(account_id) -> { free, escrowed }`, `get_mandate(account_id)`, `get_used_today(account_id)`, `get_job(job_id)`, `get_bids(job_id)`, `get_votes(job_id)`, `get_reputation(account_id) -> { settled, disputes, rating_sum, rating_count }`.
 
 ## 4. The nine funding checks (`fund_job`)
 

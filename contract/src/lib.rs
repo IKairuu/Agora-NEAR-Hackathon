@@ -1,12 +1,15 @@
-use near_sdk::json_types::U128;
+use near_sdk::json_types::{U128, U64};
 use near_sdk::serde_json::{json, Value};
-use near_sdk::store::LookupMap;
+use near_sdk::store::{LookupMap, LookupSet};
 use near_sdk::{
     assert_one_yocto, env, ext_contract, near, require, AccountId, BorshStorageKey, Gas,
     NearToken, PanicOnDefault, PromiseError, PromiseOrValue,
 };
 
 const USDC: u128 = 1_000_000;
+const MAX_BIDS_PER_JOB: usize = 20;
+const MAX_OPEN_BIDS_PER_SELLER: u32 = 10;
+const HIGH_FRAUD_SCORE: u8 = 70;
 const GAS_FOR_FT_TRANSFER: Gas = Gas::from_tgas(10);
 const GAS_FOR_WITHDRAW_CALLBACK: Gas = Gas::from_tgas(10);
 
@@ -20,6 +23,10 @@ pub trait FungibleToken {
 enum StorageKey {
     Balances,
     Mandates,
+    Sellers,
+    OpenBids,
+    Jobs,
+    Bids,
 }
 
 #[near(serializers = [json, borsh])]
@@ -29,6 +36,45 @@ pub struct Config {
     pub usdc_token: AccountId,
     pub dao_account: AccountId,
     pub fee_bps: u16,
+    pub fraud_oracle: Option<AccountId>,
+    pub reviewers: Vec<AccountId>,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone, PartialEq, Debug)]
+pub enum JobStage {
+    Open,
+    Accepted,
+    Funded,
+    Delivered,
+    Released,
+    Refunded,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
+pub struct Job {
+    pub job_id: U64,
+    pub buyer: AccountId,
+    pub category: String,
+    pub budget_hint: U128,
+    pub spec_hash: String,
+    pub deadline: U64,
+    pub stage: JobStage,
+    pub bid_ids: Vec<U64>,
+}
+
+#[near(serializers = [json, borsh])]
+#[derive(Clone)]
+pub struct Bid {
+    pub bid_id: U64,
+    pub job_id: U64,
+    pub seller: AccountId,
+    pub price: U128,
+    pub days: u32,
+    pub price_check_ok: Option<bool>,
+    pub fraud_score: u8,
+    pub held: bool,
 }
 
 #[near(serializers = [json, borsh])]
@@ -72,6 +118,12 @@ pub struct Contract {
     config: Config,
     balances: LookupMap<AccountId, Balance>,
     mandates: LookupMap<AccountId, Mandate>,
+    sellers: LookupSet<AccountId>,
+    open_bids: LookupMap<AccountId, u32>,
+    jobs: LookupMap<u64, Job>,
+    bids: LookupMap<u64, Bid>,
+    next_job_id: u64,
+    next_bid_id: u64,
 }
 
 pub fn is_agent(account_id: &AccountId) -> bool {
@@ -82,6 +134,12 @@ pub fn owner_of(account_id: &AccountId) -> AccountId {
     match account_id.as_str().strip_prefix("agents.") {
         Some(owner) => owner.parse().unwrap(),
         None => account_id.clone(),
+    }
+}
+
+impl Contract {
+    fn require_config_owner(&self) {
+        require!(env::predecessor_account_id() == self.config.owner_id, "Only the config owner");
     }
 }
 
@@ -106,9 +164,17 @@ impl Contract {
                 usdc_token,
                 dao_account,
                 fee_bps: 200,
+                fraud_oracle: None,
+                reviewers: vec![],
             },
             balances: LookupMap::new(StorageKey::Balances),
             mandates: LookupMap::new(StorageKey::Mandates),
+            sellers: LookupSet::new(StorageKey::Sellers),
+            open_bids: LookupMap::new(StorageKey::OpenBids),
+            jobs: LookupMap::new(StorageKey::Jobs),
+            bids: LookupMap::new(StorageKey::Bids),
+            next_job_id: 1,
+            next_bid_id: 1,
         }
     }
 
@@ -184,6 +250,141 @@ impl Contract {
         mandate.paused = false;
         self.mandates.insert(account_id.clone(), mandate);
         emit("unpaused", json!({ "account_id": account_id }));
+    }
+
+    #[payable]
+    pub fn set_fraud_oracle(&mut self, oracle_id: AccountId) {
+        assert_one_yocto();
+        self.require_config_owner();
+        self.config.fraud_oracle = Some(oracle_id);
+    }
+
+    #[payable]
+    pub fn set_reviewers(&mut self, reviewers: Vec<AccountId>) {
+        assert_one_yocto();
+        self.require_config_owner();
+        require!(reviewers.len() == 3, "Exactly three reviewers");
+        self.config.reviewers = reviewers;
+    }
+
+    #[payable]
+    pub fn register_seller(&mut self, account_id: AccountId) {
+        assert_one_yocto();
+        self.require_config_owner();
+        self.sellers.insert(account_id);
+    }
+
+    pub fn is_seller(&self, account_id: AccountId) -> bool {
+        self.sellers.contains(&account_id)
+    }
+
+    pub fn get_job(&self, job_id: U64) -> Option<Job> {
+        self.jobs.get(&job_id.0).cloned()
+    }
+
+    pub fn get_bids(&self, job_id: U64) -> Vec<Bid> {
+        match self.jobs.get(&job_id.0) {
+            Some(job) => job
+                .bid_ids
+                .iter()
+                .filter_map(|id| self.bids.get(&id.0).cloned())
+                .collect(),
+            None => vec![],
+        }
+    }
+
+    pub fn post_job(&mut self, category: String, budget_hint: U128, spec_hash: String, deadline: U64) -> U64 {
+        let buyer = owner_of(&env::predecessor_account_id());
+        require!(!category.is_empty(), "Category is required");
+        require!(!spec_hash.is_empty(), "Spec hash is required");
+        require!(deadline.0 > env::block_timestamp(), "Deadline must be in the future");
+        let job_id = self.next_job_id;
+        self.next_job_id += 1;
+        let job = Job {
+            job_id: U64(job_id),
+            buyer: buyer.clone(),
+            category: category.clone(),
+            budget_hint,
+            spec_hash: spec_hash.clone(),
+            deadline,
+            stage: JobStage::Open,
+            bid_ids: vec![],
+        };
+        self.jobs.insert(job_id, job);
+        emit(
+            "job_posted",
+            json!({
+                "job_id": U64(job_id),
+                "buyer": buyer,
+                "category": category,
+                "budget_hint": budget_hint,
+                "spec_hash": spec_hash,
+                "deadline": deadline,
+            }),
+        );
+        U64(job_id)
+    }
+
+    pub fn place_bid(&mut self, job_id: U64, price: U128, days: u32) -> U64 {
+        let seller = owner_of(&env::predecessor_account_id());
+        require!(self.sellers.contains(&seller), "Not a registered seller");
+        require!(price.0 > 0, "Price must be positive");
+        require!(days > 0, "Days must be positive");
+        let mut job = self.jobs.get(&job_id.0).cloned().unwrap_or_else(|| env::panic_str("Job not found"));
+        require!(job.stage == JobStage::Open, "Job is not open for bids");
+        require!(job.buyer != seller, "Cannot bid on your own job");
+        require!(job.bid_ids.len() < MAX_BIDS_PER_JOB, "Too many bids on this job");
+        let already = job
+            .bid_ids
+            .iter()
+            .any(|id| self.bids.get(&id.0).map(|b| b.seller == seller).unwrap_or(false));
+        require!(!already, "Seller already bid on this job");
+        let open = self.open_bids.get(&seller).copied().unwrap_or(0);
+        require!(open < MAX_OPEN_BIDS_PER_SELLER, "Too many open bids for this seller");
+        let bid_id = self.next_bid_id;
+        self.next_bid_id += 1;
+        let bid = Bid {
+            bid_id: U64(bid_id),
+            job_id,
+            seller: seller.clone(),
+            price,
+            days,
+            price_check_ok: None,
+            fraud_score: 0,
+            held: false,
+        };
+        self.bids.insert(bid_id, bid);
+        job.bid_ids.push(U64(bid_id));
+        self.jobs.insert(job_id.0, job);
+        self.open_bids.insert(seller.clone(), open + 1);
+        emit(
+            "bid_placed",
+            json!({ "job_id": job_id, "bid_id": U64(bid_id), "seller": seller, "price": price, "days": days }),
+        );
+        U64(bid_id)
+    }
+
+    pub fn set_bid_flags(&mut self, job_id: U64, bid_id: U64, price_check_ok: bool, fraud_score: u8, held: bool) {
+        let oracle = self.config.fraud_oracle.clone().unwrap_or_else(|| env::panic_str("No fraud oracle set"));
+        require!(env::predecessor_account_id() == oracle, "Only the fraud oracle can flag bids");
+        require!(fraud_score <= 100, "Fraud score is 0 to 100");
+        let mut bid = self.bids.get(&bid_id.0).cloned().unwrap_or_else(|| env::panic_str("Bid not found"));
+        require!(bid.job_id == job_id, "Bid is not on this job");
+        bid.price_check_ok = Some(price_check_ok);
+        bid.fraud_score = fraud_score;
+        bid.held = held;
+        self.bids.insert(bid_id.0, bid);
+        emit(
+            "bid_flagged",
+            json!({
+                "job_id": job_id,
+                "bid_id": bid_id,
+                "price_check_ok": price_check_ok,
+                "fraud_score": fraud_score,
+                "held": held,
+                "high_fraud": fraud_score >= HIGH_FRAUD_SCORE,
+            }),
+        );
     }
 
     pub fn get_balance(&self, account_id: AccountId) -> Balance {
@@ -278,6 +479,105 @@ mod tests {
     fn deposit(contract: &mut Contract, who: &str, amount: u128) {
         call_from("usdc.testnet", 0);
         let _ = contract.ft_on_transfer(acc(who), U128(amount), "deposit".to_string());
+    }
+
+    fn admin_setup() -> Contract {
+        let mut contract = setup();
+        call_from("owner.testnet", 1);
+        contract.set_fraud_oracle(acc("oracle.testnet"));
+        contract.register_seller(acc("seller.testnet"));
+        contract
+    }
+
+    fn post(contract: &mut Contract, from: &str) -> U64 {
+        call_from(from, 0);
+        contract.post_job("rust".to_string(), U128(40_000_000), "spec-hash-1".to_string(), U64(10_000))
+    }
+
+    #[test]
+    fn agent_posts_job_for_owner() {
+        let mut contract = admin_setup();
+        let job_id = post(&mut contract, "agents.alice.testnet");
+        let job = contract.get_job(job_id).unwrap();
+        assert_eq!(job.buyer, acc("alice.testnet"));
+        assert_eq!(job.stage, JobStage::Open);
+        assert_eq!(job_id.0, 1);
+    }
+
+    #[test]
+    fn registered_seller_bids() {
+        let mut contract = admin_setup();
+        let job_id = post(&mut contract, "alice.testnet");
+        call_from("agents.seller.testnet", 0);
+        let bid_id = contract.place_bid(job_id, U128(32_000_000), 2);
+        let bids = contract.get_bids(job_id);
+        assert_eq!(bids.len(), 1);
+        assert_eq!(bids[0].bid_id, bid_id);
+        assert_eq!(bids[0].seller, acc("seller.testnet"));
+    }
+
+    #[test]
+    #[should_panic(expected = "Not a registered seller")]
+    fn unregistered_seller_cannot_bid() {
+        let mut contract = admin_setup();
+        let job_id = post(&mut contract, "alice.testnet");
+        call_from("spammer.testnet", 0);
+        contract.place_bid(job_id, U128(1_000_000), 1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Seller already bid on this job")]
+    fn seller_cannot_bid_twice() {
+        let mut contract = admin_setup();
+        let job_id = post(&mut contract, "alice.testnet");
+        call_from("seller.testnet", 0);
+        contract.place_bid(job_id, U128(32_000_000), 2);
+        contract.place_bid(job_id, U128(30_000_000), 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "Too many open bids for this seller")]
+    fn seller_open_bid_cap() {
+        let mut contract = admin_setup();
+        for _ in 0..11 {
+            let job_id = post(&mut contract, "alice.testnet");
+            call_from("seller.testnet", 0);
+            contract.place_bid(job_id, U128(1_000_000), 1);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "Cannot bid on your own job")]
+    fn seller_cannot_bid_on_own_job() {
+        let mut contract = admin_setup();
+        let job_id = post(&mut contract, "seller.testnet");
+        call_from("seller.testnet", 0);
+        contract.place_bid(job_id, U128(1_000_000), 1);
+    }
+
+    #[test]
+    fn oracle_flags_bid() {
+        let mut contract = admin_setup();
+        let job_id = post(&mut contract, "alice.testnet");
+        call_from("seller.testnet", 0);
+        let bid_id = contract.place_bid(job_id, U128(32_000_000), 2);
+        call_from("oracle.testnet", 0);
+        contract.set_bid_flags(job_id, bid_id, false, 85, true);
+        let bid = &contract.get_bids(job_id)[0];
+        assert_eq!(bid.price_check_ok, Some(false));
+        assert_eq!(bid.fraud_score, 85);
+        assert!(bid.held);
+    }
+
+    #[test]
+    #[should_panic(expected = "Only the fraud oracle can flag bids")]
+    fn others_cannot_flag_bid() {
+        let mut contract = admin_setup();
+        let job_id = post(&mut contract, "alice.testnet");
+        call_from("seller.testnet", 0);
+        let bid_id = contract.place_bid(job_id, U128(32_000_000), 2);
+        call_from("alice.testnet", 0);
+        contract.set_bid_flags(job_id, bid_id, true, 0, false);
     }
 
     #[test]
