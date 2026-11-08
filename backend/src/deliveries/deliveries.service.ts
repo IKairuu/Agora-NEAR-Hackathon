@@ -4,13 +4,12 @@ import { isUUID } from 'class-validator';
 import { AuthService } from '../auth/auth.service.js';
 import { ChainService } from '../chain/chain.service.js';
 import { Prisma } from '../generated/prisma/client.js';
+import { dispatchRun, testFilesOf } from '../runner.js';
 import { DELIVERABLE_STATUSES, DeliveriesRepository, DeliveryRow, JobKey, ProofRow } from './deliveries.repository.js';
 import { CreateDelivery } from './dto/CreateDelivery.dto.js';
 
 export const MAX_ATTEMPTS = 3;
 const REVIEWERS = 3;
-
-type TestFile = { path: string; content: string };
 
 const testsLabel = (exitCode: number | null | undefined): string =>
     exitCode === 0 ? 'Locked tests pass' : exitCode === null || exitCode === undefined ? '' : 'Locked tests fail';
@@ -108,16 +107,15 @@ export class DeliveriesService {
             throw e;
         }
 
-        const runner = await this.dispatchRun({
+        const runner = await dispatchRun({
             repoUrl,
             commit: body.commit_sha,
             baseCommit: job.baseCommit ?? 'main',
             testCommand: spec.testCommand,
             buildCommand: spec.buildCommand,
-            testFiles: Array.isArray(spec.testFiles) ? (spec.testFiles as TestFile[]) : [],
+            testFiles: testFilesOf(spec.testFiles),
             allowedPaths: spec.allowedPaths,
             failingTests: spec.failingTests,
-            baseline: true,
             runId,
             deliveryId: created.id,
         });
@@ -149,24 +147,6 @@ export class DeliveriesService {
         const row = await this.deliveriesRepository.getProof(authId, id);
         if (!row) throw new NotFoundException('Delivery not found');
         return toProof(row, (tx) => this.chainService.explorerTxUrl(tx));
-    }
-
-    private async dispatchRun(payload: Record<string, unknown>): Promise<'queued' | 'unavailable'> {
-        const url = process.env['AGORA_RUNNER_URL'];
-        const key = process.env['AGORA_RUNNER_KEY'];
-        if (!url || !key) return 'unavailable';
-        const api = process.env['AGORA_NEST_URL'] ?? `http://localhost:${process.env['PORT'] ?? '3000'}/api`;
-        try {
-            const res = await fetch(`${url}/run`, {
-                method: 'POST',
-                headers: { 'content-type': 'application/json', 'x-runner-key': key },
-                body: JSON.stringify({ ...payload, callbackUrl: `${api}/internal/v1/runner/result` }),
-                signal: AbortSignal.timeout(10_000),
-            });
-            return res.ok ? 'queued' : 'unavailable';
-        } catch {
-            return 'unavailable';
-        }
     }
 
     private async authId(token: string): Promise<string> {

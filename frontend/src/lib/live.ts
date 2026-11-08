@@ -1,4 +1,4 @@
-import { ARRIVE, BIDS, DONE_JOBS, HELD, JOB, ME, OTHER_JOBS, SPEC, liveOpenRef, setLiveOpenJobs, type Bid, type OpenJob, type Order, type OtherJob } from '../data/sample';
+import { ARRIVE, BIDS, DONE_JOBS, HELD, JOB, ME, OTHER_JOBS, REVIEWERS, SPEC, liveOpenRef, setLiveOpenJobs, type Bid, type OpenJob, type Order, type OtherJob } from '../data/sample';
 import type { ChatMsg } from '../store/store';
 import { getState, setState, toast, type LiveNote } from '../store/store';
 import type { Thread } from '../store/actions';
@@ -11,7 +11,7 @@ import { api, ApiError } from './api';
  */
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
-const SNAP = { ME: clone(ME), JOB: clone(JOB), SPEC: clone(SPEC), OTHER: clone(OTHER_JOBS), DONE: clone(DONE_JOBS), BIDS: clone(BIDS), HELD: clone(HELD), ARRIVE: clone(ARRIVE) };
+const SNAP = { ME: clone(ME), JOB: clone(JOB), SPEC: clone(SPEC), OTHER: clone(OTHER_JOBS), DONE: clone(DONE_JOBS), BIDS: clone(BIDS), HELD: clone(HELD), ARRIVE: clone(ARRIVE), REVIEWERS: clone(REVIEWERS) };
 const replace = <T,>(target: T[], items: T[]) => { target.splice(0, target.length, ...items); };
 
 interface MeView { id: string; name: string; acct: string; agents: string; initials: string; email: string; role: 'hire' | 'work' | null; mode: 'buy' | 'sell'; seller: boolean }
@@ -62,7 +62,7 @@ export function leaveLive(): void {
   if (timer) { clearInterval(timer); timer = null; }
   Object.assign(ME, SNAP.ME); Object.assign(JOB, SNAP.JOB);
   replace(SPEC, clone(SNAP.SPEC)); replace(OTHER_JOBS, clone(SNAP.OTHER)); replace(DONE_JOBS, clone(SNAP.DONE));
-  replace(BIDS, clone(SNAP.BIDS)); replace(HELD as unknown as unknown[], clone(SNAP.HELD)); replace(ARRIVE, clone(SNAP.ARRIVE));
+  replace(BIDS, clone(SNAP.BIDS)); replace(HELD as unknown as unknown[], clone(SNAP.HELD)); replace(ARRIVE, clone(SNAP.ARRIVE)); replace(REVIEWERS, clone(SNAP.REVIEWERS));
   setLiveOpenJobs(null);
   setState({ live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] } });
 }
@@ -95,6 +95,7 @@ async function loadCurrentJob(): Promise<void> {
   replace(SPEC, spec ? spec.rows : [['Tests are being written', 'The spec writer drafts failing tests from your repository', 'Pending']]);
   const stage = stageNumber(job);
   if (stage >= 2) await loadOffers(ref);
+  if (stage >= 5) await loadReviews(ref);
   const offer = stage >= 2 ? await api<HireOfferView>(`/negotiations/v1/offer?job=${ref}`, { quiet: true }).catch(() => null) : null;
   setState((s) => {
     const hired = offer?.bidId ? BIDS.find((b) => (b as OfferView).bidId === offer.bidId)?.key : undefined;
@@ -108,6 +109,33 @@ async function loadCurrentJob(): Promise<void> {
       hire: hired ?? s.hire,
     };
   });
+}
+
+interface ReviewPanelView {
+  deliveryId: string | null;
+  reviewers: { id: string; model: string; att: string; state: number }[];
+}
+
+async function loadReviews(ref: string): Promise<void> {
+  const res = await api<ReviewPanelView>(`/reviews/v1?job=${ref}`, { quiet: true }).catch(() => null);
+  if (!res?.deliveryId) return;
+  replace(REVIEWERS, res.reviewers.map((r) => ({ id: r.id, model: r.state === 3 ? `${r.model} · rejected` : r.model, att: r.att })));
+  const votes = res.reviewers.map((r) => (r.state === 3 ? 0 : r.state));
+  setState({ votes, voting: votes.includes(1) });
+}
+
+/** Downloads the evidence bundle for the followed job. */
+export async function liveBundle(): Promise<void> {
+  const ref = getState().liveJob?.ref;
+  if (!ref) { toast('Open a job first.', 'hold'); return; }
+  const data = await api<unknown>(`/reviews/v1/evidence?job=${ref}`).catch(() => null);
+  if (!data) return;
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' }));
+  a.download = `agora-evidence-${ref}.json`;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast('Evidence bundle downloaded.');
 }
 
 async function loadOffers(ref: string): Promise<void> {

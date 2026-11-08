@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { goLive, isLive, leaveLive, liveAttachRepo, liveDeliver, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
+import { goLive, isLive, leaveLive, liveAttachRepo, liveBundle, liveDeliver, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -319,6 +319,7 @@ export const act = {
   },
   /** The evidence bundle: spec, commits, test logs and votes in one JSON file. */
   bundle: () => {
+    if (isLive()) { void liveBundle(); return; }
     const s = getState(); const H = hb(s);
     const data = {
       job: JOB.id, title: JOB.title, spec_hash: JOB.specHash, buyer: ME.acct, seller: H.acct, price_usdc: hAmt(), attempts_allowed: 3,
