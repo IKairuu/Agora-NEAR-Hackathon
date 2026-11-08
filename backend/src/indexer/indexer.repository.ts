@@ -40,6 +40,55 @@ export interface MandateInput {
 
 const sameDay = (a: Date | null): boolean => a !== null && a.toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10);
 
+const disputeContextSelect = {
+    id: true,
+    status: true,
+    agreedPrice: true,
+    buyerId: true,
+    buyer: { select: { nearAccountId: true } },
+    seller: { select: { id: true, nearAccountId: true, ownerId: true } },
+    milestones: {
+        where: { idx: 0 },
+        select: {
+            id: true,
+            amount: true,
+            _count: { select: { deliveries: true } },
+            disputes: {
+                select: { id: true, status: true, recheckOutcome: true, recheckAt: true, escalatedAt: true, claim: true, bondAmount: true },
+                orderBy: { openedAt: 'desc' },
+                take: 1,
+            },
+        },
+    },
+} satisfies Prisma.JobSelect;
+
+export type DisputeContext = Prisma.JobGetPayload<{ select: typeof disputeContextSelect }>;
+
+export interface Escalation {
+    signer: string;
+    party: 'buyer' | 'seller';
+    claim: 'release' | 'refund';
+    bond: number;
+    txHash: string;
+    at: Date;
+    startBalance: number;
+}
+
+export interface Settlement {
+    outcome: 'release' | 'refund' | 'split';
+    sellerShareBps: number;
+    by: 'dao' | 'default';
+    txHash: string;
+    at: Date;
+    sellerAmount: Prisma.Decimal;
+    buyerAmount: Prisma.Decimal;
+    fee: Prisma.Decimal;
+    daoAccount: string;
+}
+
+export const bondReturnedFor = (bond: Prisma.Decimal | null, claim: string | null, outcome: string, by: 'dao' | 'default', escalator: string | null): boolean =>
+    bond !== null && bond.gt(0) && by === 'dao' && escalator !== null && (claim === outcome || outcome === 'split');
+
 @Injectable()
 export class IndexerRepository {
     async recordTx(t: ChainTxInput) {
@@ -140,6 +189,134 @@ export class IndexerRepository {
             }
             if (job.seller) await this.syncReputation(tx, job.seller.id, job.seller.nearAccountId);
             return { jobId: job.id, amount: Number(milestone.amount) };
+        }, MONEY_TX);
+    }
+
+    async getDisputeContext(key: JobRef): Promise<DisputeContext | null> {
+        return prisma.job.findFirst({ where: key, select: disputeContextSelect });
+    }
+
+    async openDispute(key: JobRef, party: 'buyer' | 'seller', reason: string, at: Date) {
+        return prisma.$transaction(async (tx) => {
+            const job = await tx.job.findFirst({
+                where: key,
+                select: {
+                    id: true, buyerId: true, seller: { select: { id: true, nearAccountId: true, ownerId: true } },
+                    milestones: { where: { idx: 0 }, select: { id: true, deliveries: { select: { id: true }, orderBy: { attempt: 'desc' }, take: 1 } } },
+                },
+            });
+            const milestone = job?.milestones[0];
+            if (!job || !job.seller || !milestone) return null;
+            const existing = await tx.dispute.findFirst({ where: { milestoneId: milestone.id }, select: { id: true } });
+            if (existing) return null;
+            const moved = await tx.job.updateMany({ where: { id: job.id, status: { in: ['delivered', 'reviewed', 'in_progress', 'funded'] } }, data: { status: 'disputed' } });
+            if (moved.count === 0) return null;
+            await tx.milestone.update({ where: { id: milestone.id }, data: { status: 'disputed' }, select: { id: true } });
+            const dispute = await tx.dispute.create({
+                data: { milestoneId: milestone.id, openedBy: party === 'buyer' ? job.buyerId : job.seller.ownerId, reason, status: 'recheck', openedAt: at },
+                select: { id: true },
+            });
+            const delivery = milestone.deliveries[0];
+            if (delivery) {
+                await tx.reviewerVote.deleteMany({ where: { deliveryId: delivery.id } });
+                await tx.delivery.update({ where: { id: delivery.id }, data: { status: 'reviewing' }, select: { id: true } });
+            }
+            await this.syncReputation(tx, job.seller.id, job.seller.nearAccountId);
+            return { disputeId: dispute.id, jobId: job.id, deliveryId: delivery?.id ?? null };
+        }, MONEY_TX);
+    }
+
+    async escalateDispute(key: JobRef, e: Escalation) {
+        return prisma.$transaction(async (tx) => {
+            const job = await tx.job.findFirst({ where: key, select: { id: true, buyerId: true, seller: { select: { ownerId: true } } } });
+            if (!job) return null;
+            const dispute = await tx.dispute.findFirst({ where: { milestone: { jobId: job.id }, status: 'recheck', escalatedAt: null }, select: { id: true } });
+            if (!dispute) return null;
+            const bond = new Prisma.Decimal(e.bond);
+            const row = await tx.balance.findUnique({ where: { accountId: e.signer }, select: { accountId: true } });
+            if (row) {
+                await tx.balance.update({ where: { accountId: e.signer }, data: { available: { decrement: bond }, syncedAt: e.at }, select: { accountId: true } });
+            } else {
+                const owner = await tx.profile.findFirst({ where: { OR: [{ nearAccountId: e.signer }, { agentsAccountId: e.signer }] }, select: { id: true } });
+                await tx.balance.create({ data: { accountId: e.signer, profileId: owner?.id ?? null, available: new Prisma.Decimal(e.startBalance).sub(bond), syncedAt: e.at }, select: { accountId: true } });
+            }
+            await tx.dispute.update({
+                where: { id: dispute.id },
+                data: {
+                    status: 'escalated', claim: e.claim, bondAmount: bond, bondTx: e.txHash, escalatedAt: e.at,
+                    escalatedBy: e.party === 'buyer' ? job.buyerId : job.seller?.ownerId ?? null, escalatorAccount: e.signer,
+                },
+                select: { id: true },
+            });
+            return { disputeId: dispute.id, jobId: job.id, claim: e.claim, bond: e.bond };
+        }, MONEY_TX);
+    }
+
+    async settleDispute(key: JobRef, s: Settlement) {
+        return prisma.$transaction(async (tx) => {
+            const job = await tx.job.findFirst({
+                where: key,
+                select: {
+                    id: true, ref: true, buyerId: true, agreedPrice: true,
+                    buyer: { select: { nearAccountId: true } },
+                    seller: { select: { id: true, nearAccountId: true, ownerId: true } },
+                    milestones: {
+                        where: { idx: 0 },
+                        select: {
+                            id: true, amount: true,
+                            disputes: { where: { status: { in: ['recheck', 'escalated'] } }, select: { id: true, claim: true, bondAmount: true, escalatorAccount: true, escalatedBy: true }, take: 1 },
+                        },
+                    },
+                },
+            });
+            const milestone = job?.milestones[0];
+            const dispute = milestone?.disputes[0];
+            if (!job || !job.seller || !milestone || !dispute) return null;
+            const moved = await tx.job.updateMany({ where: { id: job.id, status: 'disputed' }, data: { status: s.outcome === 'refund' ? 'refunded' : 'released' } });
+            if (moved.count === 0) return null;
+            const price = job.agreedPrice ?? milestone.amount;
+            await tx.milestone.update({
+                where: { id: milestone.id },
+                data: {
+                    status: s.outcome === 'release' ? 'released' : s.outcome === 'refund' ? 'refunded' : 'split',
+                    releasedTx: s.txHash, releasedAt: s.at,
+                    ...(s.outcome === 'refund' ? {} : { releaseReason: s.by === 'dao' ? 'dao_ruling' : 'two_approvals' }),
+                },
+                select: { id: true },
+            });
+            if (job.buyer.nearAccountId) {
+                await tx.balance.updateMany({
+                    where: { accountId: job.buyer.nearAccountId },
+                    data: { escrowed: { decrement: price }, available: { increment: s.buyerAmount }, syncedAt: s.at },
+                });
+            }
+            if (s.sellerAmount.gt(0)) await this.credit(tx, job.seller.nearAccountId, job.seller.ownerId, s.sellerAmount);
+            if (s.fee.gt(0)) await this.credit(tx, s.daoAccount, null, s.fee);
+            const bond = dispute.bondAmount ?? new Prisma.Decimal(0);
+            const bondReturned = bondReturnedFor(bond, dispute.claim, s.outcome, s.by, dispute.escalatorAccount);
+            if (bond.gt(0)) {
+                await this.credit(tx, bondReturned ? dispute.escalatorAccount! : s.daoAccount, bondReturned ? dispute.escalatedBy : null, bond);
+            }
+            if (s.sellerAmount.gt(0)) {
+                await tx.completionRecord.upsert({
+                    where: { tokenId: `agora-${job.ref}` },
+                    create: { tokenId: `agora-${job.ref}`, jobId: job.id, sellerId: job.seller.id, amount: s.sellerAmount, mintTx: s.txHash, mintedAt: s.at },
+                    update: {},
+                });
+            }
+            await tx.dispute.update({
+                where: { id: dispute.id },
+                data: {
+                    status: 'resolved', ruling: s.outcome, sellerAmount: s.sellerAmount, buyerAmount: s.buyerAmount, sellerShareBps: s.sellerShareBps,
+                    resolveTx: s.txHash, resolvedAt: s.at, resolvedBy: s.by, bondReturned,
+                },
+                select: { id: true },
+            });
+            await this.syncReputation(tx, job.seller.id, job.seller.nearAccountId);
+            return {
+                disputeId: dispute.id, jobId: job.id, outcome: s.outcome, sellerAmount: Number(s.sellerAmount), buyerAmount: Number(s.buyerAmount), fee: Number(s.fee),
+                bond: Number(bond), bondReturned, buyerId: job.buyerId, sellerOwnerId: job.seller.ownerId, ref: job.ref,
+            };
         }, MONEY_TX);
     }
 
@@ -247,16 +424,22 @@ export class IndexerRepository {
     private async syncReputation(tx: Tx, sellerId: string, accountId: string) {
         const jobs = await tx.job.findMany({
             where: { sellerId, status: { in: ['released', 'settled', 'refunded', 'disputed'] } },
-            select: { status: true, buyerId: true, milestones: { where: { status: 'released' }, select: { amount: true } } },
+            select: {
+                status: true, buyerId: true,
+                milestones: { where: { status: { in: ['released', 'split'] } }, select: { amount: true, status: true, disputes: { where: { status: 'resolved' }, select: { sellerShareBps: true }, take: 1 } } },
+            },
         });
+        const disputes = await tx.dispute.count({ where: { milestone: { job: { sellerId } } } });
         const settled = jobs.filter((j) => ['released', 'settled'].includes(j.status));
-        const volume = settled.reduce((sum, j) => j.milestones.reduce((s, m) => s.add(m.amount), sum), new Prisma.Decimal(0));
+        const share = (m: { amount: Prisma.Decimal; status: string; disputes: { sellerShareBps: number | null }[] }) =>
+            m.status === 'split' ? m.amount.mul(m.disputes[0]?.sellerShareBps ?? 0).div(10_000) : m.amount;
+        const volume = settled.reduce((sum, j) => j.milestones.reduce((s, m) => s.add(share(m)), sum), new Prisma.Decimal(0));
         const approved = await tx.delivery.findMany({ where: { sellerId, status: 'approved' }, select: { attempt: true } });
         const firstTry = approved.length ? (approved.filter((d) => d.attempt === 1).length * 100) / approved.length : null;
         const data = {
             settledJobs: settled.length,
             refundedJobs: jobs.filter((j) => j.status === 'refunded').length,
-            disputedJobs: jobs.filter((j) => j.status === 'disputed').length,
+            disputedJobs: disputes,
             settledVolume: volume,
             distinctBuyers: new Set(settled.map((j) => j.buyerId)).size,
             firstTryPassRate: firstTry === null ? null : new Prisma.Decimal(firstTry.toFixed(2)),

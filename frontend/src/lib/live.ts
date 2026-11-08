@@ -453,3 +453,74 @@ export async function liveRate(stars: number): Promise<void> {
   const res = await api('/reputation/v1/ratings', { body: { job_id: ref, stars } }).catch(() => null);
   if (res) toast(`${stars} star${stars > 1 ? 's' : ''} saved on ${ref}.`);
 }
+
+interface DisputeView {
+  id: string | null; job: string; role: 'buyer' | 'seller'; status: string; price: number; bondNeeded: number;
+  recheck: { outcome: 'release' | 'refund' | null; deadline: string | null } | null;
+  escalation: { by: string | null; claim: string | null; bond: number | null } | null;
+  resolution: { ruling: string; sellerAmount: number; buyerAmount: number; by: string; bondReturned: boolean | null } | null;
+  canEscalate: boolean; canFinalize: boolean; finalizeAfter: string | null;
+}
+interface DisputeResult { resolution: DisputeView['resolution'] }
+
+const usd2 = (n: number | null | undefined) => (n ?? 0).toFixed(2);
+const resolvedText = (r: NonNullable<DisputeView['resolution']>) =>
+  `${r.ruling === 'split' ? 'Split' : r.ruling === 'release' ? 'Released' : 'Refunded'}: ${usd2(r.sellerAmount)} USDC to the seller, ${usd2(r.buyerAmount)} USDC back to the buyer${r.by === 'default' ? ' (re-check result after 72 hours)' : ''}.`;
+
+/** Opens a dispute on the followed job and starts the free re-check. */
+export async function liveOpenDispute(reason: string): Promise<boolean> {
+  const ref = getState().liveJob?.ref;
+  if (!ref) { toast('Open a job first.', 'hold'); return false; }
+  const res = await api<{ round: number | null; reviewers: number }>('/disputes/v1', { body: { job_id: ref, reason: reason.slice(0, 500) } }).catch(() => null);
+  if (!res) return false;
+  toast(`Payment on ${ref} frozen. The free re-check started${res.round ? ` (round ${res.round}, ${res.reviewers} of 3 reviewers notified)` : ''}.`, 'hold', 5200);
+  await refreshAll(false);
+  return true;
+}
+
+export async function liveLoadDispute(): Promise<DisputeView | null> {
+  const ref = getState().liveJob?.ref;
+  if (!ref) return null;
+  return api<DisputeView>(`/disputes/v1?job=${ref}`, { quiet: true }).catch(() => null);
+}
+
+export async function liveEscalate(d: DisputeView): Promise<void> {
+  if (!d.id) return;
+  const claim = d.role === 'buyer' ? 'a refund' : 'the release';
+  if (!window.confirm(`Ask the DAO for ${claim} on ${d.job}? This pays a ${usd2(d.bondNeeded)} USDC bond, returned if the DAO agrees or splits.`)) return;
+  const res = await api<{ bond: number }>(`/disputes/v1/${d.id}/escalate`, { body: {} }).catch(() => null);
+  if (res) { toast(`Sent to the DAO with a ${usd2(res.bond)} USDC bond.`, 'hold'); await refreshAll(false); }
+}
+
+/** Mock chain only: stands in for the Sputnik DAO passing its proposal. */
+export async function liveRule(d: DisputeView): Promise<void> {
+  if (!d.id) return;
+  const answer = (window.prompt('DAO ruling: release, refund, or split with the seller percent (e.g. split 70)', 'split 70') ?? '').trim().toLowerCase();
+  if (!answer) return;
+  const outcome = answer.startsWith('split') ? 'split' : answer.startsWith('ref') ? 'refund' : answer.startsWith('rel') ? 'release' : '';
+  if (!outcome) { toast('Type release, refund or split.', 'hold'); return; }
+  const pct = Number((answer.match(/[\d.]+/) ?? ['50'])[0]);
+  const body = outcome === 'split' ? { outcome, seller_share_bps: Math.round(pct * 100) } : { outcome };
+  const res = await api<DisputeResult>(`/disputes/v1/${d.id}/rule`, { body }).catch(() => null);
+  if (res?.resolution) { toast(`DAO decided. ${resolvedText(res.resolution)}`, 'ok', 5200); await refreshAll(false); }
+}
+
+export async function liveFinalize(d: DisputeView): Promise<void> {
+  if (!d.id) return;
+  const res = await api<DisputeResult>(`/disputes/v1/${d.id}/finalize`, { body: {} }).catch(() => null);
+  if (res?.resolution) { toast(`Dispute closed. ${resolvedText(res.resolution)}`, 'ok', 5200); await refreshAll(false); }
+}
+
+/** Takes the followed job's dispute one step further: escalate, the mock DAO vote, or the 72-hour default. */
+export async function liveDisputeNext(): Promise<void> {
+  const d = await liveLoadDispute();
+  if (!d) { toast('Open a job first.', 'hold'); return; }
+  if (!d.id) { toast(`${d.job} has no dispute. Open one from the job page.`, 'hold'); return; }
+  if (d.resolution) { toast(resolvedText(d.resolution)); return; }
+  if (d.canFinalize) { await liveFinalize(d); return; }
+  if (d.status === 'escalated') { await liveRule(d); return; }
+  if (d.canEscalate) { await liveEscalate(d); return; }
+  if (!d.recheck?.outcome) { toast('The free re-check is still running. The reviewers decide 2 of 3.', 'hold'); return; }
+  const until = d.finalizeAfter ? new Date(d.finalizeAfter).toLocaleString() : 'later';
+  toast(`The re-check says ${d.recheck.outcome}. It stands unless the other side asks the DAO; it can be finalized after ${until}.`, 'hold', 5200);
+}

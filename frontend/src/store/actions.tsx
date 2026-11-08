@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { goLive, isLive, leaveLive, liveAddFunds, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
+import { goLive, isLive, leaveLive, liveAddFunds, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -337,9 +337,15 @@ export const act = {
   },
   dispute2: () => {
     if (!getState().dReason) { toast('Pick what went wrong first.', 'hold'); return; }
+    if (isLive()) {
+      const why = ((document.getElementById('d-why') as HTMLInputElement | null)?.value ?? '').trim();
+      const reason = why ? `${getState().dReason}: ${why}` : getState().dReason;
+      void liveOpenDispute(reason).then((ok) => { if (ok) closeModal(); });
+      return;
+    }
     closeModal(); toast('Payment frozen and the free re-check started. Here is how a full dispute looks, using example J-0977.', 'hold', 5200); go('dispute');
   },
-  daovote: () => { setState({ dTab: 'ruled' }); toast('2 of 3 DAO votes. The contract split the payment 70/30.'); },
+  daovote: () => { if (isLive()) { void liveDisputeNext(); return; } setState({ dTab: 'ruled' }); toast('2 of 3 DAO votes. The contract split the payment 70/30.'); },
   attack: () => {
     setState({ attack: { n: 0 } });
     const tick = () => {

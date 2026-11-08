@@ -1,9 +1,47 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
-import { IndexerRepository, JobRef, MANDATE_DEFAULTS } from './indexer.repository.js';
+import { DisputeContext, IndexerRepository, JobRef, MANDATE_DEFAULTS } from './indexer.repository.js';
 
 export const MOCK_START_BALANCE = 120;
 const REFUND_METHODS = ['refund_milestone', 'refund_expired'];
+export const ESCALATION_WINDOW_MS = 72 * 60 * 60 * 1000;
+export const MAX_REASON_LEN = 500;
+const BOND_BPS = 500n;
+const MIN_BOND = 1_000_000n;
+const DISPUTE_METHODS = ['open_dispute', 'ft_transfer_call', 'resolve_dispute', 'finalize_default'];
+
+export type Party = 'buyer' | 'seller';
+export type Outcome = 'release' | 'refund' | 'split';
+type DecimalLike = Prisma.Decimal | number | string;
+
+const baseUnits = (usdc: DecimalLike): bigint => BigInt(new Prisma.Decimal(usdc).mul(1_000_000).toFixed(0, Prisma.Decimal.ROUND_DOWN));
+const fromUnits = (units: bigint): Prisma.Decimal => new Prisma.Decimal(units.toString()).div(1_000_000);
+
+export const bondNeeded = (price: DecimalLike): number => {
+    const p = baseUnits(price);
+    const pct = (p * BOND_BPS) / 10_000n;
+    return Number(fromUnits(pct > MIN_BOND ? pct : MIN_BOND));
+};
+
+export const settlementOf = (price: DecimalLike, sellerShareBps: number, feeBps: number) => {
+    const p = baseUnits(price);
+    const gross = (p * BigInt(sellerShareBps)) / 10_000n;
+    const fee = (gross * BigInt(feeBps)) / 10_000n;
+    return { sellerAmount: fromUnits(gross - fee), buyerAmount: fromUnits(p - gross), fee: fromUnits(fee) };
+};
+
+export const bondJobOf = (msg: unknown): string | null => (typeof msg === 'string' && msg.startsWith('dispute_bond:') ? msg.slice('dispute_bond:'.length) : null);
+
+export const ownerOf = (account: string): string => (account.startsWith('agents.') ? account.slice('agents.'.length) : account);
+
+export const partyOf = (ctx: Pick<DisputeContext, 'buyer' | 'seller'>, signer: string): Party | null => {
+    const who = ownerOf(signer);
+    if (ctx.buyer.nearAccountId && who === ctx.buyer.nearAccountId) return 'buyer';
+    if (ctx.seller && (who === ctx.seller.nearAccountId || signer === ctx.seller.nearAccountId)) return 'seller';
+    return null;
+};
+
+export const claimOf = (party: Party): 'release' | 'refund' => (party === 'buyer' ? 'refund' : 'release');
 
 export const jobRefOf = (value: unknown): JobRef | null => {
     const v = typeof value === 'number' || typeof value === 'bigint' ? String(value) : value;
@@ -57,18 +95,83 @@ export const fundingRefusal = (
     return null;
 };
 
+export const disputeRefusal = (
+    call: Pick<MockCall, 'signer' | 'method' | 'args'>,
+    ctx: DisputeContext | null,
+    now: number,
+    daoAccount: string,
+    signerFree: number,
+): string | null => {
+    if (call.method === 'resolve_dispute' && call.signer !== daoAccount) return 'Only the DAO can resolve a dispute';
+    if (call.method === 'ft_transfer_call') {
+        if (bondJobOf(call.args['msg']) === null) return 'Unsupported deposit message';
+        if (!(usdcOf(call.args['amount']) > 0)) return 'Amount must be positive';
+    }
+    if (!ctx) return 'Job not found';
+    const milestone = ctx.milestones[0];
+    const dispute = milestone?.disputes[0] ?? null;
+    if (call.method === 'open_dispute') {
+        if (!partyOf(ctx, call.signer)) return 'Only the buyer or seller can open a dispute';
+        const delivered = ['delivered', 'reviewed'].includes(ctx.status) || (['funded', 'in_progress'].includes(ctx.status) && (milestone?._count.deliveries ?? 0) > 0);
+        if (!milestone || !delivered) return 'Only a delivered job can be disputed';
+        const reason = typeof call.args['reason'] === 'string' ? call.args['reason'] : '';
+        if (!reason.trim()) return 'Reason is required';
+        if (reason.length > MAX_REASON_LEN) return 'Reason is too long';
+        if (dispute) return 'This job was already disputed';
+        return null;
+    }
+    if (ctx.status !== 'disputed' || !dispute) return 'Job is not disputed';
+    if (call.method === 'ft_transfer_call') {
+        const party = partyOf(ctx, call.signer);
+        if (!party) return 'Only the buyer or seller can escalate';
+        if (dispute.escalatedAt) return 'Dispute is already escalated';
+        if (!dispute.recheckOutcome || !dispute.recheckAt) return 'Wait for the re-check result';
+        if (now >= dispute.recheckAt.getTime() + ESCALATION_WINDOW_MS) return 'The escalation window has closed';
+        if (dispute.recheckOutcome === claimOf(party)) return 'The re-check already agrees with you';
+        const amount = usdcOf(call.args['amount']);
+        if (amount < bondNeeded(ctx.agreedPrice ?? milestone.amount)) return 'Bond is below 5% of the price (minimum 1 USDC)';
+        if (signerFree < amount) return 'Not enough free balance';
+        return null;
+    }
+    if (call.method === 'resolve_dispute') {
+        if (!dispute.escalatedAt) return 'The dispute was not escalated';
+        const outcome = call.args['outcome'];
+        const bps = Number(call.args['seller_share_bps']);
+        if (outcome === 'split' && !(Number.isInteger(bps) && bps > 0 && bps < 10_000)) return 'A split needs a share between 1 and 9999';
+        if (!['release', 'refund', 'split'].includes(outcome as string)) return 'Outcome must be release, refund or split';
+        return null;
+    }
+    if (call.method === 'finalize_default') {
+        if (!dispute.recheckOutcome || !dispute.recheckAt) return 'The re-check has no result yet';
+        const since = (dispute.escalatedAt ?? dispute.recheckAt).getTime();
+        if (now < since + ESCALATION_WINDOW_MS) return 'Wait 72 hours before finalizing';
+    }
+    return null;
+};
+
 @Injectable()
 export class IndexerService {
+    now: () => number = () => Date.now();
+
     constructor(private readonly indexerRepository: IndexerRepository) {}
 
+    private feeBps(): number {
+        return Number(process.env['AGORA_FEE_BPS'] ?? '200');
+    }
+
+    private dao(): string {
+        return process.env['AGORA_DAO_ACCOUNT'] ?? 'agora-dao.sputnikv2.testnet';
+    }
+
     async onMockCall(call: MockCall) {
-        const jobKey = jobRefOf(call.args['job_id']);
+        const jobKey = jobRefOf(call.method === 'ft_transfer_call' ? bondJobOf(call.args['msg']) : call.args['job_id']);
         const refusal = await this.refusalFor(call, jobKey);
         await this.indexerRepository.recordTx({
             txHash: call.txHash, signer: call.signer, method: call.method, args: call.args as Prisma.InputJsonValue, ok: refusal === null, error: refusal, jobKey,
         });
         if (refusal) throw new BadRequestException(`Contract refused ${call.method}: ${refusal}`);
 
+        if (DISPUTE_METHODS.includes(call.method) && jobKey) return this.applyDispute(call, jobKey);
         if (call.method === 'fund_job' && jobKey) return this.indexerRepository.fundJob(jobKey, call.txHash, MOCK_START_BALANCE);
         if (REFUND_METHODS.includes(call.method) && jobKey) return this.indexerRepository.refundJob(jobKey, call.txHash);
         if (call.method === 'deposit') {
@@ -95,15 +198,46 @@ export class IndexerService {
     }
 
     async onMockRelease(jobId: string, txHash: string) {
-        const fee = Number(process.env['AGORA_FEE_BPS'] ?? '200');
-        const dao = process.env['AGORA_DAO_ACCOUNT'] ?? 'agora-dao.sputnikv2.testnet';
+        const fee = this.feeBps();
+        const dao = this.dao();
         await this.indexerRepository.recordTx({
             txHash, signer: 'reviewers', method: 'vote', args: { job_id: jobId, approve: true }, ok: true, error: null, jobKey: { id: jobId },
         });
         return this.indexerRepository.releaseJob({ id: jobId }, txHash, fee, dao);
     }
 
+    private async applyDispute(call: MockCall, jobKey: JobRef) {
+        const ctx = await this.indexerRepository.getDisputeContext(jobKey);
+        if (!ctx) return null;
+        const at = new Date(this.now());
+        if (call.method === 'open_dispute') {
+            const party = partyOf(ctx, call.signer)!;
+            return this.indexerRepository.openDispute(jobKey, party, String(call.args['reason']), at);
+        }
+        if (call.method === 'ft_transfer_call') {
+            const party = partyOf(ctx, call.signer)!;
+            return this.indexerRepository.escalateDispute(jobKey, {
+                signer: call.signer, party, claim: claimOf(party), bond: usdcOf(call.args['amount']), txHash: call.txHash, at, startBalance: MOCK_START_BALANCE,
+            });
+        }
+        const dispute = ctx.milestones[0]!.disputes[0]!;
+        const outcome = (call.method === 'resolve_dispute' ? call.args['outcome'] : dispute.recheckOutcome) as Outcome;
+        const bps = outcome === 'release' ? 10_000 : outcome === 'refund' ? 0 : Number(call.args['seller_share_bps']);
+        return this.indexerRepository.settleDispute(jobKey, {
+            outcome, sellerShareBps: bps, by: call.method === 'resolve_dispute' ? 'dao' : 'default', txHash: call.txHash, at, ...settlementOf(ctx.agreedPrice ?? ctx.milestones[0]!.amount, bps, this.feeBps()), daoAccount: this.dao(),
+        });
+    }
+
     private async refusalFor(call: MockCall, jobKey: JobRef | null): Promise<string | null> {
+        if (DISPUTE_METHODS.includes(call.method)) {
+            const ctx = jobKey ? await this.indexerRepository.getDisputeContext(jobKey) : null;
+            let free = 0;
+            if (call.method === 'ft_transfer_call') {
+                const balance = await this.indexerRepository.getBalance(call.signer);
+                free = balance ? Number(balance.available) : MOCK_START_BALANCE;
+            }
+            return disputeRefusal(call, ctx, this.now(), this.dao(), free);
+        }
         if (call.method === 'fund_job') {
             if (!jobKey) return 'Unknown job';
             const job = await this.indexerRepository.getFundingContext(jobKey);

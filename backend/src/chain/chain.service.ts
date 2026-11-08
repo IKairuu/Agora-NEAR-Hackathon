@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, ServiceUnavailableException } from '@n
 import { IndexerService } from '../indexer/indexer.service.js';
 import { mockIdMethods, mockViews } from './mock-state';
 
-export type ChainRole = 'owner' | 'transaction_agent' | 'guardian' | 'fraud_oracle' | 'reviewer' | 'platform';
+export type ChainRole = 'owner' | 'transaction_agent' | 'guardian' | 'fraud_oracle' | 'reviewer' | 'platform' | 'dao';
 
 export interface ChainCallResult {
     tx_hash: string;

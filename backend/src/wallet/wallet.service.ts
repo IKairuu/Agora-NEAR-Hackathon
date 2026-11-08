@@ -22,6 +22,10 @@ const LABELS: Record<string, string> = {
     register_seller: 'Seller registered',
     rerun_review: 'Review rerun',
     rate: 'Rating saved',
+    open_dispute: 'Dispute opened, free re-check started',
+    ft_transfer_call: 'Dispute bond paid to ask the DAO',
+    resolve_dispute: 'Dispute decided by the DAO',
+    finalize_default: 'Dispute closed after 72 hours',
 };
 
 const units = (amount: number): string => String(Math.round(amount * 1_000_000));

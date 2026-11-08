@@ -115,7 +115,17 @@ export class InternalService {
             if (tally) {
                 const approvals = tally.votes.filter((v) => v.approve).length;
                 const rejections = tally.votes.length - approvals;
-                if (approvals >= 2 || rejections >= 2) {
+                if ((approvals >= 2 || rejections >= 2) && tally.milestone.job.status === 'disputed') {
+                    const outcome = approvals >= 2 ? 'release' : 'refund';
+                    const count = await this.internalRepository.recordRecheck(tally.milestone.job.id, outcome, new Date());
+                    if (count > 0) {
+                        actions.push(`recheck ${outcome}`);
+                        const title = `Re-check on ${job.ref}: ${outcome === 'release' ? `${approvals} of 3 reviewers approve, so the seller should be paid` : `${rejections} of 3 reviewers reject, so the buyer should be refunded`}`;
+                        const body = 'No money moves yet. The side that disagrees can ask the DAO with a bond within 72 hours; otherwise this result stands.';
+                        notes.push({ userId: job.buyerId, kind: 'dispute', title, body, link: '/dispute' });
+                        if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'dispute', title, body, link: '/dispute' });
+                    }
+                } else if (approvals >= 2 || rejections >= 2) {
                     const approved = approvals >= 2;
                     const count = await this.internalRepository.settleDelivery(tally.id, tally.milestoneId, tally.milestone.job.id, approved);
                     if (count > 0) {

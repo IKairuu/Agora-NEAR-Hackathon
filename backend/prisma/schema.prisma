@@ -283,23 +283,24 @@ model Profile {
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
 
-  agents          Agent[]
-  sellers         Seller[]
-  mandate         Mandate?
-  approvedSellers ApprovedSeller[]
-  balances        Balance[]
-  jobsPosted      Job[]
-  ratingsGiven    Rating[]
-  chainTxs        ChainTx[]
-  agentEvents     AgentEvent[]
-  guardianAlerts  GuardianAlert[]
-  disputesOpened  Dispute[]
-  threadsAsBuyer  Thread[]         @relation("ThreadBuyer")
-  messagesSent    Message[]        @relation("MessageSenderProfile")
-  notifications   Notification[]   @relation("NotificationUser")
-  sellerProfile   SellerProfile?
-  services        Service[]
-  savedItems      SavedItem[]
+  agents            Agent[]
+  sellers           Seller[]
+  mandate           Mandate?
+  approvedSellers   ApprovedSeller[]
+  balances          Balance[]
+  jobsPosted        Job[]
+  ratingsGiven      Rating[]
+  chainTxs          ChainTx[]
+  agentEvents       AgentEvent[]
+  guardianAlerts    GuardianAlert[]
+  disputesOpened    Dispute[]        @relation("DisputeOpener")
+  disputesEscalated Dispute[]        @relation("DisputeEscalator")
+  threadsAsBuyer    Thread[]         @relation("ThreadBuyer")
+  messagesSent      Message[]        @relation("MessageSenderProfile")
+  notifications     Notification[]   @relation("NotificationUser")
+  sellerProfile     SellerProfile?
+  services          Service[]
+  savedItems        SavedItem[]
 
   @@map("profiles")
   @@schema("public")
@@ -727,25 +728,34 @@ model ReviewerVote {
 }
 
 model Dispute {
-  id            String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  milestoneId   String         @map("milestone_id") @db.Uuid
-  openedBy      String         @map("opened_by") @db.Uuid
-  reason        String
-  status        DisputeStatus  @default(open)
-  evidenceHash  String?        @map("evidence_hash")
-  daoProposalId BigInt?        @map("dao_proposal_id")
-  ruling        DisputeRuling?
-  sellerAmount  Decimal?       @map("seller_amount") @db.Decimal(20, 6)
-  buyerAmount   Decimal?       @map("buyer_amount") @db.Decimal(20, 6)
-  resolveTx     String?        @map("resolve_tx")
-  bondAmount    Decimal?       @map("bond_amount") @db.Decimal(20, 6)
-  bondTx        String?        @map("bond_tx")
-  escalatedAt   DateTime?      @map("escalated_at") @db.Timestamptz(6)
-  openedAt      DateTime       @default(now()) @map("opened_at") @db.Timestamptz(6)
-  resolvedAt    DateTime?      @map("resolved_at") @db.Timestamptz(6)
+  id               String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  milestoneId      String         @map("milestone_id") @db.Uuid
+  openedBy         String         @map("opened_by") @db.Uuid
+  reason           String
+  status           DisputeStatus  @default(open)
+  evidenceHash     String?        @map("evidence_hash")
+  daoProposalId    BigInt?        @map("dao_proposal_id")
+  ruling           DisputeRuling?
+  sellerAmount     Decimal?       @map("seller_amount") @db.Decimal(20, 6)
+  buyerAmount      Decimal?       @map("buyer_amount") @db.Decimal(20, 6)
+  resolveTx        String?        @map("resolve_tx")
+  bondAmount       Decimal?       @map("bond_amount") @db.Decimal(20, 6)
+  bondTx           String?        @map("bond_tx")
+  escalatedAt      DateTime?      @map("escalated_at") @db.Timestamptz(6)
+  openedAt         DateTime       @default(now()) @map("opened_at") @db.Timestamptz(6)
+  resolvedAt       DateTime?      @map("resolved_at") @db.Timestamptz(6)
+  recheckOutcome   DisputeRuling? @map("recheck_outcome")
+  recheckAt        DateTime?      @map("recheck_at") @db.Timestamptz(6)
+  claim            DisputeRuling?
+  escalatedBy      String?        @map("escalated_by") @db.Uuid
+  escalatorAccount String?        @map("escalator_account")
+  sellerShareBps   Int?           @map("seller_share_bps")
+  resolvedBy       String?        @map("resolved_by")
+  bondReturned     Boolean?       @map("bond_returned")
 
   milestone Milestone @relation(fields: [milestoneId], references: [id], onDelete: Cascade)
-  opener    Profile   @relation(fields: [openedBy], references: [id])
+  opener    Profile   @relation("DisputeOpener", fields: [openedBy], references: [id])
+  escalator Profile?  @relation("DisputeEscalator", fields: [escalatedBy], references: [id], onDelete: SetNull)
 
   @@index([milestoneId])
   @@map("disputes")

@@ -24,6 +24,7 @@ export class WalletRepository {
                     { ownerId: userId },
                     { signerAccount: { in: accounts } },
                     { method: 'vote', job: { seller: { ownerId: userId } } },
+                    { method: { in: ['resolve_dispute', 'finalize_default'] }, job: { OR: [{ buyerId: userId }, { seller: { ownerId: userId } }] } },
                 ],
             },
             select: { id: true, method: true, args: true, txHash: true, status: true, error: true, createdAt: true, job: { select: { ref: true, agreedPrice: true } } },

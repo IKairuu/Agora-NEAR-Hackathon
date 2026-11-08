@@ -21,7 +21,7 @@ export interface RunOutcome {
     diffStats: Prisma.InputJsonValue;
 }
 
-const deliveryJob = { select: { id: true, ref: true, title: true, buyerId: true, seller: { select: { ownerId: true } } } } as const;
+const deliveryJob = { select: { id: true, ref: true, title: true, status: true, buyerId: true, seller: { select: { ownerId: true } } } } as const;
 
 export interface NotificationInput {
     userId: string;
@@ -118,6 +118,16 @@ export class InternalRepository {
             if (updated.count === 0) return 0;
             await tx.milestone.update({ where: { id: milestoneId }, data: { status: approved ? 'in_review' : 'funded' }, select: { id: true } });
             await tx.job.updateMany({ where: { id: jobId, status: 'delivered' }, data: { status: approved ? 'reviewed' : 'in_progress' } });
+            return updated.count;
+        });
+    }
+
+    async recordRecheck(jobId: string, outcome: 'release' | 'refund', at: Date) {
+        return prisma.$transaction(async (tx) => {
+            const updated = await tx.dispute.updateMany({
+                where: { milestone: { jobId }, status: 'recheck', recheckOutcome: null },
+                data: { recheckOutcome: outcome, recheckAt: at },
+            });
             return updated.count;
         });
     }

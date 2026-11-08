@@ -15,7 +15,7 @@ describe('InternalService', () => {
     beforeEach(() => {
         repo = {
             getJob: jest.fn().mockResolvedValue({ id: JOB, ref: 'J-1042', title: 'Split fix', buyerId: 'buyer', seller: { ownerId: 'seller' } }),
-            getBid: jest.fn(), getReviewRun: jest.fn(), saveRunResult: jest.fn().mockResolvedValue(1), getVoteTally: jest.fn(), settleDelivery: jest.fn().mockResolvedValue(1), setBidStatus: jest.fn().mockResolvedValue(1), createNotifications: jest.fn(async (n: unknown[]) => n.length),
+            getBid: jest.fn(), getReviewRun: jest.fn(), saveRunResult: jest.fn().mockResolvedValue(1), getVoteTally: jest.fn(), settleDelivery: jest.fn().mockResolvedValue(1), recordRecheck: jest.fn().mockResolvedValue(1), setBidStatus: jest.fn().mockResolvedValue(1), createNotifications: jest.fn(async (n: unknown[]) => n.length),
         } as unknown as jest.Mocked<InternalRepository>;
         indexer = { onMockRelease: jest.fn().mockResolvedValue({ jobId: JOB, payout: 31.36, fee: 0.64 }) } as unknown as jest.Mocked<IndexerService>;
         service = new InternalService(repo, indexer);
@@ -112,5 +112,24 @@ describe('InternalService', () => {
         repo.getVoteTally.mockResolvedValue({ id: 'd1', status: 'reviewing', attempt: 1, milestoneId: 'm0', votes: [{ approve: true }], milestone: { job: { id: JOB } } } as never);
         await service.agentNotify({ role: 'reviewer', ok: true, jobId: JOB, result: { deliveryId: 'd1', reviewer: 1, approve: true } });
         expect(repo.settleDelivery.mock.calls).toHaveLength(0);
+    });
+
+    it('records the re-check result on a disputed job without moving money', async () => {
+        repo.getVoteTally.mockResolvedValue({ id: 'd1', status: 'reviewing', attempt: 1, milestoneId: 'm0', votes: [{ approve: false }, { approve: false }], milestone: { job: { id: JOB, status: 'disputed' } } } as never);
+        const res = await service.agentNotify({ role: 'reviewer', ok: true, jobId: JOB, result: { deliveryId: 'd1', reviewer: 2, approve: false } });
+        expect(repo.recordRecheck.mock.calls[0]?.slice(0, 2)).toEqual([JOB, 'refund']);
+        expect(repo.settleDelivery.mock.calls).toHaveLength(0);
+        expect(indexer.onMockRelease.mock.calls).toHaveLength(0);
+        expect(res.actions).toEqual(expect.arrayContaining(['recheck refund']));
+        const notes = repo.createNotifications.mock.calls[0]![0] as { userId: string; title: string }[];
+        expect(notes.filter((n) => n.title.startsWith('Re-check on J-1042')).map((n) => n.userId)).toEqual(['buyer', 'seller']);
+    });
+
+    it('records a release re-check only once', async () => {
+        repo.getVoteTally.mockResolvedValue({ id: 'd1', status: 'reviewing', attempt: 1, milestoneId: 'm0', votes: [{ approve: true }, { approve: true }, { approve: true }], milestone: { job: { id: JOB, status: 'disputed' } } } as never);
+        repo.recordRecheck.mockResolvedValue(0);
+        const res = await service.agentNotify({ role: 'reviewer', ok: true, jobId: JOB, result: { deliveryId: 'd1', reviewer: 3, approve: true } });
+        expect(repo.recordRecheck.mock.calls[0]?.[1]).toBe('release');
+        expect(res.actions).not.toContain('recheck release');
     });
 });

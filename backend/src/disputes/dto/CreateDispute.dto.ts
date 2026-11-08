@@ -12,6 +12,6 @@ export class CreateDispute {
 
     @IsNotEmpty({ message: 'Reason is required' })
     @IsString({ message: 'Reason must be text' })
-    @MaxLength(2000, { message: 'Reason must be at most 2000 characters' })
+    @MaxLength(500, { message: 'Reason must be at most 500 characters' })
     reason!: string;
 }
