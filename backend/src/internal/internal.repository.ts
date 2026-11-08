@@ -1,5 +1,27 @@
 import { Injectable } from '@nestjs/common';
+import { Prisma } from '../generated/prisma/client.js';
 import { prisma } from '../prisma.js';
+
+export interface RunOutcome {
+    runId: string;
+    failed: boolean;
+    exitCode: number | null;
+    installExit: number | null;
+    baselineExitCode: number | null;
+    scopeOk: boolean | null;
+    changedFiles: string[];
+    logHash: string;
+    logPath: string;
+    durationMs: number;
+    error: string | null;
+    result: Prisma.InputJsonValue;
+    deliveryId: string;
+    verdict: 'pass' | 'fail';
+    reason: string | null;
+    diffStats: Prisma.InputJsonValue;
+}
+
+const deliveryJob = { select: { id: true, ref: true, title: true, buyerId: true, seller: { select: { ownerId: true } } } } as const;
 
 export interface NotificationInput {
     userId: string;
@@ -44,6 +66,59 @@ export class InternalRepository {
         return prisma.$transaction(async (tx) => {
             const created = await tx.notification.createMany({ data: items });
             return created.count;
+        });
+    }
+
+    async getReviewRun(runId: string) {
+        return prisma.reviewRun.findFirst({
+            where: { runId },
+            select: {
+                id: true, status: true,
+                delivery: { select: { id: true, attempt: true, commitSha: true, milestone: { select: { job: deliveryJob } } } },
+            },
+        });
+    }
+
+    async saveRunResult(o: RunOutcome) {
+        return prisma.$transaction(async (tx) => {
+            const run = await tx.reviewRun.updateMany({
+                where: { runId: o.runId, status: { in: ['queued', 'running'] } },
+                data: {
+                    status: o.failed ? 'failed' : 'done', exitCode: o.exitCode, installExit: o.installExit, baselineExitCode: o.baselineExitCode,
+                    scopeOk: o.scopeOk, changedFiles: o.changedFiles, logHash: o.logHash, logPath: o.logPath, durationMs: o.durationMs,
+                    error: o.error, result: o.result, finishedAt: new Date(),
+                },
+            });
+            if (run.count === 0) return 0;
+            await tx.delivery.updateMany({
+                where: { id: o.deliveryId, status: { in: ['submitted', 'reviewing'] } },
+                data: { status: 'reviewing', verdict: o.verdict, reason: o.reason, filesTouched: o.changedFiles, diffStats: o.diffStats },
+            });
+            return run.count;
+        });
+    }
+
+    async getVoteTally(deliveryId: string) {
+        return prisma.delivery.findFirst({
+            where: { id: deliveryId },
+            select: {
+                id: true, status: true, attempt: true, milestoneId: true,
+                votes: { select: { approve: true } },
+                milestone: { select: { job: deliveryJob } },
+            },
+        });
+    }
+
+    async settleDelivery(deliveryId: string, milestoneId: string, jobId: string, approved: boolean) {
+        return prisma.$transaction(async (tx) => {
+            const updated = await tx.delivery.updateMany({
+                where: { id: deliveryId, status: { in: ['submitted', 'reviewing'] } },
+                data: { status: approved ? 'approved' : 'rejected' },
+            });
+            if (updated.count === 0) return 0;
+            await tx.milestone.update({ where: { id: milestoneId }, data: { status: approved ? 'in_review' : 'funded' }, select: { id: true } });
+            await tx.job.updateMany({ where: { id: jobId, status: 'delivered' }, data: { status: approved ? 'reviewed' : 'in_progress' } });
+            return updated.count;
         });
     }
 }

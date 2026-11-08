@@ -341,3 +341,18 @@ export async function livePublishSeller(): Promise<boolean> {
   await refreshAll(false);
   return true;
 }
+
+/** Hands in a commit for a funded job. The runner checks it against the locked tests. */
+export async function liveDeliver(ref: string): Promise<void> {
+  const commit = (window.prompt(`Commit hash to deliver for ${ref}`, '') ?? '').trim();
+  if (!commit) return;
+  const repo = (window.prompt('Repository URL (leave empty to use the buyer\'s repository)', '') ?? '').trim();
+  const body: Record<string, unknown> = { job_id: ref, commit_sha: commit };
+  if (repo) body['repo_url'] = repo;
+  const res = await api<{ attempt: number; attemptsLeft: number; runner: string }>('/deliveries/v1', { body }).catch(() => null);
+  if (!res) return;
+  toast(res.runner === 'queued'
+    ? `Delivery ${res.attempt} submitted for ${ref}. The locked tests are running. ${res.attemptsLeft} attempt${res.attemptsLeft === 1 ? '' : 's'} left.`
+    : `Delivery ${res.attempt} saved for ${ref}, but the test runner is not reachable right now.`, res.runner === 'queued' ? undefined : 'hold');
+  await refreshAll(false);
+}

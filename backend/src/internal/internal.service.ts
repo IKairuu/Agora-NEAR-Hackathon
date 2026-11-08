@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
 import { InternalRepository, NotificationInput } from './internal.repository.js';
 
@@ -20,6 +20,49 @@ export const decideBid = (bid: { status: string; priceCheck: string | null; frau
     if (bid.fraudScore !== null && bid.fraudScore >= 40) return { status: 'held', reason: bid.holdReason ?? 'Needs your OK: medium risk' };
     if (bid.status === 'pending_check' && bid.fraudScore !== null && bid.priceCheck !== null) return { status: 'live', reason: null };
     return null;
+};
+
+export const runResultSchema = z.object({
+    runId: z.string().min(8).max(64),
+    deliveryId: z.string().nullish(),
+    error: z.enum(['clone_failed', 'bad_commit', 'timeout', 'docker_failed', 'internal']).nullable(),
+    exitCode: z.number().int().nullable(),
+    installExit: z.number().int().nullable(),
+    baselineExitCode: z.number().int().nullable(),
+    changedFiles: z.array(z.string()),
+    scopeOk: z.boolean().nullable(),
+    diffStats: z.object({ files: z.number().int(), insertions: z.number().int(), deletions: z.number().int() }),
+    logTail: z.string(),
+    logSha256: z.string(),
+    logPath: z.string(),
+    durationMs: z.number().int(),
+    timedOut: z.boolean(),
+    failingTests: z.array(z.string()),
+    image: z.string(),
+    steps: z.array(z.object({ name: z.string(), exitCode: z.number().int().nullable(), durationMs: z.number().int() })),
+});
+
+export type RunResult = z.infer<typeof runResultSchema>;
+
+const RUN_ERRORS: Record<string, string> = {
+    clone_failed: 'Could not clone the repository',
+    bad_commit: 'Commit not found or not built on the base commit',
+    timeout: 'Tests ran out of time',
+    docker_failed: 'The test sandbox failed',
+    internal: 'The test runner failed',
+};
+
+const isTestPath = (p: string): boolean => /(^|\/)(test|tests|__tests__)\/|\.(test|spec)\./.test(p);
+
+export const judgeRun = (r: Pick<RunResult, 'error' | 'exitCode' | 'installExit' | 'scopeOk' | 'changedFiles'>): { verdict: 'pass' | 'fail'; reason: string | null } => {
+    if (r.error) return { verdict: 'fail', reason: RUN_ERRORS[r.error] ?? r.error };
+    if (r.changedFiles.length === 0) return { verdict: 'fail', reason: 'The commit changes no files' };
+    const tests = r.changedFiles.filter(isTestPath);
+    if (tests.length) return { verdict: 'fail', reason: `Edits test files: ${tests.slice(0, 3).join(', ')}` };
+    if (r.scopeOk === false) return { verdict: 'fail', reason: 'Edits files outside the allowed paths' };
+    if (r.installExit !== null && r.installExit !== 0) return { verdict: 'fail', reason: 'The build failed' };
+    if (r.exitCode !== 0) return { verdict: 'fail', reason: 'The locked tests fail' };
+    return { verdict: 'pass', reason: null };
 };
 
 const text = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
@@ -63,6 +106,25 @@ export class InternalService {
             const title = `${reviewer} ${verdict} the delivery on ${job.ref}`;
             notes.push({ userId: job.buyerId, kind: 'review', title, body: null, link: `/job?id=${job.ref}` });
             if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title, body: null, link: '/orders' });
+            const deliveryId = text(result['deliveryId']);
+            const tally = deliveryId ? await this.internalRepository.getVoteTally(deliveryId) : null;
+            if (tally) {
+                const approvals = tally.votes.filter((v) => v.approve).length;
+                const rejections = tally.votes.length - approvals;
+                if (approvals >= 2 || rejections >= 2) {
+                    const approved = approvals >= 2;
+                    const count = await this.internalRepository.settleDelivery(tally.id, tally.milestoneId, tally.milestone.job.id, approved);
+                    if (count > 0) {
+                        actions.push(`delivery ${approved ? 'approved' : 'rejected'}`);
+                        const outcome = approved
+                            ? `Delivery ${tally.attempt} on ${job.ref} approved by ${approvals} of 3 reviewers`
+                            : `Delivery ${tally.attempt} on ${job.ref} rejected by ${rejections} of 3 reviewers`;
+                        const next = approved ? 'Payment is released by the contract.' : tally.attempt >= 3 ? 'No attempts left.' : `${3 - tally.attempt} attempt${3 - tally.attempt === 1 ? '' : 's'} left.`;
+                        notes.push({ userId: job.buyerId, kind: 'review', title: outcome, body: next, link: `/job?id=${job.ref}` });
+                        if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title: outcome, body: next, link: '/orders' });
+                    }
+                }
+            }
         } else if (!body.ok && job) {
             notes.push({ userId: job.buyerId, kind: 'agent', title: `Your ${body.role.replace(/_/g, ' ')} agent hit a problem on ${job.ref}`, body: body.error ?? null, link: `/job?id=${job.ref}` });
         }
@@ -70,5 +132,42 @@ export class InternalService {
         const notified = await this.internalRepository.createNotifications(notes);
         if (notified > 0) actions.push(`notified ${notified}`);
         return { message: 'Agent Result Successfully Received', role: body.role, actions };
+    }
+
+    async runnerResult(raw: unknown) {
+        const parsed = runResultSchema.safeParse(raw);
+        if (!parsed.success) throw new BadRequestException(`Invalid runner result: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
+        const r = parsed.data;
+        const run = await this.internalRepository.getReviewRun(r.runId);
+        if (!run) throw new NotFoundException('Test run not found');
+        const { verdict, reason } = judgeRun(r);
+        const saved = await this.internalRepository.saveRunResult({
+            runId: r.runId,
+            failed: r.error !== null,
+            exitCode: r.exitCode,
+            installExit: r.installExit,
+            baselineExitCode: r.baselineExitCode,
+            scopeOk: r.scopeOk,
+            changedFiles: r.changedFiles,
+            logHash: r.logSha256,
+            logPath: r.logPath,
+            durationMs: r.durationMs,
+            error: r.error,
+            result: { timedOut: r.timedOut, failingTests: r.failingTests, image: r.image, steps: r.steps, logTail: r.logTail.slice(-8000) },
+            deliveryId: run.delivery.id,
+            verdict,
+            reason,
+            diffStats: r.diffStats,
+        });
+        if (saved === 0) return { message: 'Runner Result Already Received', runId: r.runId, verdict };
+        const job = run.delivery.milestone.job;
+        const title = verdict === 'pass'
+            ? `Locked tests pass on ${job.ref}, attempt ${run.delivery.attempt}`
+            : `Locked tests fail on ${job.ref}, attempt ${run.delivery.attempt}`;
+        const body = verdict === 'pass' ? 'The three reviewers are voting.' : reason;
+        const notes: NotificationInput[] = [{ userId: job.buyerId, kind: 'review', title, body, link: `/job?id=${job.ref}` }];
+        if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title, body, link: '/orders' });
+        await this.internalRepository.createNotifications(notes);
+        return { message: 'Runner Result Successfully Received', runId: r.runId, verdict, reason };
     }
 }

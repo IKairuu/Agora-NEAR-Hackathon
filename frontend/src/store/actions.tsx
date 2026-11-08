@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { goLive, isLive, leaveLive, liveAttachRepo, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
+import { goLive, isLive, leaveLive, liveAttachRepo, liveDeliver, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -103,7 +103,7 @@ export const orderAct = {
     toast(id + ' accepted. Payment protected, you can start.');
   },
   deliver: (id: string) => {
-    if (isLive()) { toast('Delivering through the test runner is not connected yet. It comes with the deliveries module.', 'hold'); return; }
+    if (isLive()) { void liveDeliver(id); return; }
     const o = getState().orders.find((x) => x.id === id)!;
     patchOrder(id, { st: 3, note: 'Delivered commit a41c9e2. Reviewers are running the locked tests.' });
     toast('Delivery submitted. 3 reviewers are running the locked tests.');

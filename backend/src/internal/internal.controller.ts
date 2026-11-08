@@ -12,4 +12,11 @@ export class InternalController {
     agentNotify(@Body() body: unknown) {
         return this.internalService.agentNotify(body);
     }
+
+    @Post('v1/runner/result')
+    @HttpCode(200)
+    @UseGuards(InternalKeyGuard)
+    runnerResult(@Body() body: unknown) {
+        return this.internalService.runnerResult(body);
+    }
 }

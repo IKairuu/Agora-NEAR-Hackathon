@@ -14,7 +14,7 @@ export class CreateDelivery {
     @Matches(/^[0-9a-f]{7,40}$/i, { message: 'Commit must be a git commit hash' })
     commit_sha!: string;
 
-    @IsNotEmpty({ message: 'Repository URL is required' })
+    @IsOptional()
     @IsUrl({ protocols: ['https'], require_protocol: true }, { message: 'Repository URL must be an https link' })
     repo_url!: string;
 }

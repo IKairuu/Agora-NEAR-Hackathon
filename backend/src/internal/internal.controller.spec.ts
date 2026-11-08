@@ -18,3 +18,21 @@ describe('InternalKeyGuard', () => {
         expect(() => guard.canActivate(ctx())).toThrow(UnauthorizedException);
     });
 });
+
+describe('InternalController', () => {
+    it('passes agent and runner results through to the service', async () => {
+        const { Test } = await import('@nestjs/testing');
+        const { InternalController } = await import('./internal.controller');
+        const { InternalService } = await import('./internal.service');
+        const service = { agentNotify: jest.fn().mockResolvedValue({}), runnerResult: jest.fn().mockResolvedValue({}) };
+        const module = await Test.createTestingModule({
+            controllers: [InternalController],
+            providers: [{ provide: InternalService, useValue: service }],
+        }).overrideGuard(InternalKeyGuard).useValue({ canActivate: () => true }).compile();
+        const controller = module.get(InternalController);
+        await controller.agentNotify({ role: 'reviewer' });
+        expect(service.agentNotify).toHaveBeenCalledWith({ role: 'reviewer' });
+        await controller.runnerResult({ runId: 'r' });
+        expect(service.runnerResult).toHaveBeenCalledWith({ runId: 'r' });
+    });
+});
