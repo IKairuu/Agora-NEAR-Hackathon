@@ -1,7 +1,0 @@
-run fe8d6bce-f44a-4cb8-9728-e64100523bb8
-repo file:///src/j1042
-base 8e35f67d5392c9e0f816beb09841fd9cfaef0fdd
-commit 0000000deadbeef
-
-=== step clone (network on) ===
-=== exit 41 in 290 ms ===
