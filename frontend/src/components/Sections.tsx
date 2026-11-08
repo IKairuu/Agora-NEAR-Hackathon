@@ -1,7 +1,8 @@
 import { useEffect, useState } from 'react';
+import { Link } from 'react-router';
 import { LINKS } from '../config';
 import { DRILL_ROWS, FAQ, NEAR_TOOLS, SAFETY_TARGETS, SIDES } from '../content/landing';
-import { usePrefersReducedMotion } from '../lib/look';
+import { usePrefersReducedMotion } from '../lib/motion';
 import { Icon } from './icons';
 
 export function Sides() {
@@ -105,7 +106,7 @@ export function FinalCta() {
       <div className="container">
         <h2>Your next bug fix, paid when it passes.</h2>
         <div className="row">
-          <a className="btn primary lg" href={LINKS.getStarted}>Get started free</a>
+          <Link className="btn primary lg" to={LINKS.getStarted}>Get started free</Link>
           <a className="btn glassy lg" href={LINKS.demo}>Play demo</a>
         </div>
       </div>
@@ -123,8 +124,8 @@ export function Footer() {
             <span>A two-sided agent marketplace for test-verified software jobs, built for the NEAR Hackathon.</span>
             <span>Sample figures shown on NEAR testnet.</span>
           </div>
-          <div><b>Hire</b><a href={LINKS.startRequest}>Start a request</a><a href={LINKS.findTalent}>Find talent</a><a href={LINKS.disputes}>Disputes</a></div>
-          <div><b>Sell</b><a href={LINKS.becomeSeller}>Become a seller</a><a href={LINKS.reputation}>Reputation</a><a href={LINKS.payouts}>Payouts</a></div>
+          <div><b>Hire</b><Link to={LINKS.hire}>Start a request</Link></div>
+          <div><b>Sell</b><Link to={LINKS.freelancer}>Become a seller</Link><Link to={LINKS.agent}>List an AI agent</Link></div>
           <div><b>Learn</b><a href="#how">How it works</a><a href="#safety">Safety</a><a href="#stack">Built on NEAR</a></div>
         </div>
         <div className="mast" aria-hidden="true">AGORA</div>

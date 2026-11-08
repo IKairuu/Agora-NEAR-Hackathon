@@ -1,4 +1,4 @@
-/* AGORA design tokens: light paper, night bands, green signal with five palettes, liquid glass. */
+/* AGORA design tokens: light paper, night bands, emerald gradient signal, liquid glass. */
 :root {
   color-scheme: light;
   --space-3xs: 2px; --space-2xs: 4px; --space-xs: 8px; --space-sm: 12px; --space-md: 16px; --space-lg: 24px; --space-xl: 40px; --space-2xl: 64px; --space-3xl: 96px; --space-4xl: 144px;
@@ -38,33 +38,22 @@
   --radius-card: 16px; --radius-inner: 10px; --radius-pill: 999px;
   --tracking-display: -0.03em; --display-weight: 500;
 
-  /* palettes for the colour switcher */
-  --p-mint-accent: oklch(86% 0.15 168); --p-mint-hi: oklch(90% 0.12 168); --p-mint-deep: oklch(48% 0.1 170); --p-mint-ink: oklch(18% 0.04 168); --p-mint-soft: oklch(95.5% 0.035 168); --p-mint-g1: oklch(92% 0.12 158); --p-mint-g2: oklch(80% 0.16 145); --p-mint-focus: oklch(52% 0.1 170);
-  --p-jade-accent: oklch(70% 0.14 172); --p-jade-hi: oklch(76% 0.13 172); --p-jade-deep: oklch(45% 0.1 174); --p-jade-ink: oklch(16% 0.03 172); --p-jade-soft: oklch(95% 0.03 172); --p-jade-g1: oklch(78% 0.12 162); --p-jade-g2: oklch(62% 0.13 148); --p-jade-focus: oklch(48% 0.1 174);
-  --p-lime-accent: oklch(90% 0.2 128); --p-lime-hi: oklch(94% 0.17 128); --p-lime-deep: oklch(48% 0.12 135); --p-lime-ink: oklch(20% 0.05 128); --p-lime-soft: oklch(96% 0.05 128); --p-lime-g1: oklch(94% 0.18 112); --p-lime-g2: oklch(82% 0.2 142); --p-lime-focus: oklch(50% 0.12 135);
-  --p-forest-accent: oklch(46% 0.12 152); --p-forest-hi: oklch(52% 0.13 152); --p-forest-deep: oklch(42% 0.11 152); --p-forest-ink: oklch(98% 0.01 150); --p-forest-soft: oklch(94.5% 0.03 152); --p-forest-g1: oklch(52% 0.13 140); --p-forest-g2: oklch(38% 0.1 165); --p-forest-focus: oklch(46% 0.12 152);
-  --p-emerald-accent: oklch(78% 0.19 150); --p-emerald-g1: oklch(87% 0.18 130); --p-emerald-g2: oklch(72% 0.19 158);
   --n-acc-soft: oklch(27% 0.06 150); --n-ok: oklch(78% 0.14 150); --n-ok-soft: oklch(26% 0.05 150); --n-hold: oklch(80% 0.13 75); --n-hold-soft: oklch(27% 0.05 70);
   --n-block: oklch(72% 0.16 28); --n-block-soft: oklch(27% 0.06 25); --n-info: oklch(76% 0.11 245); --n-info-soft: oklch(26% 0.04 245);
   --color-code-add: oklch(82% 0.14 150); --color-code-del: oklch(74% 0.15 28); --color-shine: oklch(100% 0 0 / 0.35); --color-edge: oklch(0% 0 0 / 0.08);
   --color-white-07: oklch(100% 0 0 / 0.07); --color-white-10: oklch(100% 0 0 / 0.1); --color-white-12: oklch(100% 0 0 / 0.12); --color-white-13: oklch(100% 0 0 / 0.13); --color-white-14: oklch(100% 0 0 / 0.14);
   --color-nav-shadow: oklch(5% 0.01 160 / 0.6);
-  /* green signal, default emerald */
+  /* green signal: emerald, filled with the emerald gradient */
   --color-accent: oklch(78% 0.19 150); --color-accent-hi: oklch(84% 0.17 150); --color-accent-deep: oklch(47% 0.13 152);
   --color-accent-ink: oklch(18% 0.04 150); --color-accent-soft: oklch(95% 0.04 150);
   --accent-grad: linear-gradient(135deg, oklch(87% 0.18 130), oklch(72% 0.19 158));
   --color-accent-text: var(--color-accent-deep); --color-focus: oklch(55% 0.15 152);
-  --accent-fill: var(--color-accent);
+  --accent-fill: var(--accent-grad);
 }
-:root[data-accent="mint"] { --color-accent: var(--p-mint-accent); --color-accent-hi: var(--p-mint-hi); --color-accent-deep: var(--p-mint-deep); --color-accent-ink: var(--p-mint-ink); --color-accent-soft: var(--p-mint-soft); --accent-grad: linear-gradient(135deg, var(--p-mint-g1), var(--p-mint-g2)); --color-focus: var(--p-mint-focus); }
-:root[data-accent="jade"] { --color-accent: var(--p-jade-accent); --color-accent-hi: var(--p-jade-hi); --color-accent-deep: var(--p-jade-deep); --color-accent-ink: var(--p-jade-ink); --color-accent-soft: var(--p-jade-soft); --accent-grad: linear-gradient(135deg, var(--p-jade-g1), var(--p-jade-g2)); --color-focus: var(--p-jade-focus); }
-:root[data-accent="lime"] { --color-accent: var(--p-lime-accent); --color-accent-hi: var(--p-lime-hi); --color-accent-deep: var(--p-lime-deep); --color-accent-ink: var(--p-lime-ink); --color-accent-soft: var(--p-lime-soft); --accent-grad: linear-gradient(135deg, var(--p-lime-g1), var(--p-lime-g2)); --color-focus: var(--p-lime-focus); }
-:root[data-accent="forest"] { --color-accent: var(--p-forest-accent); --color-accent-hi: var(--p-forest-hi); --color-accent-deep: var(--p-forest-deep); --color-accent-ink: var(--p-forest-ink); --color-accent-soft: var(--p-forest-soft); --accent-grad: linear-gradient(135deg, var(--p-forest-g1), var(--p-forest-g2)); --color-focus: var(--p-forest-focus); }
-:root[data-fill="gradient"] { --accent-fill: var(--accent-grad); }
 
 /* dark mode: paper turns to night */
 @media (prefers-color-scheme: dark) {
-  :root:not([data-theme="light"]) {
+  :root {
     color-scheme: dark;
     --color-paper: oklch(14% 0.008 160); --color-paper-2: oklch(11.5% 0.007 160); --color-paper-3: oklch(20% 0.011 160); --color-card: oklch(17% 0.01 160);
     --color-ink: oklch(96% 0.005 160); --color-ink-2: oklch(84% 0.008 160); --color-muted: oklch(71% 0.01 160);
@@ -74,16 +63,6 @@
     --color-accent-text: var(--color-accent); --color-accent-soft: oklch(26% 0.05 150); --color-focus: var(--color-accent);
     --glass-light: oklch(19% 0.012 160 / 0.62); --glass-hi-light: var(--glass-hi); --shadow-card: none;
   }
-}
-:root[data-theme="dark"] {
-  color-scheme: dark;
-  --color-paper: oklch(14% 0.008 160); --color-paper-2: oklch(11.5% 0.007 160); --color-paper-3: oklch(20% 0.011 160); --color-card: oklch(17% 0.01 160);
-  --color-ink: oklch(96% 0.005 160); --color-ink-2: oklch(84% 0.008 160); --color-muted: oklch(71% 0.01 160);
-  --color-rule: oklch(25% 0.011 160); --color-rule-2: oklch(32% 0.013 160);
-  --color-ok: oklch(78% 0.14 150); --color-ok-soft: oklch(26% 0.05 150); --color-hold: oklch(80% 0.13 75); --color-hold-soft: oklch(27% 0.05 70);
-  --color-block: oklch(72% 0.16 28); --color-block-soft: oklch(27% 0.06 25); --color-info: oklch(76% 0.11 245); --color-info-soft: oklch(26% 0.04 245);
-  --color-accent-text: var(--color-accent); --color-accent-soft: oklch(26% 0.05 150); --color-focus: var(--color-accent);
-  --glass-light: oklch(19% 0.012 160 / 0.62); --glass-hi-light: var(--glass-hi); --shadow-card: none;
 }
 /* a night band remaps the paper tokens, so every part inside it works unchanged */
 .night {

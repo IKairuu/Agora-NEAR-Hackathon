@@ -1,10 +1,11 @@
+import { Link } from 'react-router';
 import { LINKS } from '../config';
+import { nextPathFor, useSession } from '../lib/auth';
 import { NAV_LINKS } from '../content/landing';
-import type { useLook } from '../lib/look';
 import { Brand, Icon } from './icons';
-import { LookMenu } from './LookMenu';
 
-export function Nav({ look }: { look: ReturnType<typeof useLook> }) {
+export function Nav() {
+  const session = useSession();
   return (
     <nav className="lnav" aria-label="Site">
       <div className="container">
@@ -14,9 +15,10 @@ export function Nav({ look }: { look: ReturnType<typeof useLook> }) {
             {NAV_LINKS.map((l) => <a key={l.id} href={`#${l.id}`}>{l.label}</a>)}
           </div>
           <div className="acts2">
-            <LookMenu api={look} />
             <a className="btn glassy demo" href={LINKS.demo}><Icon name="play" />Demo</a>
-            <a className="btn primary" href={LINKS.getStarted}>Get started</a>
+            {session
+              ? <Link className="btn primary" to={nextPathFor(session)}>Open AGORA</Link>
+              : <Link className="btn primary" to={LINKS.getStarted}>Get started</Link>}
           </div>
         </div>
       </div>

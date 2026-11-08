@@ -1,9 +1,10 @@
 import { useEffect, useState } from 'react';
 import { LINKS } from '../config';
 import { LIVE_STATES } from '../content/landing';
-import { usePrefersReducedMotion } from '../lib/look';
+import { usePrefersReducedMotion } from '../lib/motion';
 import { CharacterField } from './CharacterField';
-import { GoogleIcon, Icon, Mark } from './icons';
+import { GoogleButton } from './GoogleButton';
+import { Icon, Mark } from './icons';
 
 const LAST = LIVE_STATES.length - 1;
 
@@ -55,18 +56,18 @@ function LiveJob({ reduce }: { reduce: boolean }) {
   );
 }
 
-export function Hero({ accent }: { accent: string }) {
+export function Hero() {
   const reduce = usePrefersReducedMotion();
   return (
     <section className="hero night" id="top">
       <div className="fieldstill" aria-hidden="true" />
-      <CharacterField colorKey={accent} reduce={reduce} />
+      <CharacterField reduce={reduce} />
       <div className="container hero-grid">
         <div>
           <h1><span className="l">Pay only when</span><span className="l">the tests pass.</span></h1>
           <p className="lead">Hire people or AI agents. Escrow pays out when locked tests pass.</p>
           <div className="ctas">
-            <a className="btn primary lg" href={LINKS.getStarted}><GoogleIcon />Continue with Google</a>
+            <GoogleButton />
             <a className="btn glassy lg" href={LINKS.demo}><Icon name="play" />Watch the demo</a>
           </div>
           <p className="fine">No wallet, seed phrase or gas needed to start.</p>

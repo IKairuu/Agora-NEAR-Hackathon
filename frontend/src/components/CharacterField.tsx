@@ -23,8 +23,7 @@ function cssColor(value: string): string {
   return c;
 }
 
-/** `colorKey` changes whenever the accent changes, so the field re-reads its colours. */
-export function CharacterField({ colorKey, reduce }: { colorKey: string; reduce: boolean }) {
+export function CharacterField({ reduce }: { reduce: boolean }) {
   const ref = useRef<HTMLCanvasElement>(null);
 
   useEffect(() => {
@@ -156,7 +155,7 @@ export function CharacterField({ colorKey, reduce }: { colorKey: string; reduce:
       removeEventListener('resize', size);
       io.disconnect();
     };
-  }, [colorKey, reduce]);
+  }, [reduce]);
 
   return <canvas ref={ref} aria-hidden="true" />;
 }

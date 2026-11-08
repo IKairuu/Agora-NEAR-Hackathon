@@ -1,12 +1,29 @@
+import { Link } from 'react-router';
+
 const PATHS = {
   check: 'M5 12l5 5L20 7',
   x: 'M6 6l12 12M18 6 6 18',
   warn: 'M12 3 2 20h20zM12 10v4M12 17v.5',
   lock: 'M6 11h12v10H6zM8 11V8a4 4 0 0 1 8 0v3',
   play: 'M7 4v16l13-8z',
-  sun: 'M12 4V2M12 22v-2M4 12H2M22 12h-2M5 5 3.5 3.5M20.5 20.5 19 19M5 19l-1.5 1.5M20.5 3.5 19 5M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z',
-  swatch:
-    'M12 3a9 9 0 1 0 0 18c1.1 0 2-.9 2-2 0-.5-.2-1-.5-1.3-.3-.4-.5-.8-.5-1.3 0-1.1.9-2 2-2h2.3A4.7 4.7 0 0 0 21 9.7C21 6 17 3 12 3ZM7.5 12a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm3-4a1 1 0 1 0 0-2 1 1 0 0 0 0 2Zm5 0a1 1 0 1 0 0-2 1 1 0 0 0 0 2Z',
+  up: 'M12 19V5M5 12l7-7 7 7',
+  spark: 'M12 3v4M12 17v4M3 12h4M17 12h4M6 6l2.5 2.5M15.5 15.5 18 18M6 18l2.5-2.5M15.5 8.5 18 6',
+  brief: 'M3 8h18v12H3zM8 8V5h8v3M3 13h18',
+  code: 'm8 8-5 4 5 4M16 8l5 4-5 4M14 4l-4 16',
+  bot: 'M5 9h14v10H5zM12 5v4M9 14h.01M15 14h.01M3 13v2M21 13v2',
+  flask: 'M9 3h6M10 3v6l-5 9a2 2 0 0 0 2 3h10a2 2 0 0 0 2-3l-5-9V3M7 15h10',
+  cube: 'M12 3 4 7.5v9L12 21l8-4.5v-9zM4 7.5l8 4.5 8-4.5M12 12v9',
+  window: 'M3 5h18v14H3zM3 9h18M7 7h.01M10 7h.01',
+  term: 'M3 5h18v14H3zM7 10l3 2-3 2M13 15h4',
+  layers: 'm12 3 9 5-9 5-9-5zM3 13l9 5 9-5',
+  repo: 'M6 3h12v18l-6-4-6 4zM9 8h6',
+  shield: 'M12 3 4 6v6c0 4.5 3.4 8.3 8 9 4.6-.7 8-4.5 8-9V6zM9 12l2 2 4-4',
+  gift: 'M4 11h16v10H4zM3 7h18v4H3zM12 7v14M12 7c-1.5-3-5-3-5-1s3 1 5 1c2 0 5 1 5-1s-3.5-2-5 1',
+  globe: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18ZM3 12h18M12 3c2.5 2.5 3.8 5.5 3.8 9S14.5 18.5 12 21c-2.5-2.5-3.8-5.5-3.8-9S9.5 5.5 12 3Z',
+  bolt: 'M13 2 4 14h7l-1 8 9-12h-7z',
+  out: 'M15 4h4v16h-4M10 8l-4 4 4 4M6 12h10',
+  swap: 'M7 4 3 8l4 4M3 8h14M17 20l4-4-4-4M21 16H7',
+  mail: 'M3 6h18v12H3zM3 7l9 6 9-6',
 } as const;
 
 export type IconName = keyof typeof PATHS;
@@ -59,11 +76,13 @@ export function Mark({ kind }: { kind: 'ok' | 'hold' }) {
   );
 }
 
-export function Brand() {
-  return (
-    <a className="brand" href="#top">
+/** Wordmark. On the landing page it scrolls to the top; elsewhere it links home. */
+export function Brand({ to }: { to?: string }) {
+  const inner = (
+    <>
       <span className="brand-mark"><Logo /></span>
       <span className="brand-name">AGORA</span>
-    </a>
+    </>
   );
+  return to ? <Link className="brand" to={to}>{inner}</Link> : <a className="brand" href="#top">{inner}</a>;
 }

@@ -1,14 +1,9 @@
-/**
- * Where the landing page's calls to action point.
- * The app screens are not built yet, so these are placeholders to wire up later.
- */
+/** Where the landing page's calls to action point. */
 export const LINKS = {
-  getStarted: '/app',
-  demo: '/app?demo=1',
-  startRequest: '/app/ask',
-  findTalent: '/app/explore',
-  disputes: '/app/dispute',
-  becomeSeller: '/app/sell',
-  reputation: '/app/profile',
-  payouts: '/app/wallet',
+  getStarted: '/start',
+  // the guided demo is not built yet; until then these scroll to "How it works"
+  demo: '#how',
+  hire: '/app/hire',
+  freelancer: '/app/freelancer',
+  agent: '/app/agent',
 } as const;
