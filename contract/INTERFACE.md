@@ -2,7 +2,7 @@
 
 Owner: Member A. This file is the contract between the Rust contract, A's `chain/` module, the indexer, and Members B, C and D. Method names, arguments and event names change only with notice to the whole team.
 
-Status: Phase 0 draft, 2026-11-08. Implemented so far: setup and config, balances, deposit, `withdraw`, mandate, `pause`, `unpause`, `register_seller`, `post_job`, `place_bid`, `set_bid_flags`, and their views.
+Status: Phase 0 draft, 2026-11-08. Implemented so far: setup and config, balances, deposit, `withdraw`, mandate, `pause`, `unpause`, `register_seller`, `post_job`, `place_bid`, `set_bid_flags`, `accept_offer`, `fund_job` with the nine checks, and their views.
 
 ## 1. Basics
 
@@ -13,6 +13,7 @@ Status: Phase 0 draft, 2026-11-08. Implemented so far: setup and config, balance
 | Money token | Testnet USDC (NEP-141), 6 decimals. Address set in `new(usdc_token)` |
 | Amounts | `U128` strings in base units. `"32000000"` = 32.00 USDC |
 | Ids | `job_id` and `bid_id` are `U64` strings, counted up from `"1"` |
+| Job stage on chain | `Open`, `Accepted`, `Funded`, `Delivered`, `Released`, `Refunded`. The indexer maps them to the frontend LIFE names (Offers, Agreed, Protected, Reviewers voting, Paid, Refunded) |
 | Time | Nanoseconds, `U64` strings (`env::block_timestamp`) |
 | Day for the daily cap | Calendar day in UTC: `block_timestamp / 86_400_000_000_000` |
 | Fee | 2% (`fee_bps = 200`) of each release, sent to the DAO account |
@@ -65,7 +66,7 @@ Mandate defaults (from the prototype Limits page): per-job cap 50 USDC, daily ca
 | `post_job` | `category, budget_hint, spec_hash, deadline` | Buyer or buyer's agent | Returns `job_id`. Emits `job_posted` |
 | `place_bid` | `job_id, price, days` | Seller or bidding agent | Registered sellers only. Max 20 bids per job, 1 bid per seller per job, max 10 open bids per seller (bid spam). Moves no money. Returns `bid_id`. Emits `bid_placed` |
 | `set_bid_flags` | `job_id, bid_id, price_check_ok: bool, fraud_score: u8, held: bool` | Fraud oracle only | Fraud score 0 to 100; 70 or more counts as a high fraud flag. Emits `bid_flagged` (with `high_fraud`) |
-| `accept_offer` | `job_id, bid_id, price, spec_hash, holdout_hash, attempts, deadline` | Buyer or buyer's agent | Seller must not be the buyer or the buyer's agent (self-dealing). Locks the terms. Emits `offer_accepted` |
+| `accept_offer` | `job_id, bid_id, price, spec_hash, holdout_hash, attempts, deadline` | Buyer or buyer's agent | Seller must not be the buyer or the buyer's agent (self-dealing). `price` may be lower than the bid after negotiation, never higher. Closes bidding and frees every bidder's open-bid slot. Locks the terms. Emits `offer_accepted` |
 | `fund_job` | `job_id` | Buyer or buyer's agent | Runs the nine checks (section 4), moves price from free balance to escrow, adds it to used today. Emits `job_funded` |
 | `submit_delivery` | `job_id, commit_hash` | Hired seller or their agent | Uses one attempt. Assigns the three reviewers. Emits `delivery_submitted` |
 | `vote` | `job_id, approve: bool, log_hash, attestation_hash` | Assigned reviewer only | One vote each. At 2 approvals: release price minus 2% to the seller, 2% to the DAO, update reputation. At 2 rejections: attempt failed. Emits `vote_cast`, then `milestone_released` and `reputation_updated` |
