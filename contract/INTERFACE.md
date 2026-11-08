@@ -111,6 +111,9 @@ Every state change logs one line: `EVENT_JSON:{"standard":"agora","version":"1.0
 
 | Event | data fields |
 |---|---|
+| `deposited` | `account_id, amount, free` |
+| `withdrawn` | `account_id, amount, free` |
+| `withdraw_failed` | `account_id, amount, free` (the USDC transfer failed, so the amount is credited back) |
 | `job_posted` | `job_id, buyer, category, budget_hint, spec_hash, deadline` |
 | `bid_placed` | `job_id, bid_id, seller, price, days` |
 | `bid_flagged` | `job_id, bid_id, price_check_ok, fraud_score, held` |
