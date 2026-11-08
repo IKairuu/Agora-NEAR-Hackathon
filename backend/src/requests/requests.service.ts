@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
 import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
 import { isUUID } from 'class-validator';
+import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { CreateRequest } from './dto/CreateRequest.dto.js';
 import { CreateRequestBulk } from './dto/CreateRequestBulk.dto.js';
@@ -59,13 +60,15 @@ export class RequestsService {
     constructor(
         private readonly requestsRepository: RequestsRepository,
         private readonly authService: AuthService,
+        private readonly agentsService: AgentsService,
     ) {}
 
     async createRequest(token: string, body: CreateRequest) {
         const authId = await this.authId(token);
         const job = await this.toNewJob(body);
         const [row] = await this.requestsRepository.createRequests(authId, [job]);
-        return { message: 'Request Successfully Created', id: row!.id, ref: row!.ref };
+        const agent = job.repoUrl ? await this.agentsService.dispatch('spec_writer', { ownerId: authId, jobId: row!.id, payload: { jobId: row!.id } }) : null;
+        return { message: 'Request Successfully Created', id: row!.id, ref: row!.ref, specWriter: agent?.status ?? 'waiting_for_repo' };
     }
 
     async createRequests(token: string, body: CreateRequestBulk) {
@@ -91,6 +94,7 @@ export class RequestsService {
             limit: body.budget_max ? sealLimit(body.budget_max) : null,
         });
         if (count === 0) throw new BadRequestException('The request cannot change after the job is agreed');
+        if (body.repo_url || body.base_commit) await this.agentsService.dispatch('spec_writer', { ownerId: authId, jobId: job.id, payload: { jobId: job.id } });
         return { message: 'Request Successfully Edited', id: job.id, ref: job.ref };
     }
 

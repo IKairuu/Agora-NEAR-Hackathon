@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { randomUUID } from 'node:crypto';
 import { isUUID } from 'class-validator';
+import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { ChainService } from '../chain/chain.service.js';
 import { Prisma } from '../generated/prisma/client.js';
@@ -69,6 +70,7 @@ export class DeliveriesService {
         private readonly deliveriesRepository: DeliveriesRepository,
         private readonly authService: AuthService,
         private readonly chainService: ChainService,
+        private readonly agentsService: AgentsService,
     ) {}
 
     async createDelivery(token: string, body: CreateDelivery) {
@@ -120,6 +122,7 @@ export class DeliveriesService {
             deliveryId: created.id,
         });
         await this.deliveriesRepository.setRunStatus(runId, runner === 'queued' ? 'running' : 'failed', runner === 'queued' ? null : 'Runner unavailable');
+        const reviewers = await this.agentsService.dispatchReviewers(job.buyerId, job.id, created.id);
 
         return {
             message: 'Delivery Successfully Submitted',
@@ -128,6 +131,7 @@ export class DeliveriesService {
             attemptsLeft: MAX_ATTEMPTS - created.attempt,
             runId,
             runner,
+            reviewers: reviewers.filter((r) => r.status === 'sent').length,
             submitTx: chain.tx_hash,
             explorer: chain.explorer_url,
         };

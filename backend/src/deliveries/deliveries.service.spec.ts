@@ -1,5 +1,6 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
+import { AgentsService } from '../agents/agents.service';
 import { AuthService } from '../auth/auth.service';
 import { ChainService } from '../chain/chain.service';
 import { Prisma } from '../generated/prisma/client';
@@ -37,7 +38,8 @@ describe('DeliveriesService', () => {
             explorerTxUrl: jest.fn((tx: string) => `https://testnet.nearblocks.io/txns/${tx}`),
         } as unknown as jest.Mocked<ChainService>;
         const auth = { verifySessionToken: jest.fn().mockResolvedValue(SELLER_USER) } as unknown as AuthService;
-        service = new DeliveriesService(repo, auth, chain);
+        const agents = { dispatch: jest.fn().mockResolvedValue({ status: 'sent' }), dispatchReviewers: jest.fn().mockResolvedValue([{ status: 'sent' }, { status: 'sent' }, { status: 'sent' }]) } as unknown as AgentsService;
+        service = new DeliveriesService(repo, auth, chain, agents);
         fetchMock = jest.fn().mockResolvedValue({ ok: true });
         global.fetch = fetchMock as unknown as typeof fetch;
         process.env['AGORA_RUNNER_URL'] = 'http://runner:4100';

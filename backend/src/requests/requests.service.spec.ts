@@ -1,5 +1,6 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
+import { AgentsService } from '../agents/agents.service';
 import { AuthService } from '../auth/auth.service';
 import { RequestsRepository } from './requests.repository';
 import { guessCategory, openLimit, RequestsService, sealLimit, titleOf } from './requests.service';
@@ -11,6 +12,7 @@ const TEXT = "Our payroll contract splits a USDC payment between workers, but th
 describe('RequestsService', () => {
     let repo: jest.Mocked<RequestsRepository>;
     let service: RequestsService;
+    let agents: jest.Mocked<AgentsService>;
 
     beforeAll(() => {
         process.env['AGORA_LIMIT_KEY'] = 'a'.repeat(64);
@@ -18,12 +20,14 @@ describe('RequestsService', () => {
 
     beforeEach(() => {
         repo = { getService: jest.fn(), getOwnedJob: jest.fn(), createRequests: jest.fn(), editRequest: jest.fn(), keepWaiting: jest.fn() } as unknown as jest.Mocked<RequestsRepository>;
-        service = new RequestsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService);
+        agents = { dispatch: jest.fn().mockResolvedValue({ status: 'sent' }) } as unknown as jest.Mocked<AgentsService>;
+        service = new RequestsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService, agents);
     });
 
     it('turns a sentence into a private draft job with a sealed hidden maximum', async () => {
         repo.createRequests.mockResolvedValue([{ id: JOB, ref: 'J-1042' }]);
-        await expect(service.createRequest('Bearer t', { text: TEXT, budget_label: 'under 40', budget_max: 40 } as never)).resolves.toEqual({ message: 'Request Successfully Created', id: JOB, ref: 'J-1042' });
+        await expect(service.createRequest('Bearer t', { text: TEXT, budget_label: 'under 40', budget_max: 40 } as never)).resolves.toEqual({ message: 'Request Successfully Created', id: JOB, ref: 'J-1042', specWriter: 'waiting_for_repo' });
+        expect(agents.dispatch.mock.calls).toHaveLength(0);
         const [userId, jobs] = repo.createRequests.mock.calls[0]!;
         expect(userId).toBe(USER);
         expect(jobs[0]).toMatchObject({ category: 'rust', visibility: 'private', budgetLabel: 'under 40', title: 'Our payroll contract splits a USDC payment between workers, but the last...' });

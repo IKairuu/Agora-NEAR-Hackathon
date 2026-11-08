@@ -1,5 +1,6 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
+import { AgentsService } from '../agents/agents.service';
 import { AuthService } from '../auth/auth.service';
 import { ChainService } from '../chain/chain.service';
 import { ReviewsRepository } from './reviews.repository';
@@ -90,7 +91,8 @@ describe('ReviewsService', () => {
             callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-rerun_review-1', explorer_url: '', result: null }),
             explorerTxUrl: jest.fn(explorer),
         } as unknown as jest.Mocked<ChainService>;
-        service = new ReviewsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(BUYER) } as unknown as AuthService, chain);
+        const agents = { dispatch: jest.fn().mockResolvedValue({ status: 'sent' }), dispatchReviewers: jest.fn().mockResolvedValue([{ status: 'sent' }, { status: 'sent' }, { status: 'sent' }]) } as unknown as AgentsService;
+        service = new ReviewsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(BUYER) } as unknown as AuthService, chain, agents);
         fetchMock = jest.fn().mockResolvedValue({ ok: true });
         global.fetch = fetchMock as unknown as typeof fetch;
         process.env['AGORA_RUNNER_URL'] = 'http://runner:4100';

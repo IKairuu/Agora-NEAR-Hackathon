@@ -1,5 +1,6 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
+import { AgentsService } from '../agents/agents.service';
 import { AuthService } from '../auth/auth.service';
 import { BidRow, BidsRepository } from './bids.repository';
 import { bestPickOf, BidsService, toOffer } from './bids.service';
@@ -21,6 +22,7 @@ const bid = (name: string, price: number, overrides: Partial<BidRow> = {}): BidR
 describe('BidsService', () => {
     let repo: jest.Mocked<BidsRepository>;
     let service: BidsService;
+    let agents: jest.Mocked<AgentsService>;
     let caller = BUYER;
 
     beforeEach(() => {
@@ -30,7 +32,8 @@ describe('BidsService', () => {
             getOwnedBid: jest.fn(), editBid: jest.fn(), explainBid: jest.fn(), deleteBid: jest.fn(),
             getOwnedJob: jest.fn(), getBids: jest.fn(), getReputations: jest.fn(),
         } as unknown as jest.Mocked<BidsRepository>;
-        service = new BidsService(repo, { verifySessionToken: jest.fn(async () => caller) } as unknown as AuthService);
+        agents = { dispatch: jest.fn().mockResolvedValue({ status: 'sent' }) } as unknown as jest.Mocked<AgentsService>;
+        service = new BidsService(repo, { verifySessionToken: jest.fn(async () => caller) } as unknown as AuthService, agents);
     });
 
     describe('createBid', () => {
@@ -42,7 +45,11 @@ describe('BidsService', () => {
             repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent' }]);
             repo.createBid.mockResolvedValue({ id: 'b1' });
             await expect(service.createBid('Bearer t', { job_id: 'J-1042', price: 36, days: 1 } as never)).resolves.toEqual({ message: 'Bid Successfully Created', id: 'b1' });
-            expect(repo.createBid.mock.calls[0]![0]).toEqual({ jobId: JOB, sellerId: SELLER, price: 36, days: 1, note: null });
+            expect(repo.createBid.mock.calls[0]![0]).toEqual({ jobId: JOB, buyerId: BUYER, sellerId: SELLER, price: 36, days: 1, note: null });
+            expect(agents.dispatch.mock.calls).toEqual([
+                ['fraud_lure', { ownerId: BUYER, jobId: JOB, payload: { subjectType: 'bid', subjectId: 'b1' } }],
+                ['price_check', { ownerId: BUYER, jobId: JOB, payload: { bidId: 'b1' } }],
+            ]);
         });
 
         it('blocks self-dealing', async () => {

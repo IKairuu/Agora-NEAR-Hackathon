@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
+import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { CreateBid } from './dto/CreateBid.dto.js';
 import { CreateBidBulk } from './dto/CreateBidBulk.dto.js';
@@ -68,6 +69,7 @@ export class BidsService {
     constructor(
         private readonly bidsRepository: BidsRepository,
         private readonly authService: AuthService,
+        private readonly agentsService: AgentsService,
     ) {}
 
     async createBid(token: string, body: CreateBid) {
@@ -75,6 +77,7 @@ export class BidsService {
         const plan = await this.planBid(authId, body);
         const row = await this.bidsRepository.createBid(plan);
         if (!row) throw new ConflictException('You already made an offer on this job. Edit it instead.');
+        await this.checkBid(plan.buyerId, plan.jobId, row.id);
         return { message: 'Bid Successfully Created', id: row.id };
     }
 
@@ -82,8 +85,10 @@ export class BidsService {
         const authId = await this.authId(token);
         const ids: string[] = [];
         for (const item of body.items) {
-            const row = await this.bidsRepository.createBid(await this.planBid(authId, item));
+            const plan = await this.planBid(authId, item);
+            const row = await this.bidsRepository.createBid(plan);
             if (!row) throw new ConflictException(`You already made an offer on ${item.job_id}`);
+            await this.checkBid(plan.buyerId, plan.jobId, row.id);
             ids.push(row.id);
         }
         return { message: 'Bids Successfully Created', ids };
@@ -160,6 +165,13 @@ export class BidsService {
             const service = job.serviceId ? await this.bidsRepository.getServiceSeller(job.serviceId) : null;
             if (!service || service.sellerId !== seller.id) throw new ForbiddenException('This request was sent to another seller');
         }
-        return { jobId: job.id, sellerId: seller.id, price: body.price, days: body.days, note: body.note?.trim() || null };
+        return { jobId: job.id, buyerId: job.buyerId, sellerId: seller.id, price: body.price, days: body.days, note: body.note?.trim() || null };
+    }
+
+    private async checkBid(buyerId: string, jobId: string, bidId: string) {
+        await Promise.all([
+            this.agentsService.dispatch('fraud_lure', { ownerId: buyerId, jobId, payload: { subjectType: 'bid', subjectId: bidId } }),
+            this.agentsService.dispatch('price_check', { ownerId: buyerId, jobId, payload: { bidId } }),
+        ]);
     }
 }

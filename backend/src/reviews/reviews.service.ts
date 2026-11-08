@@ -1,6 +1,7 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { createHash, randomUUID } from 'node:crypto';
 import { isUUID } from 'class-validator';
+import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { ChainService } from '../chain/chain.service.js';
 import { dispatchRun, testFilesOf } from '../runner.js';
@@ -127,6 +128,7 @@ export class ReviewsService {
         private readonly reviewsRepository: ReviewsRepository,
         private readonly authService: AuthService,
         private readonly chainService: ChainService,
+        private readonly agentsService: AgentsService,
     ) {}
 
     async getReviews(token: string, job: string) {
@@ -185,7 +187,8 @@ export class ReviewsService {
             deliveryId: d.id,
         });
         await this.reviewsRepository.setRunStatus(runId, runner === 'queued' ? 'running' : 'failed', runner === 'queued' ? null : 'Runner unavailable');
-        return { message: 'Review Successfully Rerun', id: d.id, round, runId, runner, why, rerunTx };
+        const reviewers = await this.agentsService.dispatchReviewers(job.buyerId, job.id, d.id);
+        return { message: 'Review Successfully Rerun', id: d.id, round, runId, runner, reviewers: reviewers.filter((r) => r.status === 'sent').length, why, rerunTx };
     }
 
     private async authId(token: string): Promise<string> {
