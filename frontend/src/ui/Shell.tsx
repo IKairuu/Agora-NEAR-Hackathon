@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { ME, OTHER_JOBS, usd } from '../data/sample';
 import { liveReadNotes } from '../lib/live';
-import { act } from '../store/actions';
+import { act, unreadThreads } from '../store/actions';
 import { escrow, free, hb, hPrice, paused, useApp } from '../store/store';
 import { Icon, Logo, type IconName } from './icons';
 import { Pop, RLink, usePop } from './parts';
@@ -17,6 +17,7 @@ function NavItem({ r, label, icon, cur, count }: { r: string; label: string; ico
 
 function MeMenu({ close, cur }: { close: () => void; cur: string }) {
   const s = useApp();
+  const unread = unreadThreads();
   return (
     <>
       <div className="who">
@@ -26,7 +27,7 @@ function MeMenu({ close, cur }: { close: () => void; cur: string }) {
       <hr />
       <RLink r="ask" className="mi" role="menuitem" onClick={close}><Icon name="spark" />Start a request</RLink>
       <RLink r="jobs" className="mi" role="menuitem" onClick={close}><Icon name="brief" />Job requests</RLink>
-      <RLink r="chat" className="mi" role="menuitem" onClick={close}><Icon name="chat" />Messages{s.stage >= 4 && <span className="aside">1 open</span>}</RLink>
+      <RLink r="chat" className="mi" role="menuitem" onClick={close}><Icon name="chat" />Messages{unread > 0 && <span className="aside">{unread} unread</span>}</RLink>
       <hr />
       <RLink r="sell" className="mi" role="menuitem" onClick={close}><Icon name="store" />{s.seller ? 'Edit seller profile' : 'Become a seller'}</RLink>
       <RLink r="wallet" className="mi" role="menuitem" onClick={close}><Icon name="wallet" />Wallet<span className="aside num">{usd(free(s) + escrow(s))} USDC</span></RLink>
@@ -71,6 +72,8 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
   const isPaused = paused(s);
   const [meOpen, meRef, meToggle, meClose] = usePop();
   const [noteOpen, noteRef, noteToggle, noteClose] = usePop();
+  const unread = signed ? unreadThreads() : 0;
+  const onChat = cur === 'chat';
   const jobsCount = (s.stage >= 2 ? 1 : 0) + s.newJobs.length + (s.stage >= 1 ? OTHER_JOBS.length : 0);
 
   return (
@@ -100,7 +103,7 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
               <NavItem r="mandate" label="Limits and keys" icon="mandate" cur={cur} />
               <NavItem r="wallet" label="Earnings" icon="wallet" cur={cur} />
               <div className="nav-group">Market</div>
-              <NavItem r="chat" label="Messages" icon="chat" cur={cur} />
+              <NavItem r="chat" label="Messages" icon="chat" cur={cur} count={unread ? String(unread) : ''} />
               <NavItem r="dispute" label="Disputes" icon="dao" cur={cur} />
             </>
           ) : (
@@ -110,6 +113,7 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
               <NavItem r="dash" label="Overview" icon="home" cur={cur} />
               <NavItem r="explore" label="Find services" icon="explore" cur={cur === 'profile' ? 'explore' : cur} />
               <NavItem r="jobs" label="Job requests" icon="job" cur={cur === 'job' ? 'jobs' : cur} count={jobsCount ? String(jobsCount) : ''} />
+              <NavItem r="chat" label="Messages" icon="chat" cur={cur} count={unread ? String(unread) : ''} />
               <NavItem r="room" label="Protected payment" icon="room" cur={cur} count={s.stage >= 5 && s.stage < 7 ? 'live' : ''} />
               <div className="nav-group">Your agents</div>
               <NavItem r="agents" label="Agent team" icon="agents" cur={cur} count={isPaused ? 'paused' : ''} />
@@ -144,7 +148,9 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
                 <button ref={noteRef} className="btn icon ghost dot-host" onClick={() => { noteToggle(); if (s.live) void liveReadNotes(); }} aria-label="Notifications" aria-haspopup="menu" aria-expanded={noteOpen}>
                   <Icon name="bell" />{(s.live ? s.notes.unread > 0 : s.stage >= 3) && <i className="dot" />}
                 </button>
-                <RLink r="chat" className="btn icon ghost dot-host" aria-label="Messages"><Icon name="mail" />{s.stage >= 4 && s.stage < 5 && <i className="dot" />}</RLink>
+                <RLink r="chat" className={`btn icon ghost dot-host ${onChat ? 'on' : ''}`} aria-label="Messages" title="Messages" {...(onChat ? { 'aria-current': 'page' } : {})}>
+                  <Icon name="mail" />{unread > 0 && <i className="num-dot" aria-hidden="true">{unread}</i>}
+                </RLink>
                 <RLink r="saved" className="btn icon ghost dot-host" aria-label={`Saved, ${s.liked.length}`}><Icon name="heart" />{s.liked.length > 0 && <i className="num-dot">{s.liked.length}</i>}</RLink>
                 <RLink r={s.mode === 'sell' ? 'orders' : 'jobs'} className="btn sm ghost orders">{s.mode === 'sell' ? 'Orders' : 'Job requests'}</RLink>
                 <button ref={meRef} className="me-btn" onClick={meToggle} aria-label="Account menu" aria-haspopup="menu" aria-expanded={meOpen}>

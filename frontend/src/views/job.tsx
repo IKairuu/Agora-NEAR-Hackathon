@@ -1,6 +1,6 @@
 import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { ARRIVE, ATT, BIDS, HELD, JOB, ME, REVIEWERS, sellerBy, SPEC, usd, type Bid } from '../data/sample';
-import { act, hire, scrollMsgs, sendChat, sendThread, threads, type Thread } from '../store/actions';
+import { act, hire, isUnread, markSeen, scrollMsgs, sendChat, sendThread, threads, type Thread } from '../store/actions';
 import { getState, hb, hPrice, priceOf, setState, useApp, type ChatMsg, type State } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
 import { Gate, Head, Lifecycle, Mk, RLink, SignInButton, T, Tl } from '../ui/parts';
@@ -215,7 +215,7 @@ export function Chat() {
   const list = all.filter((t) => f === 'all' || t.mode === f);
   const cur = list.find((t) => t.k === s.thread) || list[0];
   const curKey = cur?.k ?? '';
-  useEffect(() => { if (curKey && curKey !== getState().thread) setState({ thread: curKey }); }, [curKey]);
+  useEffect(() => { if (curKey && curKey !== getState().thread) setState({ thread: curKey }); markSeen(curKey); }, [curKey]);
   const opened = useRef(false);
   /* like the prototype, keep the newest message in view after switching threads, not on first open */
   useEffect(() => { if (!opened.current) { opened.current = true; return; } scrollMsgs(); }, [curKey]);
@@ -238,7 +238,7 @@ export function Chat() {
                 <span className="tr-job">{t.job} · {t.title}</span>
                 <span className="tr-last">{t.last}</span>
               </span>
-              {t.unread && !on && <i className="udot" aria-label="Unread" />}
+              {isUnread(t) && !on && <i className="udot" aria-label="Unread" />}
             </button>
           );
         }) : <p className="muted small" style={{ padding: 16 }}>No conversations yet.</p>}

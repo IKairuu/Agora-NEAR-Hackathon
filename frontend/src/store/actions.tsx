@@ -79,6 +79,14 @@ export function threads(): Thread[] {
   s.orders.filter((o) => o.st < 4).forEach((o) => add({ k: o.buyer, mode: 'sell', who: o.buyer, job: o.id, title: o.title, st: O_ST[o.st], amt: o.price, order: o, unread: o.st === 0 }));
   return out;
 }
+/** True while a thread has news the user has not opened yet. */
+export const isUnread = (t: Thread) => !!t.unread && !getState().seenThreads.includes(t.k);
+/** Unread conversations across buying and selling; drives the Messages badges. */
+export const unreadThreads = () => threads().filter(isUnread).length;
+/** Mark a thread as read once it is opened. */
+export function markSeen(k: string) {
+  if (k && !getState().seenThreads.includes(k)) setState((s) => ({ seenThreads: [...s.seenThreads, k] }));
+}
 /** Send a message in a non-demo thread. */
 export function sendThread(raw: string) {
   const v = raw.trim(); const k = getState().thread;

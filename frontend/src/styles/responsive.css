@@ -19,3 +19,7 @@
   .or-p { flex-wrap: wrap; row-gap: var(--space-2xs); }
   .gig-grid .gig-by { flex-wrap: wrap; row-gap: var(--space-3xs); }
 }
+
+/* Messages shortcut in the top bar: active on /chat, like the sidebar item */
+.top .btn.icon.on { background: var(--color-paper-3); color: var(--color-ink); }
+.top .btn.icon.on svg { color: var(--color-accent-text); }
