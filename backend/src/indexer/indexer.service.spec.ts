@@ -2,7 +2,7 @@ jest.mock('../prisma', () => ({ prisma: {} }));
 
 import { bondReturnedFor, IndexerRepository } from './indexer.repository';
 import { Prisma } from '../generated/prisma/client';
-import { bondNeeded, disputeRefusal, ESCALATION_WINDOW_MS, fundingRefusal, IndexerService, jobRefOf, MOCK_START_BALANCE, rateRefusal, settlementOf, stakeRefusal } from './indexer.service';
+import { acceptOfferRefusal, bidFlagsRefusal, bidRefOf, bondNeeded, disputeRefusal, placeBidRefusal, postJobRefusal, ESCALATION_WINDOW_MS, fundingRefusal, IndexerService, jobRefOf, MOCK_START_BALANCE, rateRefusal, settlementOf, stakeRefusal } from './indexer.service';
 
 const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
 const D = (n: number) => new Prisma.Decimal(n);
@@ -332,5 +332,108 @@ describe('IndexerService rate and stake (mock)', () => {
         repo.getStakeContext.mockResolvedValue({ seller: { id: 's', stake: D(10) }, settled: 3, disputes: 0 } as never);
         await expect(service.onMockCall({ signer: 'patchsmith.testnet', method: 'return_stake', args: {}, txHash: 'mock-rs-2' })).resolves.toEqual({ sellerId: 's', returned: 10 });
         expect(repo.returnStake.mock.calls[0]).toEqual(['patchsmith.testnet']);
+    });
+});
+
+describe('IndexerService (mock listing calls)', () => {
+    const BID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
+    const NOW = Date.UTC(2026, 10, 9);
+    const future = String(BigInt(NOW + 86_400_000) * 1_000_000n);
+    const past = String(BigInt(NOW - 1) * 1_000_000n);
+    let repo: jest.Mocked<IndexerRepository>;
+    let service: IndexerService;
+    const job = (over: object = {}) => ({ id: JOB, status: 'open', buyerId: 'buyer', buyer: { nearAccountId: 'lumen.testnet' }, ...over });
+    const bid = (over: object = {}) => ({ id: BID, jobId: JOB, price: D(36), seller: { nearAccountId: 'patchsmith.testnet', ownerId: 'seller' }, ...over });
+    const accept = (args: object = {}) => ({
+        signer: 'agents.lumen.testnet', method: 'accept_offer', txHash: 'mock-a-1',
+        args: { job_id: '1790000001', bid_id: '1790000002', price: '32000000', spec_hash: 'ab', holdout_hash: 'none', attempts: 3, deadline: future, ...args },
+    });
+
+    beforeEach(() => {
+        repo = {
+            recordTx: jest.fn().mockResolvedValue({ id: 't' }), getChainJob: jest.fn().mockResolvedValue(job()), getChainBid: jest.fn().mockResolvedValue(bid()),
+            isSeller: jest.fn().mockResolvedValue(true), countSuccessTxs: jest.fn().mockResolvedValue(0),
+        } as unknown as jest.Mocked<IndexerRepository>;
+        service = new IndexerService(repo);
+        service.now = () => NOW;
+    });
+
+    it('accepts post_job and refuses a past deadline or a missing spec hash', async () => {
+        await expect(service.onMockCall({ signer: 'agents.lumen.testnet', method: 'post_job', args: { category: 'rust', budget_hint: '0', spec_hash: 'ab', deadline: future }, txHash: 'mock-p-1' })).resolves.toBeNull();
+        expect(repo.recordTx.mock.calls[0]?.[0]).toMatchObject({ method: 'post_job', ok: true, jobKey: null });
+        await expect(service.onMockCall({ signer: 'agents.lumen.testnet', method: 'post_job', args: { category: 'rust', spec_hash: 'ab', deadline: past }, txHash: 'mock-p-2' })).rejects.toThrow('Contract refused post_job: Deadline must be in the future');
+        expect(postJobRefusal({ category: 'rust', spec_hash: '', deadline: future }, BigInt(NOW) * 1_000_000n)).toBe('Spec hash is required');
+        expect(postJobRefusal({ category: '', spec_hash: 'ab', deadline: future }, BigInt(NOW) * 1_000_000n)).toBe('Category is required');
+    });
+
+    it('accepts place_bid from a registered seller on an open job', async () => {
+        await expect(service.onMockCall({ signer: 'patchsmith.testnet', method: 'place_bid', args: { job_id: '1790000001', price: '36000000', days: 2 }, txHash: 'mock-b-1' })).resolves.toBeNull();
+        expect(repo.getChainJob.mock.calls[0]).toEqual([{ onchainId: 1790000001n }]);
+        expect(repo.isSeller.mock.calls[0]).toEqual(['patchsmith.testnet']);
+        expect(repo.countSuccessTxs.mock.calls).toEqual([[JOB, 'place_bid'], [JOB, 'place_bid', 'patchsmith.testnet']]);
+    });
+
+    it('refuses place_bid the way the contract does', async () => {
+        const call = { signer: 'patchsmith.testnet', args: { job_id: 'J-1', price: '36000000', days: 2 } };
+        const ctx = { registered: true, job: job() as never, bidsOnJob: 0, alreadyBid: false };
+        expect(placeBidRefusal(call, { ...ctx, registered: false })).toBe('Not a registered seller');
+        expect(placeBidRefusal({ ...call, args: { ...call.args, price: '0' } }, ctx)).toBe('Price must be positive');
+        expect(placeBidRefusal({ ...call, args: { ...call.args, days: 0 } }, ctx)).toBe('Days must be positive');
+        expect(placeBidRefusal(call, { ...ctx, job: null })).toBe('Job not found');
+        expect(placeBidRefusal(call, { ...ctx, job: job({ status: 'agreed' }) as never })).toBe('Job is not open for bids');
+        expect(placeBidRefusal({ ...call, signer: 'agents.lumen.testnet' }, ctx)).toBe('Cannot bid on your own job');
+        expect(placeBidRefusal(call, { ...ctx, bidsOnJob: 20 })).toBe('Too many bids on this job');
+        expect(placeBidRefusal(call, { ...ctx, alreadyBid: true })).toBe('Seller already bid on this job');
+        repo.countSuccessTxs.mockResolvedValue(1);
+        await expect(service.onMockCall({ signer: 'patchsmith.testnet', method: 'place_bid', args: { job_id: 'J-1', price: '36000000', days: 2 }, txHash: 'mock-b-2' })).rejects.toThrow('Contract refused place_bid: Seller already bid on this job');
+    });
+
+    it('accepts accept_offer at or below the bid price', async () => {
+        await expect(service.onMockCall(accept({ price: '36000000' }))).resolves.toBeNull();
+        expect(repo.getChainBid.mock.calls[0]).toEqual([{ onchainId: 1790000002n }]);
+        expect(repo.recordTx.mock.calls[0]?.[0]).toMatchObject({ method: 'accept_offer', ok: true, jobKey: { onchainId: 1790000001n } });
+    });
+
+    it('resolves a bid that has no on-chain id by its UUID', async () => {
+        await service.onMockCall(accept({ job_id: 'J-1042', bid_id: BID }));
+        expect(repo.getChainBid.mock.calls[0]).toEqual([{ id: BID }]);
+    });
+
+    it('refuses accept_offer the way the contract does', async () => {
+        const nowNs = BigInt(NOW) * 1_000_000n;
+        const ctx = { job: job({ status: 'agreed' }) as never, alreadyAccepted: false, bid: bid() as never };
+        expect(acceptOfferRefusal(accept(), ctx, nowNs)).toBeNull();
+        expect(acceptOfferRefusal(accept(), { ...ctx, job: null }, nowNs)).toBe('Job not found');
+        expect(acceptOfferRefusal({ ...accept(), signer: 'agents.mallory.testnet' }, ctx, nowNs)).toBe('Only the buyer can accept an offer');
+        expect(acceptOfferRefusal(accept(), { ...ctx, alreadyAccepted: true }, nowNs)).toBe('Job is not open');
+        expect(acceptOfferRefusal(accept(), { ...ctx, job: job({ status: 'funded' }) as never }, nowNs)).toBe('Job is not open');
+        expect(acceptOfferRefusal(accept(), { ...ctx, bid: null }, nowNs)).toBe('Bid not found');
+        expect(acceptOfferRefusal(accept(), { ...ctx, bid: bid({ jobId: 'other' }) as never }, nowNs)).toBe('Bid is not on this job');
+        expect(acceptOfferRefusal(accept(), { ...ctx, bid: bid({ seller: { nearAccountId: 'agents.lumen.testnet', ownerId: 'x' } }) as never }, nowNs)).toBe('Self-dealing: seller is the buyer');
+        expect(acceptOfferRefusal(accept(), { ...ctx, bid: bid({ seller: { nearAccountId: 'bot.testnet', ownerId: 'buyer' } }) as never }, nowNs)).toBe('Self-dealing: seller is the buyer');
+        expect(acceptOfferRefusal(accept({ price: '36000001' }), ctx, nowNs)).toBe('Price must be positive and not above the bid');
+        expect(acceptOfferRefusal(accept({ holdout_hash: '' }), ctx, nowNs)).toBe('Holdout hash is required');
+        expect(acceptOfferRefusal(accept({ attempts: 0 }), ctx, nowNs)).toBe('At least one attempt');
+        expect(acceptOfferRefusal(accept({ deadline: past }), ctx, nowNs)).toBe('Deadline must be in the future');
+        repo.getChainBid.mockResolvedValue(bid({ price: D(30) }) as never);
+        await expect(service.onMockCall(accept())).rejects.toThrow('Contract refused accept_offer: Price must be positive and not above the bid');
+        expect(repo.recordTx.mock.calls[0]?.[0]).toMatchObject({ ok: false, error: 'Price must be positive and not above the bid' });
+    });
+
+    it('takes set_bid_flags only from the fraud oracle', async () => {
+        const args = { job_id: '1790000001', bid_id: '1790000002', price_check_ok: true, fraud_score: 6, held: false };
+        await expect(service.onMockCall({ signer: 'oracle.agora-testnet.testnet', method: 'set_bid_flags', args, txHash: 'mock-f-1' })).resolves.toBeNull();
+        await expect(service.onMockCall({ signer: 'lumen.testnet', method: 'set_bid_flags', args, txHash: 'mock-f-2' })).rejects.toThrow('Only the fraud oracle can flag bids');
+        expect(bidFlagsRefusal({ signer: 'o', args: { ...args, fraud_score: 101 } }, 'o', bid() as never, JOB)).toBe('Fraud score is 0 to 100');
+        expect(bidFlagsRefusal({ signer: 'o', args }, 'o', null, JOB)).toBe('Bid not found');
+        expect(bidFlagsRefusal({ signer: 'o', args }, 'o', bid() as never, 'other')).toBe('Bid is not on this job');
+    });
+
+    it('records a real-mode call without any money effect', async () => {
+        await service.recordRealCall({ txHash: 'H', signer: 'agents.lumen.testnet', method: 'fund_job', args: { job_id: '17' }, ok: false, error: 'Paused', jobKey: { onchainId: 17n } });
+        expect(repo.recordTx.mock.calls[0]?.[0]).toEqual({ txHash: 'H', signer: 'agents.lumen.testnet', method: 'fund_job', args: { job_id: '17' }, ok: false, error: 'Paused', jobKey: { onchainId: 17n } });
+        expect(bidRefOf('17')).toEqual({ onchainId: 17n });
+        expect(bidRefOf(BID)).toEqual({ id: BID });
+        expect(bidRefOf('x')).toBeNull();
     });
 });

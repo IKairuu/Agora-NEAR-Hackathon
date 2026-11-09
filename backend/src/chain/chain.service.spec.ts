@@ -1,32 +1,80 @@
+jest.mock('../prisma', () => ({ prisma: {} }));
+
+const signAndSendTransaction = jest.fn();
+const callFunction = jest.fn();
+const accountCtor = jest.fn();
+const providerCtor = jest.fn();
+const fromSecretKey = jest.fn((key: string) => ({ key }));
+const functionCall = jest.fn((methodName: string, args: object, gas: bigint, deposit: bigint) => ({ functionCall: { methodName, args, gas, deposit } }));
+
+jest.mock('near-api-js', () => ({
+    Account: jest.fn().mockImplementation((...a: unknown[]) => {
+        accountCtor(...a);
+        return { signAndSendTransaction };
+    }),
+    JsonRpcProvider: jest.fn().mockImplementation((...a: unknown[]) => {
+        providerCtor(...a);
+        return { callFunction };
+    }),
+    KeyPairSigner: { fromSecretKey: (key: string) => fromSecretKey(key) },
+    actions: { functionCall: (m: string, a: object, g: bigint, d: bigint) => functionCall(m, a, g, d) },
+    teraToGas: (t: number) => BigInt(t) * 1_000_000_000_000n,
+}));
+
 import { Test, TestingModule } from '@nestjs/testing';
 import { IndexerService } from '../indexer/indexer.service';
-import { ChainService } from './chain.service';
+import { ChainRepository } from './chain.repository';
+import { ChainService, deadlineIn, decodeSuccessValue, panicMessage, parseOutcome } from './chain.service';
+
+const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64');
+const KEY = 'ed25519:3D4YudUahN1nawWogh8pAKSj92sUNMdbZGjn7kERKzYoTy8tnFQuwoGUC51DowKqorvkr2pytJSnwuSbsNVfqygr';
+
+const build = async (getVaultSecret: jest.Mock = jest.fn().mockResolvedValue(null)) => {
+    const onMockCall = jest.fn().mockResolvedValue(null);
+    const recordRealCall = jest.fn().mockResolvedValue({ id: 't' });
+    const module: TestingModule = await Test.createTestingModule({
+        providers: [
+            ChainService,
+            { provide: IndexerService, useValue: { onMockCall, recordRealCall } },
+            { provide: ChainRepository, useValue: { getVaultSecret } },
+        ],
+    }).compile();
+    return { service: module.get<ChainService>(ChainService), onMockCall, recordRealCall, getVaultSecret };
+};
 
 describe('ChainService (mock mode)', () => {
     let service: ChainService;
     let onMockCall: jest.Mock;
+    const env = { ...process.env };
 
     beforeEach(async () => {
         process.env['AGORA_CHAIN_MODE'] = 'mock';
-        onMockCall = jest.fn().mockResolvedValue(null);
-        const module: TestingModule = await Test.createTestingModule({
-            providers: [ChainService, { provide: IndexerService, useValue: { onMockCall } }],
-        }).compile();
-        service = module.get<ChainService>(ChainService);
+        ({ service, onMockCall } = await build());
     });
+
+    afterEach(() => { process.env = { ...env }; });
 
     it('returns a mock tx hash and explorer link for a call', async () => {
         const res = await service.callAs('transaction_agent', 'agents.lumen.testnet', 'fund_job', { job_id: '1' });
         expect(res.tx_hash).toMatch(/^mock-fund_job-\d+$/);
+        expect(res.ok).toBe(true);
         expect(res.explorer_url).toBe(`https://testnet.nearblocks.io/txns/${res.tx_hash}`);
         expect(onMockCall).toHaveBeenCalledWith({ signer: 'agents.lumen.testnet', method: 'fund_job', args: { job_id: '1' }, txHash: res.tx_hash });
     });
 
-    it('returns a new id for post_job', async () => {
+    it('returns new ids for post_job and place_bid', async () => {
         const res = await service.callAs('transaction_agent', 'agents.lumen.testnet', 'post_job', { category: 'rust' });
-        const next = await service.callAs('transaction_agent', 'agents.lumen.testnet', 'post_job', { category: 'rust' });
+        const bid = await service.callAs('owner', 'patchsmith.testnet', 'place_bid', { job_id: res.result });
+        const accept = await service.callAs('transaction_agent', 'agents.lumen.testnet', 'accept_offer', { job_id: res.result });
         expect(Number(res.result)).toBeGreaterThan(1_700_000_000);
-        expect(Number(next.result)).toBe(Number(res.result) + 1);
+        expect(Number(bid.result)).toBe(Number(res.result) + 1);
+        expect(accept.result).toBeNull();
+        expect(onMockCall.mock.calls.map((c: [{ method: string }]) => c[0].method)).toEqual(['post_job', 'place_bid', 'accept_offer']);
+    });
+
+    it('passes a mock refusal through', async () => {
+        onMockCall.mockRejectedValueOnce(new Error('Contract refused accept_offer: Self-dealing: seller is the buyer'));
+        await expect(service.callAs('transaction_agent', 'agents.lumen.testnet', 'accept_offer', { job_id: '1' })).rejects.toThrow('Self-dealing');
     });
 
     it('returns the mandate defaults from view', async () => {
@@ -50,5 +98,149 @@ describe('ChainService (mock mode)', () => {
         const decoded = JSON.parse(Buffer.from(tx.unsigned_tx_base64, 'base64').toString());
         expect(decoded.method).toBe('withdraw');
         expect(decoded.receiver_id).toBe('agora-market.agora-testnet.testnet');
+    });
+
+    it('never touches near-api-js in mock mode', async () => {
+        await service.callAs('platform', 'agora-testnet.testnet', 'register_seller', { account_id: 'x.testnet' }, '1');
+        expect(signAndSendTransaction.mock.calls).toHaveLength(0);
+        expect(accountCtor.mock.calls).toHaveLength(0);
+    });
+});
+
+describe('ChainService (real mode)', () => {
+    const env = { ...process.env };
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        process.env['AGORA_CHAIN_MODE'] = 'real';
+        process.env['NEAR_NETWORK'] = 'testnet';
+        process.env['AGORA_CONTRACT_ID'] = 'agora-market.agora-testnet.testnet';
+        process.env['AGORA_USDC_CONTRACT_ID'] = 'usdc.fakes.testnet';
+        delete process.env['NEAR_RPC_URL'];
+        delete process.env['AGORA_PLATFORM_PRIVATE_KEY'];
+    });
+
+    afterEach(() => { process.env = { ...env }; });
+
+    const ok = (value: unknown, hash = 'HASH1') => ({
+        status: { SuccessValue: b64(value) },
+        transaction: { hash },
+        transaction_outcome: { id: hash },
+        receipts_outcome: [{ outcome: { status: { SuccessValue: b64(value) } } }],
+    });
+
+    it('signs post_job as the buyer agent with the key from Vault and decodes the job id', async () => {
+        const { service, getVaultSecret, recordRealCall } = await build(jest.fn().mockResolvedValue(KEY));
+        signAndSendTransaction.mockResolvedValue(ok('17'));
+        const res = await service.callAs('transaction_agent', 'agents.lumen.testnet', 'post_job', { category: 'rust', budget_hint: '40000000', spec_hash: 'ab', deadline: '1' });
+        expect(res).toEqual({ tx_hash: 'HASH1', explorer_url: 'https://testnet.nearblocks.io/txns/HASH1', ok: true, result: '17' });
+        expect(getVaultSecret.mock.calls[0]).toEqual(['near_key:agents.lumen.testnet']);
+        expect(fromSecretKey.mock.calls[0]).toEqual([KEY]);
+        expect(accountCtor.mock.calls[0]![0]).toBe('agents.lumen.testnet');
+        expect(providerCtor.mock.calls[0]).toEqual([{ url: 'https://rpc.testnet.near.org' }]);
+        expect(functionCall.mock.calls[0]).toEqual(['post_job', { category: 'rust', budget_hint: '40000000', spec_hash: 'ab', deadline: '1' }, 100_000_000_000_000n, 0n]);
+        const sent = signAndSendTransaction.mock.calls[0]![0];
+        expect(sent.receiverId).toBe('agora-market.agora-testnet.testnet');
+        expect(sent.throwOnFailure).toBe(false);
+        expect(recordRealCall.mock.calls[0]![0]).toMatchObject({ txHash: 'HASH1', signer: 'agents.lumen.testnet', method: 'post_job', ok: true, error: null, jobKey: null });
+    });
+
+    it('sends ft_transfer_call to the USDC contract with 1 yocto and 300 Tgas', async () => {
+        const { service } = await build(jest.fn().mockResolvedValue(KEY));
+        signAndSendTransaction.mockResolvedValue(ok('0'));
+        await service.callAs('owner', 'patchsmith.testnet', 'ft_transfer_call', { receiver_id: 'agora-market.agora-testnet.testnet', amount: '10000000', msg: 'starter_stake' }, '1');
+        expect(signAndSendTransaction.mock.calls[0]![0].receiverId).toBe('usdc.fakes.testnet');
+        expect(functionCall.mock.calls[0]![2]).toBe(300_000_000_000_000n);
+        expect(functionCall.mock.calls[0]![3]).toBe(1n);
+    });
+
+    it('uses the platform key from the environment and 300 Tgas for withdraw', async () => {
+        process.env['AGORA_PLATFORM_PRIVATE_KEY'] = KEY;
+        process.env['NEAR_RPC_URL'] = 'https://rpc.example.test';
+        const { service, getVaultSecret } = await build();
+        signAndSendTransaction.mockResolvedValue(ok(null));
+        await service.callAs('platform', 'agora-testnet.testnet', 'register_seller', { account_id: 'x.testnet' }, '1');
+        expect(getVaultSecret.mock.calls).toHaveLength(0);
+        expect(providerCtor.mock.calls[0]).toEqual([{ url: 'https://rpc.example.test' }]);
+        expect(functionCall.mock.calls[0]![3]).toBe(1n);
+        const { service: owner } = await build(jest.fn().mockResolvedValue(KEY));
+        await owner.callAs('owner', 'lumen.testnet', 'withdraw', { amount: '1' }, '1');
+        expect(functionCall.mock.calls[1]![2]).toBe(300_000_000_000_000n);
+    });
+
+    it('refuses with a clear 400 when there is no signing key', async () => {
+        const { service } = await build();
+        await expect(service.callAs('owner', 'lumen.testnet', 'withdraw', { amount: '1' }, '1')).rejects.toThrow('No signing key for lumen.testnet');
+        expect(signAndSendTransaction.mock.calls).toHaveLength(0);
+    });
+
+    it('refuses a Vault secret that is not a NEAR key', async () => {
+        const { service } = await build(jest.fn().mockResolvedValue('not-a-key'));
+        await expect(service.callAs('owner', 'lumen.testnet', 'pause', {})).rejects.toThrow('is not a NEAR key');
+    });
+
+    it('turns a contract panic into Contract refused and records it as rejected', async () => {
+        const { service, recordRealCall } = await build(jest.fn().mockResolvedValue(KEY));
+        signAndSendTransaction.mockResolvedValue({
+            status: { Failure: { ActionError: { index: 0, kind: { FunctionCallError: { ExecutionError: 'Smart contract panicked: Job is not accepted' } } } } },
+            transaction: { hash: 'HASH2' }, transaction_outcome: { id: 'HASH2' }, receipts_outcome: [],
+        });
+        await expect(service.callAs('transaction_agent', 'agents.lumen.testnet', 'fund_job', { job_id: '17' })).rejects.toThrow('Contract refused fund_job: Job is not accepted');
+        expect(recordRealCall.mock.calls[0]![0]).toMatchObject({ txHash: 'HASH2', ok: false, error: 'Job is not accepted', jobKey: { onchainId: 17n } });
+    });
+
+    it('reports a failed receipt inside a cross-contract call', async () => {
+        const { service } = await build(jest.fn().mockResolvedValue(KEY));
+        signAndSendTransaction.mockResolvedValue({
+            status: { SuccessValue: b64('0') }, transaction: { hash: 'HASH3' }, transaction_outcome: { id: 'HASH3' },
+            receipts_outcome: [{ outcome: { status: { SuccessValue: '' } } }, { outcome: { status: { Failure: { error_message: 'Smart contract panicked: The re-check already agrees with you', error_type: 'ActionError' } } } }],
+        });
+        await expect(service.callAs('owner', 'lumen.testnet', 'ft_transfer_call', { msg: 'dispute_bond:17', amount: '1' }, '1')).rejects.toThrow('Contract refused ft_transfer_call: The re-check already agrees with you');
+    });
+
+    it('wraps a transport error', async () => {
+        const { service } = await build(jest.fn().mockResolvedValue(KEY));
+        signAndSendTransaction.mockRejectedValue(new Error('Access key not found'));
+        await expect(service.callAs('owner', 'lumen.testnet', 'pause', {})).rejects.toThrow('Could not send pause: Access key not found');
+    });
+
+    it('calls the contract view through the RPC provider', async () => {
+        const { service } = await build();
+        callFunction.mockResolvedValue({ free: '5', escrowed: '0' });
+        await expect(service.view('get_balance', { account_id: 'lumen.testnet' })).resolves.toEqual({ free: '5', escrowed: '0' });
+        expect(callFunction.mock.calls[0]).toEqual([{ contractId: 'agora-market.agora-testnet.testnet', method: 'get_balance', args: { account_id: 'lumen.testnet' } }]);
+    });
+
+    it('refuses to create accounts', async () => {
+        const { service } = await build();
+        await expect(service.createAccount('abc')).rejects.toThrow('not built yet');
+    });
+
+    it('needs the contract id', async () => {
+        delete process.env['AGORA_CONTRACT_ID'];
+        const { service } = await build(jest.fn().mockResolvedValue(KEY));
+        await expect(service.callAs('owner', 'lumen.testnet', 'pause', {})).rejects.toThrow('Set AGORA_CONTRACT_ID');
+    });
+});
+
+describe('outcome helpers', () => {
+    it('decodes success values', () => {
+        expect(decodeSuccessValue(b64('17'))).toBe('17');
+        expect(decodeSuccessValue(Buffer.from('plain').toString('base64'))).toBe('plain');
+        expect(decodeSuccessValue('')).toBeNull();
+    });
+
+    it('finds the panic message in any failure shape', () => {
+        expect(panicMessage({ ActionError: { kind: { FunctionCallError: { ExecutionError: 'Smart contract panicked: Paused' } } } })).toBe('Paused');
+        expect(panicMessage({ error_message: 'Over daily cap', error_type: 'x' })).toBe('Over daily cap');
+        expect(panicMessage({ InvalidTxError: 'NotEnoughBalance' })).toContain('NotEnoughBalance');
+    });
+
+    it('parses a successful outcome', () => {
+        expect(parseOutcome({ status: { SuccessValue: b64('9') }, transaction_outcome: { id: 'H' } })).toEqual({ txHash: 'H', ok: true, result: '9', error: null });
+    });
+
+    it('builds deadlines in nanoseconds', () => {
+        expect(deadlineIn(1, 1_000)).toBe(String(1_000n * 1_000_000n + 86_400_000_000_000n));
     });
 });

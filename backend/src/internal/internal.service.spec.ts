@@ -1,8 +1,9 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
+import { ChainService } from '../chain/chain.service';
 import { IndexerService } from '../indexer/indexer.service';
 import { InternalRepository } from './internal.repository';
-import { decideBid, InternalService, judgeRun } from './internal.service';
+import { bidFlagsOf, decideBid, InternalService, judgeRun } from './internal.service';
 
 const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
 const BID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
@@ -11,6 +12,7 @@ describe('InternalService', () => {
     let repo: jest.Mocked<InternalRepository>;
     let service: InternalService;
     let indexer: jest.Mocked<IndexerService>;
+    let chain: jest.Mocked<ChainService>;
 
     beforeEach(() => {
         repo = {
@@ -18,17 +20,38 @@ describe('InternalService', () => {
             getBid: jest.fn(), getReviewRun: jest.fn(), saveRunResult: jest.fn().mockResolvedValue(1), getVoteTally: jest.fn(), settleDelivery: jest.fn().mockResolvedValue(1), recordRecheck: jest.fn().mockResolvedValue(1), setBidStatus: jest.fn().mockResolvedValue(1), createNotifications: jest.fn(async (n: unknown[]) => n.length),
         } as unknown as jest.Mocked<InternalRepository>;
         indexer = { onMockRelease: jest.fn().mockResolvedValue({ jobId: JOB, payout: 31.36, fee: 0.64 }) } as unknown as jest.Mocked<IndexerService>;
-        service = new InternalService(repo, indexer);
+        chain = { callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-set_bid_flags-1', explorer_url: '', ok: true, result: null }) } as unknown as jest.Mocked<ChainService>;
+        service = new InternalService(repo, indexer, chain);
     });
 
-    const bid = (extra: object) => ({ id: BID, status: 'pending_check', price: 36, priceCheck: 'cleared', fraudScore: 6, holdReason: null, job: { id: JOB, ref: 'J-1042', buyerId: 'buyer' }, seller: { displayName: 'patchsmith', ownerId: 'seller' }, ...extra });
+    const bid = (extra: object) => ({ id: BID, onchainId: null, status: 'pending_check', price: 36, priceCheck: 'cleared', fraudScore: 6, holdReason: null, job: { id: JOB, ref: 'J-1042', onchainId: null, buyerId: 'buyer' }, seller: { displayName: 'patchsmith', ownerId: 'seller' }, ...extra });
 
     it('makes a checked offer live and tells the buyer', async () => {
         repo.getBid.mockResolvedValue(bid({}) as never);
         const res = await service.agentNotify({ role: 'fraud_lure', ok: true, jobId: JOB, result: { subjectType: 'bid', subjectId: BID, score: 6 } });
         expect(repo.setBidStatus.mock.calls[0]).toEqual([BID, 'pending_check', 'live', null]);
         expect(repo.createNotifications.mock.calls[0]![0]).toEqual([expect.objectContaining({ userId: 'buyer', title: 'New offer on J-1042', body: 'patchsmith offered 36.00 USDC' })]);
-        expect(res.actions).toEqual(['bid live', 'notified 1']);
+        expect(res.actions).toEqual(['bid live', 'bid flags on chain', 'notified 1']);
+        expect(chain.callAs.mock.calls[0]).toEqual(['fraud_oracle', 'oracle.agora-testnet.testnet', 'set_bid_flags', { job_id: 'J-1042', bid_id: BID, price_check_ok: true, fraud_score: 6, held: false }]);
+    });
+
+    it('flags with on-chain ids and keeps going when set_bid_flags fails', async () => {
+        repo.getBid.mockResolvedValue(bid({ onchainId: 9n, priceCheck: 'held', job: { id: JOB, ref: 'J-1042', onchainId: 7n, buyerId: 'buyer' } }) as never);
+        chain.callAs.mockRejectedValue(new Error('No signing key for oracle.agora-testnet.testnet'));
+        const res = await service.agentNotify({ role: 'price_check', ok: true, jobId: JOB, result: { bidId: BID } });
+        expect(chain.callAs.mock.calls[0]![3]).toEqual({ job_id: '7', bid_id: '9', price_check_ok: false, fraud_score: 6, held: true });
+        expect(res.actions).toEqual(['bid held', 'bid flags not on chain', 'notified 2']);
+    });
+
+    it('does not flag a bid whose state did not change', async () => {
+        repo.getBid.mockResolvedValue(bid({ status: 'live' }) as never);
+        await service.agentNotify({ role: 'fraud_lure', ok: true, jobId: JOB, result: { subjectType: 'bid', subjectId: BID } });
+        expect(chain.callAs.mock.calls).toHaveLength(0);
+    });
+
+    it('maps checks to contract flags', () => {
+        expect(bidFlagsOf({ priceCheck: 'unverified', fraudScore: null })).toEqual({ price_check_ok: true, fraud_score: 0, held: false });
+        expect(bidFlagsOf({ priceCheck: 'held', fraudScore: 140 })).toEqual({ price_check_ok: false, fraud_score: 100, held: true });
     });
 
     it('holds a lure and tells both sides', async () => {
