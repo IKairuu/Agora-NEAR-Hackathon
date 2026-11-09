@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'rea
 import { DONE_JOBS, gigBy, ME, OTHER_JOBS, ROLES, usd, VIA } from '../data/sample';
 import { act, orderAct, TOUR } from '../store/actions';
 import { closeModal, free, hPrice, setState, useApp, useToasts } from '../store/store';
+import { authConfigured } from '../lib/supabase';
 import { GoogleIcon, Icon, Tile } from './icons';
 import { Check, T } from './parts';
 
@@ -27,14 +28,21 @@ const Cancel = ({ label = 'Cancel' }: { label?: string }) => <button className="
 function SignIn() {
   const [mail, setMail] = useState('');
   const submit = (e: FormEvent) => { e.preventDefault(); act.signMail(mail.trim()); };
+  const [busy, setBusy] = useState<'' | 'google' | 'github'>('');
+  /* Real sign-in leaves the page for the provider; if it fails to start, the button comes back. */
+  const oauth = (via: 'google' | 'github') => {
+    if (!authConfigured) { act.signVia(via); return; }
+    setBusy(via);
+    void act.oauth(via).finally(() => setBusy(''));
+  };
   return (
     <Frame cls="auth-m">
       <div className="auth">
         <Tile size="lg" />
         <h2>Sign in</h2>
         <p className="muted">New here? Signing in creates your account. AGORA makes a NEAR account for you: no password, no seed phrase, no gas.</p>
-        <button className="btn wide" onClick={() => act.signVia('google')}><GoogleIcon />Continue with Google</button>
-        <button className="btn wide" onClick={() => act.signVia('github')}><Icon name="github" />Continue with GitHub</button>
+        <button className="btn wide" disabled={!!busy} aria-busy={busy === 'google'} onClick={() => oauth('google')}><GoogleIcon />{busy === 'google' ? 'Opening Google…' : 'Continue with Google'}</button>
+        <button className="btn wide" disabled={!!busy} aria-busy={busy === 'github'} onClick={() => oauth('github')}><Icon name="github" />{busy === 'github' ? 'Opening GitHub…' : 'Continue with GitHub'}</button>
         <button className="btn wide" onClick={act.passkey}><Icon name="lock" />Continue with a passkey</button>
         <div className="or"><span>or</span></div>
         <form className="mailrow" onSubmit={submit}>
@@ -44,7 +52,7 @@ function SignIn() {
         </form>
         <div className="or"><span>Already use NEAR?</span></div>
         <button className="btn wide ghost-line" onClick={() => setState({ modal: { kind: 'wallets' } })}><Icon name="wallet" />Connect a NEAR wallet</button>
-        <p className="muted xsmall">Prototype on testnet: sign-in is simulated. By continuing you agree to the terms.</p>
+        <p className="muted xsmall">{authConfigured ? "Google and GitHub open their own sign-in page. AGORA never sees your password." : "Prototype on testnet: sign-in is simulated."} By continuing you agree to the terms.</p>
       </div>
     </Frame>
   );

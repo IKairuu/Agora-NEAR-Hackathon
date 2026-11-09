@@ -3,6 +3,7 @@ import { LOGO_PATH } from './logoPath';
 /** Icon paths from the prototype (24x24, stroke 1.7). */
 const I = {
   explore: 'M11 19a8 8 0 1 0 0-16 8 8 0 0 0 0 16Zm10 2-4.35-4.35',
+  sliders: 'M4 6h9M17 6h3M4 12h3M11 12h9M4 18h11M19 18h1M15 4v4M9 10v4M17 16v4',
   home: 'M3 11 12 4l9 7v9a1 1 0 0 1-1 1h-5v-6H9v6H4a1 1 0 0 1-1-1z',
   post: 'M12 5v14M5 12h14',
   job: 'M4 7h16v12H4zM9 7V5h6v2',

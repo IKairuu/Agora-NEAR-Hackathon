@@ -1,6 +1,9 @@
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
+import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
+import { authConfigured, supabase } from '../lib/supabase';
+import { goLive, isLive, leaveLive, liveAddFunds, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -56,6 +59,7 @@ const threadLog = (k: string, seed?: [ChatMsg['from'], string][]): ChatMsg[] =>
   getState().tLog[k] ?? (seed ?? T_MSGS[k] ?? []).map(([from, text]) => ({ from, text }));
 export function threads(): Thread[] {
   const s = getState();
+  if (s.live) return s.liveThreads;
   const out: Thread[] = [];
   if (s.stage >= 5 || (s.stage >= 4 && s.offerSt)) {
     const b = hb(s); const log = s.stage >= 5 ? chatLog(b.key) : []; const last = log[log.length - 1];
@@ -79,6 +83,7 @@ export function threads(): Thread[] {
 export function sendThread(raw: string) {
   const v = raw.trim(); const k = getState().thread;
   if (!v || !k) return;
+  if (isLive()) { void liveSendThread(k, v); return; }
   const cur = threads().find((t) => t.k === k); if (!cur) return;
   const log: ChatMsg[] = [...cur.msgs, { from: 'me', text: v }];
   if (OFF_PLATFORM.test(v)) log.push({ from: 'sys', text: 'The fraud and lure agent flagged this message. Payment outside escrow is not protected.' });
@@ -90,13 +95,15 @@ export function sendThread(raw: string) {
 const patchOrder = (id: string, p: Partial<Order>) => setState((s) => ({ orders: s.orders.map((o) => (o.id === id ? { ...o, ...p } : o)) }));
 export const orderAct = {
   offer: (id: string) => openModal('offer', { id }),
-  decline: (id: string) => { setState((s) => ({ orders: s.orders.filter((o) => o.id !== id) })); toast('Request declined. The buyer can pick another seller.'); },
+  decline: (id: string) => { if (isLive()) { void liveOrderDecline(id); return; } setState((s) => ({ orders: s.orders.filter((o) => o.id !== id) })); toast('Request declined. The buyer can pick another seller.'); },
   accept: (id: string) => {
+    if (isLive()) { void liveOrderAccept(id); return; }
     const o = getState().orders.find((x) => x.id === id)!;
     patchOrder(id, { st: 2, note: 'Buyer accepted. Tests locked, ' + o.price + ' USDC moved into Protected payment.' });
     toast(id + ' accepted. Payment protected, you can start.');
   },
   deliver: (id: string) => {
+    if (isLive()) { void liveDeliver(id); return; }
     const o = getState().orders.find((x) => x.id === id)!;
     patchOrder(id, { st: 3, note: 'Delivered commit a41c9e2. Reviewers are running the locked tests.' });
     toast('Delivery submitted. 3 reviewers are running the locked tests.');
@@ -107,6 +114,7 @@ export const orderAct = {
   },
   /** The Send an offer form. */
   sendOffer: (id: string, priceText: string, days: string) => {
+    if (isLive()) { void liveSendOffer(id, priceText, days).then((ok) => { if (ok) setState({ modal: null, oTab: 'active' }); }); return; }
     const o = getState().orders.find((x) => x.id === id); if (!o) return;
     const p = (priceText.match(/[\d.]+/) || ['42'])[0];
     const price = (+p).toFixed(2);
@@ -137,6 +145,7 @@ export const TOUR: TourStep[] = [
   { r: 'wallet', st: 8, t: 'A wallet that stays simple', p: 'One balance, four actions. Buyers can add funds from other chains through NEAR Intents, and agents can never withdraw.', d: <>That's the full loop. Press <b>Finish</b>.</> },
 ];
 export function tourGo(i: number) {
+  if (isLive()) { leaveLive(); toast('The demo tour uses sample data. Sign in again afterwards to see your own jobs.', 'hold'); }
   const s = TOUR[i];
   setState((st) => ({ tour: i, stage: s.st, attack: null, voting: false, role: s.st >= 1 && !st.role ? 'hire' : st.role, tourMin: false, modal: null }));
   s.act?.();
@@ -150,10 +159,23 @@ export const tourStep = (from: number, to: number) => { if (getState().tour === 
 export function hire(key: string) {
   const s = getState();
   if (s.stage < 3) return;
+  if (s.live) { void liveHire(key).then((ok) => { if (ok) go('chat'); }); return; }
   setState({ preNeg: s.stage === 3 ? true : s.preNeg, stage: Math.max(s.stage, 4), hire: key, offerSt: 'wait', thread: 'demo', inboxF: 'buy' });
   go('chat');
   toast(`Your agent sent the hire offer to ${sellerBy(key)!.name}.`);
   tourStep(4, 5);
+}
+
+/** Saves an onboarding answer for the signed-in account. Does nothing in the simulated demo. */
+function remember(patch: Onboarding) {
+  const u = getState().user; if (!u) return;
+  const onboarding = { ...u.onboarding, ...patch };
+  setState({ user: { ...u, onboarding } });
+  void saveOnboarding(onboarding);
+}
+/** Sends the user to the home that fits what brings them here. */
+function goRole(r: 'hire' | 'work') {
+  if (r === 'hire') go('ask'); else { setState({ sellStep: 0 }); go(getState().seller ? 'seller' : 'sell'); }
 }
 
 /* ---------------- actions, the prototype's ACT table ---------------- */
@@ -164,18 +186,35 @@ export const act = {
   passkey: () => { setState({ signVia: 'passkey' }); toast('Passkey confirmed with your device. Nothing to remember.'); act.walletstep(); },
   walletstep: () => openModal('walletstep'),
   walletpick: () => openModal('walletpick'),
-  walletlinked: () => { setState({ walletLinked: true }); toast('Wallet linked. It can fund jobs; your agents still cannot withdraw.'); act.signin2(); },
+  walletlinked: () => { setState({ walletLinked: true }); remember({ wallet: true }); toast('Wallet linked. It can fund jobs; your agents still cannot withdraw.'); act.signin2(); },
   signsell: () => {
     if (getState().stage >= 1) { setState({ sellStep: 0 }); go('sell'); return; }
     setState({ after: 'sell', rolePick: 'work' }); openModal('signin');
   },
   /** Google, GitHub: account is ready, then offer to connect a wallet. Wallet: straight in. */
-  signVia: (via: string) => { setState({ signVia: via }); if (via === 'wallet') act.signin2(); else act.walletstep(); },
+  signVia: (via: string) => {
+    if ((via === 'google' || via === 'github') && authConfigured) { void act.oauth(via); return; }
+    setState({ signVia: via }); if (via === 'wallet') act.signin2(); else act.walletstep();
+  },
+  /** Real Google or GitHub sign-in: remember where the user was, then leave for the provider's own page. */
+  oauth: async (via: OAuthVia) => {
+    const s = getState();
+    savePending({ via, after: s.after, rolePick: s.rolePick, tour: s.tour, draft: s.draft });
+    const err = await startOAuth(via);
+    if (err) { takePending(); toast(`Could not reach ${via === 'google' ? 'Google' : 'GitHub'}: ${err}`, 'block'); }
+  },
   signin2: () => {
     setState((s) => ({ stage: Math.max(s.stage, 1) }));
-    toast('Signed in as lumen.testnet. Agent sub-account created.');
+    const u = getState().user;
+    toast(!u ? 'Signed in as lumen.testnet. Agent sub-account created.' : u.isNew ? `Signed in as ${u.email || u.name}. Agent sub-account created.` : `Welcome back, ${u.name}.`);
     const s = getState();
     if (s.tour === 0) { closeModal(); tourGo(1); return; }
+    const known = u?.onboarding.role;
+    if (known) {
+      setState({ role: known, after: null, modal: null });
+      goRole(s.after === 'ask' ? 'hire' : s.after === 'sell' ? 'work' : known);
+      return;
+    }
     setState({ rolePick: s.after === 'sell' ? 'work' : s.after === 'ask' ? 'hire' : s.role });
     openModal('role');
   },
@@ -183,12 +222,15 @@ export const act = {
   rolego: () => {
     const r = getState().rolePick; if (!r) return;
     setState({ role: r, after: null, modal: null });
-    if (r === 'hire') go('ask'); else { setState({ sellStep: 0 }); go(getState().seller ? 'seller' : 'sell'); }
+    remember({ role: r });
+    if (isLive()) void liveRole(r);
+    goRole(r);
   },
   roleskip: () => { setState((s) => ({ role: s.role || 'hire', modal: null })); go('ask'); },
-  signout: () => { setState({ stage: 0, role: null, tour: -1 }); go('home'); toast('Signed out.'); },
+  signout: () => { leaveLive(); signOutRemote(); setState({ stage: 0, role: null, tour: -1, user: null, signVia: '' }); go('home'); toast('Signed out.'); },
   /** Approve and lock the tests: offers then arrive one by one, lowest price first. */
   lockspec: () => {
+    if (isLive()) { void liveLockSpec().then(() => tourStep(2, 3)); acScroll(); return; }
     const id = getState().streamId + 1;
     setState((s) => ({ stage: Math.max(s.stage, 2), bidsShown: 0, preNeg: false, streamId: id }));
     acScroll();
@@ -209,7 +251,7 @@ export const act = {
     setTimeout(tick, 700);
   },
   editspec: () => { const t = document.getElementById('ask-in') as HTMLTextAreaElement | null; if (t) { t.placeholder = 'Tell the spec writer what to change'; t.focus(); } },
-  postpublic: () => toast('J-1042 is now also on Open jobs. New offers join this list, lowest first.'),
+  postpublic: () => isLive() ? void livePostPublic() : toast('J-1042 is now also on Open jobs. New offers join this list, lowest first.'),
   postpublic2: (xid: string) => {
     const s = getState(); const x = s.extra.find((e) => e.id === xid); if (!x) return;
     setState({
@@ -218,32 +260,34 @@ export const act = {
     });
     acScroll(); toast(`${x.id} posted on Open jobs.`);
   },
-  keepwait: () => toast('Your agent keeps the job private and checks again in 30 minutes.'),
+  keepwait: () => isLive() ? void liveKeepWait() : toast('Your agent keeps the job private and checks again in 30 minutes.'),
   heroask: () => { const s = getState(); setState({ draft: s.q || '' }); if (s.stage >= 1) { go('ask'); return; } setState({ after: 'ask' }); act.signin(); },
   selleraccept: () => {
+    if (isLive()) { toast('The seller accepts from their own Orders page. This screen updates when they answer.', 'hold'); return; }
     setState((s) => ({ offerSt: 'accepted', stage: Math.max(s.stage, 5) })); scrollMsgs();
     toast(<><b>{hb(getState()).name} accepted.</b> {hAmt()} USDC is now in Protected payment.</>);
     tourStep(5, 6);
   },
   sellerdecline: () => {
+    if (isLive()) { toast('The seller answers from their own Orders page. This screen updates when they do.', 'hold'); return; }
     const s = getState();
     setState({ declined: s.declined.includes(s.hire) ? s.declined : [...s.declined, s.hire], offerSt: 'declined' }); scrollMsgs();
     toast(`${hb(s).name} declined. Nothing was locked.`, 'hold');
   },
-  attachrepo: () => toast('In the prototype the repository is github.com/lumen-labs/payroll-vault at a41c9e2.'),
-  bids: () => { setState((s) => ({ stage: Math.max(s.stage, 3), jobTab: 'bids' })); toast('2 offers held by the fraud and lure agent.', 'hold'); },
-  negotiate: () => { setState((s) => ({ stage: Math.max(s.stage, 4), jobTab: 'neg' })); toast('Your agent negotiated patchsmith down to 32.00 USDC. Choose any offer to hire.'); },
+  attachrepo: () => isLive() ? void liveAttachRepo() : toast('In the prototype the repository is github.com/lumen-labs/payroll-vault at a41c9e2.'),
+  bids: () => { if (isLive()) { setState({ jobTab: 'bids' }); return; } setState((s) => ({ stage: Math.max(s.stage, 3), jobTab: 'bids' })); toast('2 offers held by the fraud and lure agent.', 'hold'); },
+  negotiate: () => { if (isLive()) { setState({ jobTab: 'neg' }); toast('Pick an offer and your buyer agent sends the counter-offer in its chat.', 'hold'); return; } setState((s) => ({ stage: Math.max(s.stage, 4), jobTab: 'neg' })); toast('Your agent negotiated patchsmith down to 32.00 USDC. Choose any offer to hire.'); },
   fund: () => hire(getState().hire || 'patchsmith'),
   send: () => openModal('send'),
   receive: () => openModal('receive'),
-  addfunds: () => openModal('addfunds'),
+  addfunds: () => { if (isLive()) { void liveAddFunds(); return; } openModal('addfunds'); },
   dispute: () => openModal('dispute'),
   unpause: () => openModal('unpause'),
   overcap: () => toast(<><b>Rejected by contract.</b> fund_job 400.00 USDC is over your per-job cap of 50.00. 0 USDC moved.</>, 'block', 5200),
   wrongcat: () => toast(<><b>Rejected by contract.</b> Category "Design" is not on your allowed list.</>, 'block'),
   withdraw: () => toast(<><b>Rejected by NEAR.</b> The agent key has no permission to call withdraw.</>, 'block'),
   deletekey: () => toast('Deleting a key needs your full-access key. You would confirm with Google sign-in here.', 'hold'),
-  withdrawme: () => toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
+  withdrawme: () => isLive() ? void liveWithdraw() : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
   send2: () => { closeModal(); toast('In the prototype nothing is sent. On testnet this is a full-access key transfer.', 'hold'); },
   copyacct: () => { try { void navigator.clipboard.writeText(ME.acct); } catch { /* ignore */ } toast('Copied lumen.testnet.'); },
   intents: () => toast('Quote refreshed: 100.00 USDC on Base becomes 99.71 USDC on NEAR.'),
@@ -265,15 +309,18 @@ export const act = {
   },
   placebid: () => {
     if (!getState().seller) { toast('Set up your seller profile first. It takes about 5 minutes.', 'hold'); go('sell'); return; }
+    if (isLive()) { void livePlaceBid(); return; }
     toast('Bid sent. Your bidding agent priced it inside your rules: 3 attempts, delivery in 3 days.');
   },
   rate: () => {
     const n = getState().stars;
     if (!n) { toast('Pick 1 to 5 stars first.', 'hold'); return; }
+    if (isLive()) { void liveRate(n); return; }
     toast(`${n} star${n > 1 ? 's' : ''} saved. The rating is tied to settled job J-1042.`);
   },
   /** The evidence bundle: spec, commits, test logs and votes in one JSON file. */
   bundle: () => {
+    if (isLive()) { void liveBundle(); return; }
     const s = getState(); const H = hb(s);
     const data = {
       job: JOB.id, title: JOB.title, spec_hash: JOB.specHash, buyer: ME.acct, seller: H.acct, price_usdc: hAmt(), attempts_allowed: 3,
@@ -290,9 +337,15 @@ export const act = {
   },
   dispute2: () => {
     if (!getState().dReason) { toast('Pick what went wrong first.', 'hold'); return; }
+    if (isLive()) {
+      const why = ((document.getElementById('d-why') as HTMLInputElement | null)?.value ?? '').trim();
+      const reason = why ? `${getState().dReason}: ${why}` : getState().dReason;
+      void liveOpenDispute(reason).then((ok) => { if (ok) closeModal(); });
+      return;
+    }
     closeModal(); toast('Payment frozen and the free re-check started. Here is how a full dispute looks, using example J-0977.', 'hold', 5200); go('dispute');
   },
-  daovote: () => { setState({ dTab: 'ruled' }); toast('2 of 3 DAO votes. The contract split the payment 70/30.'); },
+  daovote: () => { if (isLive()) { void liveDisputeNext(); return; } setState({ dTab: 'ruled' }); toast('2 of 3 DAO votes. The contract split the payment 70/30.'); },
   attack: () => {
     setState({ attack: { n: 0 } });
     const tick = () => {
@@ -303,14 +356,18 @@ export const act = {
     };
     setTimeout(tick, 550);
   },
-  pause: () => { setState((s) => ({ stage: Math.max(s.stage, 8) })); toast('All agents paused. Funding and release calls are stopped.', 'block'); },
-  unpause2: () => { setState({ modal: null, stage: 7, attack: null }); toast('Key rotated. Agents are active again.'); },
-  savemandate: () => toast('Limits saved on-chain with your full-access key.'),
-  publishseller: () => { setState({ seller: true, sellStep: 0 }); go('seller'); toast('Seller profile published. Your bidding agent is watching matching jobs.'); },
+  pause: () => { if (isLive()) { void livePause(); return; } setState((s) => ({ stage: Math.max(s.stage, 8) })); toast('All agents paused. Funding and release calls are stopped.', 'block'); },
+  unpause2: () => { if (isLive()) { void liveUnpause().then((ok) => { if (ok) setState({ modal: null, attack: null }); }); return; } setState({ modal: null, stage: 7, attack: null }); toast('Key rotated. Agents are active again.'); },
+  savemandate: () => { if (isLive()) { void liveSaveMandate(); return; } toast('Limits saved on-chain with your full-access key.'); },
+  publishseller: () => {
+    if (isLive()) { void livePublishSeller().then((ok) => { if (ok) { setState({ sellStep: 0 }); go('seller'); } }); return; }
+    setState({ seller: true, sellStep: 0 }); go('seller'); toast('Seller profile published. Your bidding agent is watching matching jobs.');
+  },
   reqsvc: () => { if (getState().stage < 1) { act.signin(); return; } openModal('reqsvc'); },
   reqsvc2: (what: string) => {
     const s = getState(); const gg = gigBy(s.svc)!; const id = 'J-' + s.nextJob;
     const title = what || gg.prompt;
+    if (s.live) { void liveRequestService(title, gg.id).then((ok) => { if (ok) { setState({ modal: null }); go('jobs'); } }); return; }
     setState({
       nextJob: s.nextJob + 1, modal: null,
       newJobs: [{ id, title: title.length > 70 ? title.slice(0, 68) + '…' : title, cat: gg.cat, budget: gg.from + '.00', status: ['info', 'Offered to ' + gg.seller], who: gg.seller, note: 'Waiting for the seller to accept. Escrow funds when they do.' }, ...s.newJobs],
@@ -345,15 +402,16 @@ export const act = {
     m.addEventListener('transitionend', () => m.classList.remove('flip'), { once: true });
   },
   like: (id: string) => {
+    if (isLive()) { void liveLike(id); return; }
     const s = getState();
     if (s.liked.includes(id)) setState({ liked: s.liked.filter((x) => x !== id) });
     else { setState({ liked: [...s.liked, id] }); toast(`Saved ${gigBy(id)!.seller}. Your buyer agent will ask them first on matching jobs.`); }
   },
-  openGig: (id: string) => { setState({ svc: id }); go('svc'); tourStep(1, 2); },
+  openGig: (id: string) => { if (isLive()) void liveOpenGig(id); setState({ svc: id }); go('svc'); tourStep(1, 2); },
   /** A seller's name anywhere opens their profile. */
-  who: (key: string) => { setState({ who: key }); go('profile'); },
+  who: (key: string) => { if (isLive()) void liveWho(key); setState({ who: key }); go('profile'); },
   ghconnect: () => { setState({ ghLinked: true }); toast('GitHub connected: 14 public repositories found. Reputation still comes only from settled jobs.'); },
-  sellstart: () => { setState({ sellStep: 1 }); window.scrollTo(0, 0); },
+  sellstart: () => { if (isLive()) void liveLoadSellProfile(); setState({ sellStep: 1 }); window.scrollTo(0, 0); },
   theme: () => {
     const r = document.documentElement;
     const cur = r.getAttribute('data-theme') || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
@@ -380,6 +438,7 @@ export const act = {
     const s = getState();
     if (s.stage < 1) { setState({ draft: v, after: 'ask' }); act.signin(); return; }
     setState({ draft: '' });
+    if (s.live) { void liveSubmitAsk(v).then(() => acScroll()); return; }
     if (!s.asked && s.stage < 2) { setState({ asked: true, askText: v }); acScroll(); tourStep(1, 2); return; }
     if (s.stage < 2) { toast('The spec writer will fold that into the tests before you lock them.'); return; }
     setState({ nextJob: s.nextJob + 1, extra: [...s.extra, { id: 'J-' + s.nextJob, text: v, t: clock(), posted: false }] });
@@ -394,3 +453,31 @@ export const act = {
     act.walletstep();
   },
 };
+
+/* ---------------- real sign-in session ---------------- */
+/**
+ * Call once at startup. Picks up the session Supabase creates after the Google or GitHub redirect,
+ * resumes the sign-in flow the user started, and keeps the app signed in across reloads.
+ */
+export function initAuth(): () => void {
+  const urlError = takeUrlError();
+  if (urlError) { takePending(); toast(`Sign-in was not completed: ${urlError}`, 'block'); }
+  if (!supabase) return () => {};
+  const { data } = supabase.auth.onAuthStateChange((event, session) => {
+    if (event === 'SIGNED_OUT') { leaveLive(); setState({ user: null }); return; }
+    if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;
+    const user = userOf(session);
+    setTimeout(() => {
+      const pending = takePending();
+      if (pending) {
+        setState({ user, signVia: pending.via, after: pending.after, rolePick: pending.rolePick, tour: pending.tour, draft: pending.draft });
+        if (user.onboarding.wallet) act.signin2(); else act.walletstep();
+        void goLive();
+        return;
+      }
+      setState((s) => ({ user, signVia: s.signVia || user.via, stage: Math.max(s.stage, 1), role: s.role || user.onboarding.role || null }));
+      if (getState().tour < 0) void goLive();
+    }, 0);
+  });
+  return () => data.subscription.unsubscribe();
+}

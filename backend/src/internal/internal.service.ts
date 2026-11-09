@@ -1,0 +1,210 @@
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { z } from 'zod';
+import { chainBidId, chainJobId, ChainService } from '../chain/chain.service.js';
+import { IndexerService } from '../indexer/indexer.service.js';
+import { InternalRepository, NotificationInput } from './internal.repository.js';
+
+export const agentNotifySchema = z.object({
+    runId: z.string().max(100).nullish(),
+    role: z.string().min(1).max(40),
+    ok: z.boolean(),
+    jobId: z.string().uuid().nullish(),
+    result: z.record(z.string(), z.unknown()).nullish(),
+    error: z.string().max(2000).nullish(),
+});
+
+export type AgentNotify = z.infer<typeof agentNotifySchema>;
+
+export const decideBid = (bid: { status: string; priceCheck: string | null; fraudScore: number | null; holdReason: string | null }): { status: 'live' | 'held'; reason: string | null } | null => {
+    if (!['pending_check', 'live'].includes(bid.status)) return null;
+    if (bid.priceCheck === 'held') return { status: 'held', reason: bid.holdReason ?? 'Price far from the usual range' };
+    if (bid.fraudScore !== null && bid.fraudScore >= 70) return { status: 'held', reason: bid.holdReason ?? 'High fraud and lure risk' };
+    if (bid.fraudScore !== null && bid.fraudScore >= 40) return { status: 'held', reason: bid.holdReason ?? 'Needs your OK: medium risk' };
+    if (bid.status === 'pending_check' && bid.fraudScore !== null && bid.priceCheck !== null) return { status: 'live', reason: null };
+    return null;
+};
+
+export const runResultSchema = z.object({
+    runId: z.string().min(8).max(64),
+    deliveryId: z.string().nullish(),
+    error: z.enum(['clone_failed', 'bad_commit', 'timeout', 'docker_failed', 'internal']).nullable(),
+    exitCode: z.number().int().nullable(),
+    installExit: z.number().int().nullable(),
+    baselineExitCode: z.number().int().nullable(),
+    changedFiles: z.array(z.string()),
+    scopeOk: z.boolean().nullable(),
+    diffStats: z.object({ files: z.number().int(), insertions: z.number().int(), deletions: z.number().int() }),
+    logTail: z.string(),
+    logSha256: z.string(),
+    logPath: z.string(),
+    durationMs: z.number().int(),
+    timedOut: z.boolean(),
+    failingTests: z.array(z.string()),
+    image: z.string(),
+    steps: z.array(z.object({ name: z.string(), exitCode: z.number().int().nullable(), durationMs: z.number().int() })),
+});
+
+export type RunResult = z.infer<typeof runResultSchema>;
+
+const RUN_ERRORS: Record<string, string> = {
+    clone_failed: 'Could not clone the repository',
+    bad_commit: 'Commit not found or not built on the base commit',
+    timeout: 'Tests ran out of time',
+    docker_failed: 'The test sandbox failed',
+    internal: 'The test runner failed',
+};
+
+const isTestPath = (p: string): boolean => /(^|\/)(test|tests|__tests__)\/|\.(test|spec)\./.test(p);
+
+export const judgeRun = (r: Pick<RunResult, 'error' | 'exitCode' | 'installExit' | 'scopeOk' | 'changedFiles'>): { verdict: 'pass' | 'fail'; reason: string | null } => {
+    if (r.error) return { verdict: 'fail', reason: RUN_ERRORS[r.error] ?? r.error };
+    if (r.changedFiles.length === 0) return { verdict: 'fail', reason: 'The commit changes no files' };
+    const tests = r.changedFiles.filter(isTestPath);
+    if (tests.length) return { verdict: 'fail', reason: `Edits test files: ${tests.slice(0, 3).join(', ')}` };
+    if (r.scopeOk === false) return { verdict: 'fail', reason: 'Edits files outside the allowed paths' };
+    if (r.installExit !== null && r.installExit !== 0) return { verdict: 'fail', reason: 'The build failed' };
+    if (r.exitCode !== 0) return { verdict: 'fail', reason: 'The locked tests fail' };
+    return { verdict: 'pass', reason: null };
+};
+
+export const bidFlagsOf = (bid: { priceCheck: string | null; fraudScore: number | null }) => ({
+    price_check_ok: bid.priceCheck !== 'held',
+    fraud_score: Math.min(100, Math.max(0, Math.round(bid.fraudScore ?? 0))),
+    held: bid.priceCheck === 'held',
+});
+
+const text = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
+
+@Injectable()
+export class InternalService {
+    constructor(
+        private readonly internalRepository: InternalRepository,
+        private readonly indexer: IndexerService,
+        private readonly chainService: ChainService,
+    ) {}
+
+    async agentNotify(raw: unknown) {
+        const parsed = agentNotifySchema.safeParse(raw);
+        if (!parsed.success) throw new BadRequestException(`Invalid agent result: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
+        const body = parsed.data;
+        const result = body.result ?? {};
+        const actions: string[] = [];
+        const notes: NotificationInput[] = [];
+        const job = body.jobId ? await this.internalRepository.getJob(body.jobId) : null;
+
+        if (body.role === 'price_check' || body.role === 'fraud_lure') {
+            const bidId = text(result['bidId']) ?? (result['subjectType'] === 'bid' ? text(result['subjectId']) : null);
+            const bid = bidId ? await this.internalRepository.getBid(bidId) : null;
+            const decision = bid ? decideBid(bid) : null;
+            if (bid && decision && decision.status !== bid.status) {
+                const count = await this.internalRepository.setBidStatus(bid.id, bid.status, decision.status, decision.reason);
+                if (count > 0) {
+                    actions.push(`bid ${decision.status}`);
+                    actions.push(await this.flagBid(bid));
+                    const price = Number(bid.price).toFixed(2);
+                    notes.push(decision.status === 'live'
+                        ? { userId: bid.job.buyerId, kind: 'offer', title: `New offer on ${bid.job.ref}`, body: `${bid.seller.displayName} offered ${price} USDC`, link: `/job?id=${bid.job.ref}` }
+                        : { userId: bid.job.buyerId, kind: 'held', title: `Held an offer on ${bid.job.ref}`, body: `${bid.seller.displayName}: ${decision.reason}`, link: `/job?id=${bid.job.ref}` });
+                    if (decision.status === 'held') {
+                        notes.push({ userId: bid.seller.ownerId, kind: 'held', title: `Your offer on ${bid.job.ref} is held`, body: `${decision.reason}. You can explain why it is fair.`, link: '/orders' });
+                    }
+                }
+            }
+        } else if (body.role === 'spec_writer' && job) {
+            const weak = result['failsOnBase'] === false;
+            notes.push({ userId: job.buyerId, kind: 'spec', title: weak ? `Draft spec for ${job.ref} needs your review` : `Draft spec ready for ${job.ref}`, body: job.title, link: `/job?id=${job.ref}` });
+        } else if (body.role === 'reviewer' && job) {
+            const verdict = result['approve'] === true ? 'approved' : 'rejected';
+            const reviewer = typeof result['reviewer'] === 'number' || typeof result['reviewer'] === 'string' ? `Reviewer ${result['reviewer']}` : 'A reviewer';
+            const title = `${reviewer} ${verdict} the delivery on ${job.ref}`;
+            notes.push({ userId: job.buyerId, kind: 'review', title, body: null, link: `/job?id=${job.ref}` });
+            if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title, body: null, link: '/orders' });
+            const deliveryId = text(result['deliveryId']);
+            const tally = deliveryId ? await this.internalRepository.getVoteTally(deliveryId) : null;
+            if (tally) {
+                const approvals = tally.votes.filter((v) => v.approve).length;
+                const rejections = tally.votes.length - approvals;
+                if ((approvals >= 2 || rejections >= 2) && tally.milestone.job.status === 'disputed') {
+                    const outcome = approvals >= 2 ? 'release' : 'refund';
+                    const count = await this.internalRepository.recordRecheck(tally.milestone.job.id, outcome, new Date());
+                    if (count > 0) {
+                        actions.push(`recheck ${outcome}`);
+                        const title = `Re-check on ${job.ref}: ${outcome === 'release' ? `${approvals} of 3 reviewers approve, so the seller should be paid` : `${rejections} of 3 reviewers reject, so the buyer should be refunded`}`;
+                        const body = 'No money moves yet. The side that disagrees can ask the DAO with a bond within 72 hours; otherwise this result stands.';
+                        notes.push({ userId: job.buyerId, kind: 'dispute', title, body, link: '/dispute' });
+                        if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'dispute', title, body, link: '/dispute' });
+                    }
+                } else if (approvals >= 2 || rejections >= 2) {
+                    const approved = approvals >= 2;
+                    const count = await this.internalRepository.settleDelivery(tally.id, tally.milestoneId, tally.milestone.job.id, approved);
+                    if (count > 0) {
+                        actions.push(`delivery ${approved ? 'approved' : 'rejected'}`);
+                        if (approved && (process.env['AGORA_CHAIN_MODE'] ?? 'mock') === 'mock') {
+                            const released = await this.indexer.onMockRelease(tally.milestone.job.id, `mock-release-${Date.now()}`);
+                            if (released) actions.push('released');
+                        }
+                        const outcome = approved
+                            ? `Delivery ${tally.attempt} on ${job.ref} approved by ${approvals} of 3 reviewers`
+                            : `Delivery ${tally.attempt} on ${job.ref} rejected by ${rejections} of 3 reviewers`;
+                        const next = approved ? 'Payment is released by the contract.' : tally.attempt >= 3 ? 'No attempts left.' : `${3 - tally.attempt} attempt${3 - tally.attempt === 1 ? '' : 's'} left.`;
+                        notes.push({ userId: job.buyerId, kind: 'review', title: outcome, body: next, link: `/job?id=${job.ref}` });
+                        if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title: outcome, body: next, link: '/orders' });
+                    }
+                }
+            }
+        } else if (!body.ok && job) {
+            notes.push({ userId: job.buyerId, kind: 'agent', title: `Your ${body.role.replace(/_/g, ' ')} agent hit a problem on ${job.ref}`, body: body.error ?? null, link: `/job?id=${job.ref}` });
+        }
+
+        const notified = await this.internalRepository.createNotifications(notes);
+        if (notified > 0) actions.push(`notified ${notified}`);
+        return { message: 'Agent Result Successfully Received', role: body.role, actions };
+    }
+
+    private async flagBid(bid: { id: string; onchainId: bigint | null; priceCheck: string | null; fraudScore: number | null; job: { ref: string; onchainId: bigint | null } }): Promise<string> {
+        try {
+            const oracle = process.env['AGORA_FRAUD_ORACLE_ACCOUNT'] ?? 'oracle.agora-testnet.testnet';
+            await this.chainService.callAs('fraud_oracle', oracle, 'set_bid_flags', { job_id: chainJobId(bid.job), bid_id: chainBidId(bid), ...bidFlagsOf(bid) });
+            return 'bid flags on chain';
+        } catch {
+            return 'bid flags not on chain';
+        }
+    }
+
+    async runnerResult(raw: unknown) {
+        const parsed = runResultSchema.safeParse(raw);
+        if (!parsed.success) throw new BadRequestException(`Invalid runner result: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
+        const r = parsed.data;
+        const run = await this.internalRepository.getReviewRun(r.runId);
+        if (!run) throw new NotFoundException('Test run not found');
+        const { verdict, reason } = judgeRun(r);
+        const saved = await this.internalRepository.saveRunResult({
+            runId: r.runId,
+            failed: r.error !== null,
+            exitCode: r.exitCode,
+            installExit: r.installExit,
+            baselineExitCode: r.baselineExitCode,
+            scopeOk: r.scopeOk,
+            changedFiles: r.changedFiles,
+            logHash: r.logSha256,
+            logPath: r.logPath,
+            durationMs: r.durationMs,
+            error: r.error,
+            result: { timedOut: r.timedOut, failingTests: r.failingTests, image: r.image, steps: r.steps, logTail: r.logTail.slice(-8000) },
+            deliveryId: run.delivery.id,
+            verdict,
+            reason,
+            diffStats: r.diffStats,
+        });
+        if (saved === 0) return { message: 'Runner Result Already Received', runId: r.runId, verdict };
+        const job = run.delivery.milestone.job;
+        const title = verdict === 'pass'
+            ? `Locked tests pass on ${job.ref}, attempt ${run.delivery.attempt}`
+            : `Locked tests fail on ${job.ref}, attempt ${run.delivery.attempt}`;
+        const body = verdict === 'pass' ? 'The three reviewers are voting.' : reason;
+        const notes: NotificationInput[] = [{ userId: job.buyerId, kind: 'review', title, body, link: `/job?id=${job.ref}` }];
+        if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title, body, link: '/orders' });
+        await this.internalRepository.createNotifications(notes);
+        return { message: 'Runner Result Successfully Received', runId: r.runId, verdict, reason };
+    }
+}

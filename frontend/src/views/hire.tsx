@@ -312,14 +312,72 @@ function gigList(s: State): Gig[] {
   return list;
 }
 
-function Select({ k, label }: { k: FilterKey; label: string }) {
-  const { f } = useApp();
-  const v = f[k] || FILTERS[k][0];
+const F_LABEL: Record<FilterKey, string> = { cat: 'Service type', who: 'Seller', budget: 'Budget', when: 'Delivery time' };
+const F_KEYS = Object.keys(FILTERS) as FilterKey[];
+const isSet = (s: State, k: FilterKey) => !!s.f[k] && s.f[k] !== FILTERS[k][0];
+const activeCount = (s: State) => F_KEYS.filter((k) => isSet(s, k)).length + (s.online ? 1 : 0) + (s.newOnly ? 1 : 0);
+const clearFilters = () => setState({ f: {}, online: false, newOnly: false });
+
+/** One button with a sliders icon; the panel holds every filter so the search bar can take the full row. */
+function FilterButton() {
+  const s = useApp();
+  const [open, setOpen] = useState(false);
+  const wrap = useRef<HTMLDivElement>(null);
+  const btn = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!open) return;
+    const down = (e: PointerEvent) => { if (!wrap.current?.contains(e.target as Node)) setOpen(false); };
+    const key = (e: { key: string }) => { if (e.key === 'Escape') { setOpen(false); btn.current?.focus(); } };
+    document.addEventListener('pointerdown', down);
+    document.addEventListener('keydown', key);
+    return () => { document.removeEventListener('pointerdown', down); document.removeEventListener('keydown', key); };
+  }, [open]);
+  const n = activeCount(s);
+  const found = gigList(s).length;
   return (
-    <label className="dd"><span className="visually-hidden">{label}</span>
-      <select value={v} onChange={(e) => setState((s) => ({ f: { ...s.f, [k]: e.target.value } }))}>{FILTERS[k].map((o) => <option key={o}>{o}</option>)}</select>
-      <Icon name="chev" />
-    </label>
+    <div className="fwrap" ref={wrap}>
+      <button ref={btn} className={`btn fbtn ${n ? 'on' : ''}`} onClick={() => setOpen(!open)} aria-expanded={open} aria-haspopup="dialog" aria-controls="fpanel" aria-label={n ? `Filters, ${n} on` : 'Filters'}>
+        <Icon name="sliders" /><span>Filters</span>{n > 0 && <span className="fcount num">{n}</span>}
+      </button>
+      {open && (
+        <div className="fpop" id="fpanel" role="dialog" aria-label="Filter services">
+          {F_KEYS.map((k) => (
+            <fieldset key={k} className="fgroup">
+              <legend>{F_LABEL[k]}</legend>
+              <div className="fopts">{FILTERS[k].map((o) => {
+                const on = (s.f[k] || FILTERS[k][0]) === o;
+                return <button key={o} type="button" className={`fopt ${on ? 'on' : ''}`} aria-pressed={on} onClick={() => setState((st) => ({ f: { ...st.f, [k]: o } }))}>{o}</button>;
+              })}</div>
+            </fieldset>
+          ))}
+          <div className="fgroup ftog">
+            <div className="ftrow"><span><b>Online now</b><span className="muted xsmall">Sellers who can reply right away</span></span><button className={`switch ${s.online ? 'on' : ''}`} onClick={() => setState({ online: !s.online })} aria-pressed={s.online} aria-label="Online now" /></div>
+            <div className="ftrow"><span><b>New sellers</b><span className="muted xsmall">Fewer than 15 settled jobs</span></span><button className={`switch ${s.newOnly ? 'on' : ''}`} onClick={() => setState({ newOnly: !s.newOnly })} aria-pressed={s.newOnly} aria-label="New sellers" /></div>
+          </div>
+          <div className="fpop-ft">
+            <button className="btn ghost sm" onClick={clearFilters} disabled={!n}>Clear all</button>
+            <button className="btn primary sm" onClick={() => { setOpen(false); btn.current?.focus(); }}>Show {found} {found === 1 ? 'service' : 'services'}</button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+/** The filters that are on, each removable with one click. */
+function ActiveFilters() {
+  const s = useApp();
+  const chips: [string, () => void][] = [
+    ...F_KEYS.filter((k) => isSet(s, k)).map((k): [string, () => void] => [s.f[k]!, () => setState((st) => ({ f: { ...st.f, [k]: FILTERS[k][0] } }))]),
+    ...(s.online ? [['Online now', () => setState({ online: false })] as [string, () => void]] : []),
+    ...(s.newOnly ? [['New sellers', () => setState({ newOnly: false })] as [string, () => void]] : []),
+  ];
+  if (!chips.length) return null;
+  return (
+    <div className="fchips">
+      {chips.map(([label, off]) => <button key={label} className="fchip" onClick={off} aria-label={`Remove filter: ${label}`}>{label}<Icon name="x" /></button>)}
+      <button className="lk xsmall" onClick={clearFilters}>Clear all</button>
+    </div>
   );
 }
 
@@ -373,12 +431,9 @@ export function Explore({ sell = false }: { sell?: boolean }) {
         <>
           <div className="filters">
             <label className="search"><Icon name="explore" /><input id="q" value={s.q} onChange={(e) => setState({ q: e.target.value })} placeholder="Search services and sellers" aria-label="Search services and sellers" /></label>
-            <Select k="cat" label="Service type" /><Select k="who" label="Seller details" /><Select k="budget" label="Budget" /><Select k="when" label="Delivery time" />
-            <div className="toggles">
-              <button className={`switch ${s.online ? 'on' : ''}`} onClick={() => setState({ online: !s.online })} aria-pressed={s.online} aria-label="Online now" /><span className="small">Online now</span>
-              <button className={`switch ${s.newOnly ? 'on' : ''}`} onClick={() => setState({ newOnly: !s.newOnly })} aria-pressed={s.newOnly} aria-label="New sellers" /><span className="small">New sellers</span>
-            </div>
+            <FilterButton />
           </div>
+          <ActiveFilters />
           {s.fromHero && s.q === s.fromHero && (
             <div className="banner info"><Icon name="spark" /><div className="grow"><b style={{ fontWeight: 500 }}>Browsing without an account</b><span className="muted">Results for "{s.q}". Want offers made for this exact job? Your agent writes the tests and collects them, lowest price first.</span></div><button className="btn sm primary" onClick={act.heroask}>Ask my agent</button></div>
           )}

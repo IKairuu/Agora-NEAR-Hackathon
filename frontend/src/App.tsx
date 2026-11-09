@@ -1,7 +1,7 @@
 import { useEffect } from 'react';
 import { createBrowserRouter, Outlet, RouterProvider, ScrollRestoration, useNavigate } from 'react-router';
 import { Home } from './landing/Home';
-import { setNavigate } from './store/actions';
+import { initAuth, setNavigate } from './store/actions';
 import { SvgDefs } from './ui/icons';
 import { ModalHost, Toasts, Tour } from './ui/Overlays';
 import { Agents, Mandate, Wallet } from './views/agents';
@@ -14,6 +14,7 @@ import { Orders } from './views/orders';
 function Root() {
   const navigate = useNavigate();
   useEffect(() => { setNavigate((to) => { void navigate(to); }); }, [navigate]);
+  useEffect(() => initAuth(), []);
   return (
     <>
       <SvgDefs />

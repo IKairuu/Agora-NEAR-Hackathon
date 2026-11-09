@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react';
 import { ME, OTHER_JOBS, usd } from '../data/sample';
+import { liveReadNotes } from '../lib/live';
 import { act } from '../store/actions';
 import { escrow, free, hb, hPrice, paused, useApp } from '../store/store';
 import { Icon, Logo, type IconName } from './icons';
@@ -19,7 +20,7 @@ function MeMenu({ close, cur }: { close: () => void; cur: string }) {
   return (
     <>
       <div className="who">
-        <b>{ME.name}</b><span className="muted small">{ME.acct}</span>
+        <b>{s.user?.name || ME.name}</b><span className="muted small">{s.user?.email || ME.acct}</span>
         <span className="small"><b className="num">{usd(free(s))} USDC</b> <span className="muted">{escrow(s) ? usd(escrow(s)) + ' protected' : 'available'}</span></span>
       </div>
       <hr />
@@ -43,11 +44,14 @@ function MeMenu({ close, cur }: { close: () => void; cur: string }) {
 function NoteMenu({ close }: { close: () => void }) {
   const s = useApp(); const { stage } = s;
   const n: [IconName, string, string, string, string][] = [];
-  if (stage >= 7) n.push(['check', 'ok', usd(hPrice(s)) + ' USDC released to ' + hb(s).name, 'Reviewers approved commit e5f1d07', 'room']);
-  if (stage >= 6) n.push(['x', 'block', 'A delivery was rejected', 'Commit 3b9c2aa edited a locked test', 'room']);
-  if (stage >= 5) n.push(['chat', '', hb(s).name + ' accepted your offer', 'The payment is protected. Work has started.', 'chat']);
-  if (stage >= 3) n.push(['warn', 'hold', '2 offers held for review', 'An off-platform request and a 2 USDC offer', 'ask']);
-  if (stage >= 1) n.push(['gift', '', 'Welcome to AGORA', '120.00 test USDC is in your wallet', 'wallet']);
+  if (s.live) s.notes.items.forEach((x) => n.push([x.kind === 'held' ? 'warn' : x.kind === 'message' ? 'chat' : 'check', x.kind === 'held' ? 'hold' : x.read ? '' : 'ok', x.text, x.time, (x.link ?? '/dash').replace(/^\//, '').split('?')[0] || 'dash']));
+  if (!s.live) {
+    if (stage >= 7) n.push(['check', 'ok', usd(hPrice(s)) + ' USDC released to ' + hb(s).name, 'Reviewers approved commit e5f1d07', 'room']);
+    if (stage >= 6) n.push(['x', 'block', 'A delivery was rejected', 'Commit 3b9c2aa edited a locked test', 'room']);
+    if (stage >= 5) n.push(['chat', '', hb(s).name + ' accepted your offer', 'The payment is protected. Work has started.', 'chat']);
+    if (stage >= 3) n.push(['warn', 'hold', '2 offers held for review', 'An off-platform request and a 2 USDC offer', 'ask']);
+    if (stage >= 1) n.push(['gift', '', 'Welcome to AGORA', '120.00 test USDC is in your wallet', 'wallet']);
+  }
   return (
     <>
       <div className="ph">Notifications</div>
@@ -71,7 +75,9 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
 
   return (
     <div className={`shell ${s.fold ? 'folded' : ''}`}>
-      <aside className="side night">
+      {/* A mouse click leaves focus inside the sidebar, and :focus-within would keep a folded sidebar open.
+          The prototype re-rendered on every click, which dropped focus; drop it here too. Keyboard focus stays. */}
+      <aside className="side night" onClick={(e) => { if (e.detail > 0) (document.activeElement as HTMLElement | null)?.blur(); }}>
         <div className="brand-row">
           <RLink r="home" className="brand" aria-label="AGORA home"><span className="brand-mark"><Logo /></span><span className="brand-name">AGORA</span></RLink>
           <button className="fold" onClick={act.fold} aria-label={s.fold ? 'Keep the sidebar open' : 'Collapse sidebar'} aria-pressed={s.fold}><Icon name={s.fold ? 'unfold' : 'fold'} /></button>
@@ -135,8 +141,8 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
           <div className="top-right">
             {signed ? (
               <>
-                <button ref={noteRef} className="btn icon ghost dot-host" onClick={noteToggle} aria-label="Notifications" aria-haspopup="menu" aria-expanded={noteOpen}>
-                  <Icon name="bell" />{s.stage >= 3 && <i className="dot" />}
+                <button ref={noteRef} className="btn icon ghost dot-host" onClick={() => { noteToggle(); if (s.live) void liveReadNotes(); }} aria-label="Notifications" aria-haspopup="menu" aria-expanded={noteOpen}>
+                  <Icon name="bell" />{(s.live ? s.notes.unread > 0 : s.stage >= 3) && <i className="dot" />}
                 </button>
                 <RLink r="chat" className="btn icon ghost dot-host" aria-label="Messages"><Icon name="mail" />{s.stage >= 4 && s.stage < 5 && <i className="dot" />}</RLink>
                 <RLink r="saved" className="btn icon ghost dot-host" aria-label={`Saved, ${s.liked.length}`}><Icon name="heart" />{s.liked.length > 0 && <i className="num-dot">{s.liked.length}</i>}</RLink>

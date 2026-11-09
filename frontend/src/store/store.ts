@@ -1,4 +1,6 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
+import type { AuthUser } from '../lib/auth';
+import type { Thread } from './actions';
 import { BIDS, ORDERS, type Bid, type FilterKey, type Order, type OtherJob } from '../data/sample';
 
 /*
@@ -10,6 +12,7 @@ export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text:
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
   | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick';
+export interface LiveNote { id: string; kind: string; text: string; link: string | null; time: string; read: boolean }
 export interface State {
   stage: number;
   tour: number; tourMin: boolean;
@@ -31,6 +34,16 @@ export interface State {
   extra: { id: string; text: string; t: string; posted: boolean }[];
   who: string; oj: number; exTab: 'services' | 'sellers'; ssort: 'rating' | 'jobs' | 'price'; fromHero: string;
   stars: number; dReason: string; mail: string; walletLinked: boolean;
+  /** The real signed-in account from Google or GitHub; null in the simulated demo. */
+  user: AuthUser | null;
+  /** True when a real account is signed in and the API answered; screens then show API data. */
+  live: boolean;
+  /** The job the New request, chat and room screens follow in live mode. */
+  liveJob: { id: string; ref: string } | null;
+  liveThreads: Thread[];
+  notes: { unread: number; items: LiveNote[] };
+  /** Live balances and pause state from the wallet and limits API. */
+  money: { available: number; escrowed: number; usedToday: number; paused: boolean } | null;
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
 }
 
@@ -58,6 +71,8 @@ let state: State = {
   asked: false, askText: '', bidsShown: 0, streamId: 0, jf: 'all', extra: [],
   who: 'patchsmith', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
+  user: null,
+  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
   modal: null,
 };
 
@@ -81,9 +96,9 @@ export const hb = (s: State): Bid => BIDS.find((b) => b.key === s.hire) || BIDS[
 /** patchsmith's price drops to the negotiated one once the agent has negotiated. */
 export const priceOf = (s: State, b: Bid) => (b.key === 'patchsmith' && s.stage >= 4 && !s.preNeg ? b.final : b.price);
 export const hPrice = (s: State) => priceOf(s, hb(s));
-export const free = (s: State) => (s.stage >= 5 ? 120 - hPrice(s) : s.stage >= 1 ? 120 : 0);
-export const escrow = (s: State) => (s.stage >= 5 && s.stage < 7 ? hPrice(s) : 0);
-export const paused = (s: State) => s.stage >= 8;
+export const free = (s: State) => (s.live && s.money ? s.money.available : s.stage >= 5 ? 120 - hPrice(s) : s.stage >= 1 ? 120 : 0);
+export const escrow = (s: State) => (s.live && s.money ? s.money.escrowed : s.stage >= 5 && s.stage < 7 ? hPrice(s) : 0);
+export const paused = (s: State) => (s.live ? Boolean(s.money?.paused) : s.stage >= 8);
 
 /* ---------------- toasts ---------------- */
 export interface Toast { id: number; msg: ReactNode; kind: 'ok' | 'hold' | 'block' }
