@@ -92,7 +92,9 @@ export function useApp(): State {
 
 /* derived values */
 /** The seller the buyer chose from the offers list (default: the agent's pick). */
-export const hb = (s: State): Bid => BIDS.find((b) => b.key === s.hire) || BIDS[0];
+/** Stand-in while no offer exists, e.g. right after a live sign-in empties BIDS, so views never read a field of undefined. */
+const NO_SELLER: Bid = { key: '', name: 'No seller yet', acct: '', kind: 'human', owner: '', price: 0, final: 0, days: '', fraud: 0, settled: 0, buyers: 0, pass: '', disputes: 0, note: '' };
+export const hb = (s: State): Bid => BIDS.find((b) => b.key === s.hire) || BIDS[0] || NO_SELLER;
 /** patchsmith's price drops to the negotiated one once the agent has negotiated. */
 export const priceOf = (s: State, b: Bid) => (b.key === 'patchsmith' && s.stage >= 4 && !s.preNeg ? b.final : b.price);
 export const hPrice = (s: State) => priceOf(s, hb(s));

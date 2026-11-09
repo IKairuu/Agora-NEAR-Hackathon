@@ -23,3 +23,14 @@
 /* Messages shortcut in the top bar: active on /chat, like the sidebar item */
 .top .btn.icon.on { background: var(--color-paper-3); color: var(--color-ink); }
 .top .btn.icon.on svg { color: var(--color-accent-text); }
+
+/* Folded sidebar: right after the toggle, stay collapsed even though the pointer or focus is still on it
+   (Shell drops .nopeek when the pointer leaves). Mirrors agora.css's :not(:hover):not(:focus-within) rules. */
+@media (min-width: 60.01rem) {
+  .shell.folded .side.nopeek { clip-path: inset(0 172px 0 0); box-shadow: none; }
+  .shell.folded .side.nopeek :is(.nav a .t, .nav a .count, .nav-group, .brand-name, .side-foot, .mode .t, .fold) { opacity: 0; }
+  .shell.folded .side.nopeek .nav a.on { background: transparent; }
+  .shell.folded .side.nopeek .mode { background: transparent; box-shadow: none; margin-inline: 0; }
+  .shell.folded .side.nopeek .mode button:not(.on) { opacity: 0; }
+  .shell.folded .side.nopeek .mode button.on { justify-content: flex-start; padding-left: var(--space-xs); background: transparent; order: -1; }
+}

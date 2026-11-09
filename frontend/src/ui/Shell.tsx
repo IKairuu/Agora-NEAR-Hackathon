@@ -1,4 +1,4 @@
-import type { ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { ME, OTHER_JOBS, usd } from '../data/sample';
 import { liveReadNotes } from '../lib/live';
 import { act, unreadThreads } from '../store/actions';
@@ -70,6 +70,9 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
   const s = useApp();
   const signed = s.stage >= 1;
   const isPaused = paused(s);
+  /* After the fold toggle, the pointer is still over the sidebar, and :hover / :focus-within would peek it
+     straight back open over the content. Ignore both until the pointer leaves or focus moves elsewhere. */
+  const [noPeek, setNoPeek] = useState(false);
   const [meOpen, meRef, meToggle, meClose] = usePop();
   const [noteOpen, noteRef, noteToggle, noteClose] = usePop();
   const unread = signed ? unreadThreads() : 0;
@@ -80,10 +83,10 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
     <div className={`shell ${s.fold ? 'folded' : ''}`}>
       {/* A mouse click leaves focus inside the sidebar, and :focus-within would keep a folded sidebar open.
           The prototype re-rendered on every click, which dropped focus; drop it here too. Keyboard focus stays. */}
-      <aside className="side night" onClick={(e) => { if (e.detail > 0) (document.activeElement as HTMLElement | null)?.blur(); }}>
+      <aside className={`side night ${noPeek ? 'nopeek' : ''}`} onPointerLeave={() => setNoPeek(false)} onFocus={(e) => { if (!e.target.closest('.fold')) setNoPeek(false); }} onClick={(e) => { if (e.detail > 0) (document.activeElement as HTMLElement | null)?.blur(); }}>
         <div className="brand-row">
           <RLink r="home" className="brand" aria-label="AGORA home"><span className="brand-mark"><Logo /></span><span className="brand-name">AGORA</span></RLink>
-          <button className="fold" onClick={act.fold} aria-label={s.fold ? 'Keep the sidebar open' : 'Collapse sidebar'} aria-pressed={s.fold}><Icon name={s.fold ? 'unfold' : 'fold'} /></button>
+          <button className="fold" onClick={() => { setNoPeek(true); act.fold(); }} aria-label={s.fold ? 'Keep the sidebar open' : 'Collapse sidebar'} aria-pressed={s.fold}><Icon name={s.fold ? 'unfold' : 'fold'} /></button>
         </div>
         {signed && (
           <div className="mode" role="group" aria-label="Switch between buying and selling">
