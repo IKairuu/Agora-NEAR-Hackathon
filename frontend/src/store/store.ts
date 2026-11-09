@@ -92,7 +92,8 @@ export function useApp(): State {
 
 /* derived values */
 /** The seller the buyer chose from the offers list (default: the agent's pick). */
-export const hb = (s: State): Bid => BIDS.find((b) => b.key === s.hire) || BIDS[0];
+const NO_BID: Bid = { key: '', name: '', acct: '', kind: 'human', owner: '', price: 0, final: 0, days: '', fraud: 0, settled: 0, buyers: 0, pass: '', disputes: 0, note: '' };
+export const hb = (s: State): Bid => BIDS.find((b) => b.key === s.hire) || BIDS[0] || NO_BID;
 /** patchsmith's price drops to the negotiated one once the agent has negotiated. */
 export const priceOf = (s: State, b: Bid) => (b.key === 'patchsmith' && s.stage >= 4 && !s.preNeg ? b.final : b.price);
 export const hPrice = (s: State) => priceOf(s, hb(s));
