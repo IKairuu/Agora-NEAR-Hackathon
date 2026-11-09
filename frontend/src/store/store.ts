@@ -22,7 +22,7 @@ export interface State {
   role: 'hire' | 'work' | null; rolePick: 'hire' | 'work' | null; after: 'sell' | 'ask' | null;
   draft: string; seller: boolean; sellStep: number; skills: Record<string, boolean>; stake: boolean; sellPay: string;
   chatWith: string; chatLog: Record<string, ChatMsg[]>; typing: boolean;
-  tLog: Record<string, ChatMsg[]>; thread: string; inboxF: '' | 'buy' | 'sell' | 'all'; flat: boolean;
+  tLog: Record<string, ChatMsg[]>; thread: string; seenThreads: string[]; inboxF: '' | 'buy' | 'sell' | 'all'; flat: boolean;
   mode: 'buy' | 'sell'; oTab: 'active' | 'req' | 'done'; orders: Order[];
   liked: string[]; newJobs: OtherJob[]; nextJob: number; svc: string;
   sort: 'best' | 'rating' | 'price'; f: Partial<Record<FilterKey, string>>; q: string; online: boolean; newOnly: boolean;
@@ -61,7 +61,7 @@ let state: State = {
   role: null, rolePick: null, after: null,
   draft: '', seller: false, sellStep: 0, skills: { Rust: true, 'NEAR SDK': true, Tests: true }, stake: false, sellPay: 'near',
   chatWith: 'patchsmith', chatLog: {}, typing: false,
-  tLog: {}, thread: '', inboxF: '', flat: false,
+  tLog: {}, thread: '', seenThreads: [], inboxF: '', flat: false,
   mode: 'buy', oTab: 'active', orders: ORDERS.map((o) => ({ ...o })),
   liked: ['g3'], newJobs: [], nextJob: 1043, svc: 'g1',
   sort: 'best', f: {}, q: '', online: false, newOnly: false,
