@@ -473,6 +473,8 @@ export function initAuth(): () => void {
   if (!supabase) return () => {};
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_OUT') { leaveLive(); setState({ user: null }); return; }
+    /* a saved Google or GitHub sign-in whose Supabase session has expired: back to guest */
+    if (event === 'INITIAL_SESSION' && !session && getState().user) { setState({ stage: 0, user: null, role: null, signVia: '' }); return; }
     if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;
     const user = userOf(session);
     setTimeout(() => {
