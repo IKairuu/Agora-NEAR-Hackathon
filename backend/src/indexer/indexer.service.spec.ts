@@ -2,7 +2,7 @@ jest.mock('../prisma', () => ({ prisma: {} }));
 
 import { bondReturnedFor, IndexerRepository } from './indexer.repository';
 import { Prisma } from '../generated/prisma/client';
-import { bondNeeded, disputeRefusal, ESCALATION_WINDOW_MS, fundingRefusal, IndexerService, jobRefOf, MOCK_START_BALANCE, settlementOf } from './indexer.service';
+import { bondNeeded, disputeRefusal, ESCALATION_WINDOW_MS, fundingRefusal, IndexerService, jobRefOf, MOCK_START_BALANCE, rateRefusal, settlementOf, stakeRefusal } from './indexer.service';
 
 const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
 const D = (n: number) => new Prisma.Decimal(n);
@@ -242,5 +242,95 @@ describe('IndexerService dispute events (mock)', () => {
         const s = repo.settleDispute.mock.calls[0]![1];
         expect(s).toMatchObject({ outcome: 'release', sellerShareBps: 10_000, by: 'default' });
         expect([Number(s.sellerAmount), Number(s.fee)]).toEqual([19.8, 0.2]);
+    });
+});
+
+describe('starter stake lifts the new-seller cap', () => {
+    it('allows up to 60 USDC for a seller with a 10 USDC stake', () => {
+        const staked = (stake: number, price: number) => ctx({ agreedPrice: D(price), seller: { id: 'seller-1', nearAccountId: 'patchsmith.testnet', stake: D(stake) } });
+        expect(fundingRefusal(staked(10, 45), null, 0, MOCK_START_BALANCE)).toBeNull();
+        expect(fundingRefusal(staked(9, 45), null, 0, MOCK_START_BALANCE)).toBe('Over new-seller cap');
+        expect(fundingRefusal(staked(10, 61), { available: D(500), spentToday: D(0), dayStarted: null }, 0, MOCK_START_BALANCE)).toBe('Over per-job cap');
+        expect(fundingRefusal({ ...(staked(10, 61) as object), buyer: { nearAccountId: 'lumen.testnet', mandate: mandate({ perJobCap: D(100), dailyCap: D(200) }), approvedSellers: [] } } as never, { available: D(500), spentToday: D(0), dayStarted: null }, 0, MOCK_START_BALANCE)).toBe('Over new-seller cap');
+        expect(fundingRefusal({ ...(staked(10, 70) as object), buyer: { nearAccountId: 'lumen.testnet', mandate: mandate({ perJobCap: D(100), dailyCap: D(200), newSellerCap: D(80) }), approvedSellers: [] } } as never, { available: D(500), spentToday: D(0), dayStarted: null }, 0, MOCK_START_BALANCE)).toBeNull();
+    });
+});
+
+describe('rate and stake refusals: contract messages', () => {
+    const job = (over: Record<string, unknown> = {}) => ({
+        id: JOB, status: 'released', buyerId: 'buyer', buyer: { nearAccountId: 'lumen.testnet' },
+        seller: { id: 'seller-1', nearAccountId: 'patchsmith.agents.lumen.testnet', ownerId: 'seller-owner' }, ratings: [], ...over,
+    }) as never;
+
+    it('checks rate in contract order', () => {
+        expect(rateRefusal({ signer: 'lumen.testnet', args: { stars: 5 } }, null)).toBe('Job not found');
+        expect(rateRefusal({ signer: 'lumen.testnet', args: { stars: 5 } }, job({ status: 'funded' }))).toBe('Only a paid job can be rated');
+        expect(rateRefusal({ signer: 'lumen.testnet', args: { stars: 6 } }, job())).toBe('Stars must be between 1 and 5');
+        expect(rateRefusal({ signer: 'lumen.testnet', args: { stars: 0 } }, job())).toBe('Stars must be between 1 and 5');
+        expect(rateRefusal({ signer: 'stranger.testnet', args: { stars: 4 } }, job())).toBe('Only the buyer or seller can rate');
+        expect(rateRefusal({ signer: 'agents.lumen.testnet', args: { stars: 4 } }, job({ ratings: [{ raterId: 'buyer' }] }))).toBe('You already rated this job');
+        expect(rateRefusal({ signer: 'lumen.testnet', args: { stars: 4 } }, job({ ratings: [{ raterId: 'seller-owner' }] }))).toBeNull();
+        expect(rateRefusal({ signer: 'patchsmith.agents.lumen.testnet', args: { stars: 4 } }, job({ status: 'settled', ratings: [{ raterId: 'buyer' }] }))).toBeNull();
+    });
+
+    it('checks the starter stake and its return', () => {
+        const seller = { seller: { id: 's', stake: D(10) }, settled: 3, disputes: 0 };
+        const stake = (amount: string) => ({ method: 'ft_transfer_call', args: { amount, msg: 'starter_stake' } });
+        expect(stakeRefusal(stake('0'), seller, 100)).toBe('Amount must be positive');
+        expect(stakeRefusal(stake('10000000'), { seller: null, settled: 0, disputes: 0 }, 100)).toBe('Only a registered seller can stake');
+        expect(stakeRefusal(stake('10000000'), seller, 5)).toBe('Not enough free balance');
+        expect(stakeRefusal(stake('10000000'), seller, 100)).toBeNull();
+        const back = { method: 'return_stake', args: {} };
+        expect(stakeRefusal(back, { seller: { id: 's', stake: D(0) }, settled: 5, disputes: 0 }, 0)).toBe('Nothing staked');
+        expect(stakeRefusal(back, { seller: null, settled: 5, disputes: 0 }, 0)).toBe('Nothing staked');
+        expect(stakeRefusal(back, { ...seller, settled: 2 }, 0)).toBe('The stake comes back after 3 settled jobs with no disputes');
+        expect(stakeRefusal(back, { ...seller, disputes: 1 }, 0)).toBe('The stake comes back after 3 settled jobs with no disputes');
+        expect(stakeRefusal(back, seller, 0)).toBeNull();
+    });
+});
+
+describe('IndexerService rate and stake (mock)', () => {
+    let repo: jest.Mocked<IndexerRepository>;
+    let service: IndexerService;
+
+    beforeEach(() => {
+        repo = {
+            recordTx: jest.fn().mockResolvedValue({ id: 't' }), getBalance: jest.fn().mockResolvedValue(null),
+            getRatingContext: jest.fn().mockResolvedValue({ id: JOB, status: 'released', buyerId: 'buyer', buyer: { nearAccountId: 'lumen.testnet' }, seller: { id: 's', nearAccountId: 'patchsmith.testnet', ownerId: 'o' }, ratings: [] }),
+            getStakeContext: jest.fn().mockResolvedValue({ seller: { id: 's', stake: D(0) }, settled: 0, disputes: 0 }),
+            addStake: jest.fn().mockResolvedValue({ sellerId: 's', stake: 10 }), returnStake: jest.fn().mockResolvedValue({ sellerId: 's', returned: 10 }),
+        } as unknown as jest.Mocked<IndexerRepository>;
+        service = new IndexerService(repo);
+    });
+
+    it('records a rate call and leaves the rating row to the reputation module', async () => {
+        await expect(service.onMockCall({ signer: 'lumen.testnet', method: 'rate', args: { job_id: 'J-1042', stars: 5 }, txHash: 'mock-rate-1' })).resolves.toBeNull();
+        expect(repo.getRatingContext.mock.calls[0]).toEqual([{ ref: 'J-1042' }]);
+        expect(repo.recordTx.mock.calls[0]?.[0]).toMatchObject({ method: 'rate', ok: true, jobKey: { ref: 'J-1042' } });
+    });
+
+    it('refuses a second rating from the same side', async () => {
+        repo.getRatingContext.mockResolvedValue({ id: JOB, status: 'released', buyerId: 'buyer', buyer: { nearAccountId: 'lumen.testnet' }, seller: null, ratings: [{ raterId: 'buyer' }] } as never);
+        await expect(service.onMockCall({ signer: 'lumen.testnet', method: 'rate', args: { job_id: 'J-1042', stars: 5 }, txHash: 'mock-rate-2' })).rejects.toThrow('Contract refused rate: You already rated this job');
+        expect(repo.recordTx.mock.calls[0]?.[0]).toMatchObject({ ok: false, error: 'You already rated this job' });
+    });
+
+    it('adds a starter stake from the seller balance', async () => {
+        await expect(service.onMockCall({ signer: 'patchsmith.testnet', method: 'ft_transfer_call', args: { receiver_id: 'c', amount: '10000000', msg: 'starter_stake' }, txHash: 'mock-stake-1' })).resolves.toEqual({ sellerId: 's', stake: 10 });
+        expect(repo.addStake.mock.calls[0]).toEqual(['patchsmith.testnet', 10, 'mock-stake-1', MOCK_START_BALANCE]);
+        expect(repo.recordTx.mock.calls[0]?.[0]).toMatchObject({ method: 'ft_transfer_call', ok: true, jobKey: null });
+    });
+
+    it('refuses a stake from an account that is not a seller', async () => {
+        repo.getStakeContext.mockResolvedValue({ seller: null, settled: 0, disputes: 0 });
+        await expect(service.onMockCall({ signer: 'lumen.testnet', method: 'ft_transfer_call', args: { amount: '10000000', msg: 'starter_stake' }, txHash: 'mock-stake-2' })).rejects.toThrow('Contract refused ft_transfer_call: Only a registered seller can stake');
+        expect(repo.addStake.mock.calls).toHaveLength(0);
+    });
+
+    it('returns the stake after 3 clean settled jobs', async () => {
+        await expect(service.onMockCall({ signer: 'patchsmith.testnet', method: 'return_stake', args: {}, txHash: 'mock-rs-1' })).rejects.toThrow('Nothing staked');
+        repo.getStakeContext.mockResolvedValue({ seller: { id: 's', stake: D(10) }, settled: 3, disputes: 0 } as never);
+        await expect(service.onMockCall({ signer: 'patchsmith.testnet', method: 'return_stake', args: {}, txHash: 'mock-rs-2' })).resolves.toEqual({ sellerId: 's', returned: 10 });
+        expect(repo.returnStake.mock.calls[0]).toEqual(['patchsmith.testnet']);
     });
 });

@@ -26,7 +26,12 @@ const LABELS: Record<string, string> = {
     ft_transfer_call: 'Dispute bond paid to ask the DAO',
     resolve_dispute: 'Dispute decided by the DAO',
     finalize_default: 'Dispute closed after 72 hours',
+    return_stake: 'Starter stake returned',
+    starter_stake: 'Starter stake added',
 };
+
+export const labelOf = (method: string, args: Record<string, unknown>): string =>
+    method === 'ft_transfer_call' && args['msg'] === 'starter_stake' ? LABELS['starter_stake']! : LABELS[method] ?? method;
 
 const units = (amount: number): string => String(Math.round(amount * 1_000_000));
 const usdc = (value: unknown): number | null => {
@@ -67,7 +72,7 @@ export class WalletService {
                 return {
                     id: t.id,
                     method: t.method,
-                    label: LABELS[t.method] ?? t.method,
+                    label: labelOf(t.method, args),
                     job: t.job?.ref ?? null,
                     amount,
                     status: t.status,

@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { goLive, isLive, leaveLive, liveAddFunds, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
+import { goLive, isLive, leaveLive, liveAddFunds, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -367,7 +367,7 @@ export const act = {
   reqsvc2: (what: string) => {
     const s = getState(); const gg = gigBy(s.svc)!; const id = 'J-' + s.nextJob;
     const title = what || gg.prompt;
-    if (s.live) { void liveRequestService(title).then((ok) => { if (ok) { setState({ modal: null }); go('jobs'); } }); return; }
+    if (s.live) { void liveRequestService(title, gg.id).then((ok) => { if (ok) { setState({ modal: null }); go('jobs'); } }); return; }
     setState({
       nextJob: s.nextJob + 1, modal: null,
       newJobs: [{ id, title: title.length > 70 ? title.slice(0, 68) + '…' : title, cat: gg.cat, budget: gg.from + '.00', status: ['info', 'Offered to ' + gg.seller], who: gg.seller, note: 'Waiting for the seller to accept. Escrow funds when they do.' }, ...s.newJobs],
@@ -402,13 +402,14 @@ export const act = {
     m.addEventListener('transitionend', () => m.classList.remove('flip'), { once: true });
   },
   like: (id: string) => {
+    if (isLive()) { void liveLike(id); return; }
     const s = getState();
     if (s.liked.includes(id)) setState({ liked: s.liked.filter((x) => x !== id) });
     else { setState({ liked: [...s.liked, id] }); toast(`Saved ${gigBy(id)!.seller}. Your buyer agent will ask them first on matching jobs.`); }
   },
-  openGig: (id: string) => { setState({ svc: id }); go('svc'); tourStep(1, 2); },
+  openGig: (id: string) => { if (isLive()) void liveOpenGig(id); setState({ svc: id }); go('svc'); tourStep(1, 2); },
   /** A seller's name anywhere opens their profile. */
-  who: (key: string) => { setState({ who: key }); go('profile'); },
+  who: (key: string) => { if (isLive()) void liveWho(key); setState({ who: key }); go('profile'); },
   ghconnect: () => { setState({ ghLinked: true }); toast('GitHub connected: 14 public repositories found. Reputation still comes only from settled jobs.'); },
   sellstart: () => { if (isLive()) void liveLoadSellProfile(); setState({ sellStep: 1 }); window.scrollTo(0, 0); },
   theme: () => {

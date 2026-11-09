@@ -4,7 +4,7 @@ import { AuthService } from '../auth/auth.service';
 import { ChainService } from '../chain/chain.service';
 import { Prisma } from '../generated/prisma/client';
 import { WalletRepository } from './wallet.repository';
-import { WalletService } from './wallet.service';
+import { labelOf, WalletService } from './wallet.service';
 
 const USER = '0f9b6c1e-4a2d-4c8e-9b1a-7d3e5f6a8b90';
 const D = (n: number) => new Prisma.Decimal(n);
@@ -60,5 +60,14 @@ describe('WalletService', () => {
         expect(chain.callAs.mock.calls[0]).toEqual(['owner', 'agora-new.testnet', 'deposit', { amount: '50000000' }]);
         process.env['AGORA_CHAIN_MODE'] = 'testnet';
         await expect(service.createDeposit('Bearer t', { amount: 50 })).rejects.toThrow('ft_transfer_call');
+    });
+});
+
+describe('wallet labels', () => {
+    it('tells a starter stake apart from a dispute bond', () => {
+        expect(labelOf('ft_transfer_call', { msg: 'starter_stake' })).toBe('Starter stake added');
+        expect(labelOf('ft_transfer_call', { msg: 'dispute_bond:7' })).toBe('Dispute bond paid to ask the DAO');
+        expect(labelOf('return_stake', {})).toBe('Starter stake returned');
+        expect(labelOf('unknown_method', {})).toBe('unknown_method');
     });
 });

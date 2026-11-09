@@ -25,7 +25,7 @@ describe('SellerProfileService', () => {
 
     beforeEach(() => {
         repo = {
-            getProfile: jest.fn(), findCategories: jest.fn(), saveProfile: jest.fn(), setAccountIds: jest.fn(), publish: jest.fn(),
+            getProfile: jest.fn(), findCategories: jest.fn(), saveProfile: jest.fn(), setAccountIds: jest.fn(), publish: jest.fn(), getSellerAccount: jest.fn(),
         } as unknown as jest.Mocked<SellerProfileRepository>;
         chain = {
             callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-register_seller-1', explorer_url: '', result: null }),
@@ -115,5 +115,25 @@ describe('SellerProfileService', () => {
         repo.getProfile.mockResolvedValue(row());
         chain.callAs.mockRejectedValue(new Error('Paused'));
         await expect(service.publishProfile('Bearer t')).resolves.toMatchObject({ id: SELLER, registered: false, registerError: 'Paused' });
+    });
+
+    it('stakes 10 USDC by default through ft_transfer_call', async () => {
+        repo.getSellerAccount.mockResolvedValue({ id: SELLER, nearAccountId: 'lumen.testnet', stake: new Prisma.Decimal(0) });
+        chain.callAs.mockResolvedValue({ tx_hash: 'mock-ft_transfer_call-1', explorer_url: '', result: null });
+        await expect(service.addStake('Bearer t', {} as never)).resolves.toEqual({ message: 'Stake Successfully Added', id: SELLER, amount: 10, stake: 10, newSellerCapLifted: true, stakeTx: 'mock-ft_transfer_call-1' });
+        expect(chain.callAs.mock.calls[0]).toEqual(['owner', 'lumen.testnet', 'ft_transfer_call', { receiver_id: 'agora-market.agora-testnet.testnet', amount: '10000000', msg: 'starter_stake' }, '1']);
+        expect(repo.getSellerAccount.mock.calls[0]).toEqual([USER]);
+    });
+
+    it('returns the stake with return_stake', async () => {
+        repo.getSellerAccount.mockResolvedValue({ id: SELLER, nearAccountId: 'lumen.testnet', stake: new Prisma.Decimal(10) });
+        await expect(service.returnStake('Bearer t')).resolves.toMatchObject({ message: 'Stake Successfully Returned', amount: 10 });
+        expect(chain.callAs.mock.calls[0]?.[2]).toBe('return_stake');
+    });
+
+    it('needs a published seller to stake', async () => {
+        repo.getSellerAccount.mockResolvedValue(null);
+        await expect(service.addStake('Bearer t', { amount: 10 })).rejects.toThrow('Publish your seller profile first');
+        await expect(service.returnStake('Bearer t')).rejects.toThrow('Publish your seller profile first');
     });
 });

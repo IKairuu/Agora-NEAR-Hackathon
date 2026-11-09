@@ -22,7 +22,8 @@
     "postinstall": "prisma generate",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
-    "prisma:studio": "prisma studio"
+    "prisma:studio": "prisma studio",
+    "seed:market": "nest build && node dist/seed/seed-market.js"
   },
   "dependencies": {
     "@nestjs/common": "^12.0.1",

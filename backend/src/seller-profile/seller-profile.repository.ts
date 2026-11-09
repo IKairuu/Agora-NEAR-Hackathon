@@ -102,6 +102,15 @@ export class SellerProfileRepository {
         );
     }
 
+    async getSellerAccount(userId: string) {
+        const profile = await prisma.sellerProfile.findUnique({ where: { userId }, select: { sellerId: true } });
+        return prisma.seller.findFirst({
+            where: { ownerId: userId, ...(profile?.sellerId ? { id: profile.sellerId } : {}) },
+            select: { id: true, nearAccountId: true, stake: true },
+            orderBy: { createdAt: 'asc' },
+        });
+    }
+
     async publish(userId: string, profileId: string, sellerId: string | null, data: SellerData) {
         return prisma.$transaction(async (tx) => {
             const seller = sellerId

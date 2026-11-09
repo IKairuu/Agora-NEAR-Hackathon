@@ -3,10 +3,12 @@ import { initialsOf } from '../accounts/accounts.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { ChainService } from '../chain/chain.service.js';
 import { Prisma } from '../generated/prisma/client.js';
+import { CreateSellerStake } from './dto/CreateSellerStake.dto.js';
 import { EditSellerProfile } from './dto/EditSellerProfile.dto.js';
 import { SellerProfileRepository, SellerProfileRow } from './seller-profile.repository.js';
 
 const EVM_ADDRESS = /^0x[0-9a-fA-F]{40}$/;
+const STARTER_STAKE_USDC = 10;
 
 export const toSellerProfile = (row: SellerProfileRow | null, fallbackName: string) => {
     const name = row?.displayName ?? fallbackName;
@@ -120,6 +122,27 @@ export class SellerProfileService {
             }
             throw e;
         }
+    }
+
+    async addStake(token: string, body: CreateSellerStake) {
+        const claims = await this.authService.getSessionClaims((token ?? '').replace('Bearer ', ''));
+        const seller = await this.sellerProfileRepository.getSellerAccount(claims.id);
+        if (!seller) throw new BadRequestException('Publish your seller profile first');
+        const amount = body.amount ?? STARTER_STAKE_USDC;
+        const contract = process.env['AGORA_CONTRACT_ID'] ?? 'agora-market.agora-testnet.testnet';
+        const tx = await this.chainService.callAs('owner', seller.nearAccountId, 'ft_transfer_call', {
+            receiver_id: contract, amount: String(Math.round(amount * 1_000_000)), msg: 'starter_stake',
+        }, '1');
+        const stake = Number(seller.stake) + amount;
+        return { message: 'Stake Successfully Added', id: seller.id, amount, stake, newSellerCapLifted: stake >= STARTER_STAKE_USDC, stakeTx: tx.tx_hash };
+    }
+
+    async returnStake(token: string) {
+        const claims = await this.authService.getSessionClaims((token ?? '').replace('Bearer ', ''));
+        const seller = await this.sellerProfileRepository.getSellerAccount(claims.id);
+        if (!seller) throw new BadRequestException('Publish your seller profile first');
+        const tx = await this.chainService.callAs('owner', seller.nearAccountId, 'return_stake', {}, '1');
+        return { message: 'Stake Successfully Returned', id: seller.id, amount: Number(seller.stake), stakeTx: tx.tx_hash };
     }
 
     private async registerSeller(accountId: string): Promise<{ registered: boolean; registerTx: string | null; registerError: string | null }> {

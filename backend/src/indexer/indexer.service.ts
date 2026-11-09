@@ -9,6 +9,9 @@ export const MAX_REASON_LEN = 500;
 const BOND_BPS = 500n;
 const MIN_BOND = 1_000_000n;
 const DISPUTE_METHODS = ['open_dispute', 'ft_transfer_call', 'resolve_dispute', 'finalize_default'];
+export const STARTER_STAKE = 10;
+export const STAKED_SELLER_CAP = 60;
+const NEW_SELLER_SETTLED_JOBS = 3;
 
 export type Party = 'buyer' | 'seller';
 export type Outcome = 'release' | 'refund' | 'split';
@@ -31,6 +34,8 @@ export const settlementOf = (price: DecimalLike, sellerShareBps: number, feeBps:
 };
 
 export const bondJobOf = (msg: unknown): string | null => (typeof msg === 'string' && msg.startsWith('dispute_bond:') ? msg.slice('dispute_bond:'.length) : null);
+
+export const isStakeCall = (call: Pick<MockCall, 'method' | 'args'>): boolean => call.method === 'ft_transfer_call' && call.args['msg'] === 'starter_stake';
 
 export const ownerOf = (account: string): string => (account.startsWith('agents.') ? account.slice('agents.'.length) : account);
 
@@ -90,7 +95,9 @@ export const fundingRefusal = (
     if (m?.strictSellers && !job.buyer.approvedSellers.some((a) => a.sellerId === job.seller!.id)) return 'Seller not approved';
     if ((job.acceptedBid?.fraudScore ?? 0) >= 70) return 'Bid flagged';
     if (job.acceptedBid?.priceCheck === 'held' && !job.acceptedBid.ownerApprovedRisk) return 'Bid held by price check';
-    if (sellerSettled < 3 && price > newSeller) return 'Over new-seller cap';
+    const stake = job.seller.stake === undefined || job.seller.stake === null ? 0 : Number(job.seller.stake);
+    const newSellerCap = stake >= STARTER_STAKE ? Math.max(newSeller, STAKED_SELLER_CAP) : newSeller;
+    if (sellerSettled < NEW_SELLER_SETTLED_JOBS && price > newSellerCap) return 'Over new-seller cap';
     if (available < price) return 'Not enough free balance';
     return null;
 };
@@ -149,6 +156,37 @@ export const disputeRefusal = (
     return null;
 };
 
+type RatingContext = NonNullable<Awaited<ReturnType<IndexerRepository['getRatingContext']>>>;
+
+export const rateRefusal = (call: Pick<MockCall, 'signer' | 'args'>, job: RatingContext | null): string | null => {
+    if (!job) return 'Job not found';
+    if (!['released', 'settled'].includes(job.status)) return 'Only a paid job can be rated';
+    const stars = Number(call.args['stars']);
+    if (!(Number.isInteger(stars) && stars >= 1 && stars <= 5)) return 'Stars must be between 1 and 5';
+    const party = partyOf(job, call.signer);
+    if (!party) return 'Only the buyer or seller can rate';
+    const rater = party === 'buyer' ? job.buyerId : job.seller?.ownerId;
+    if (job.ratings.some((r) => r.raterId === rater)) return 'You already rated this job';
+    return null;
+};
+
+export const stakeRefusal = (
+    call: Pick<MockCall, 'method' | 'args'>,
+    ctx: Awaited<ReturnType<IndexerRepository['getStakeContext']>>,
+    free: number,
+): string | null => {
+    if (call.method === 'return_stake') {
+        if (!ctx.seller || !(Number(ctx.seller.stake) > 0)) return 'Nothing staked';
+        if (ctx.settled < NEW_SELLER_SETTLED_JOBS || ctx.disputes !== 0) return 'The stake comes back after 3 settled jobs with no disputes';
+        return null;
+    }
+    const amount = usdcOf(call.args['amount']);
+    if (!(amount > 0)) return 'Amount must be positive';
+    if (!ctx.seller) return 'Only a registered seller can stake';
+    if (free < amount) return 'Not enough free balance';
+    return null;
+};
+
 @Injectable()
 export class IndexerService {
     now: () => number = () => Date.now();
@@ -164,6 +202,7 @@ export class IndexerService {
     }
 
     async onMockCall(call: MockCall) {
+        if (isStakeCall(call) || call.method === 'return_stake') return this.onStakeCall(call);
         const jobKey = jobRefOf(call.method === 'ft_transfer_call' ? bondJobOf(call.args['msg']) : call.args['job_id']);
         const refusal = await this.refusalFor(call, jobKey);
         await this.indexerRepository.recordTx({
@@ -206,6 +245,19 @@ export class IndexerService {
         return this.indexerRepository.releaseJob({ id: jobId }, txHash, fee, dao);
     }
 
+    private async onStakeCall(call: MockCall) {
+        const ctx = await this.indexerRepository.getStakeContext(call.signer);
+        const balance = call.method === 'return_stake' ? null : await this.indexerRepository.getBalance(call.signer);
+        const free = balance ? Number(balance.available) : MOCK_START_BALANCE;
+        const refusal = stakeRefusal(call, ctx, free);
+        await this.indexerRepository.recordTx({
+            txHash: call.txHash, signer: call.signer, method: call.method, args: call.args as Prisma.InputJsonValue, ok: refusal === null, error: refusal, jobKey: null,
+        });
+        if (refusal) throw new BadRequestException(`Contract refused ${call.method}: ${refusal}`);
+        if (call.method === 'return_stake') return this.indexerRepository.returnStake(call.signer);
+        return this.indexerRepository.addStake(call.signer, usdcOf(call.args['amount']), call.txHash, MOCK_START_BALANCE);
+    }
+
     private async applyDispute(call: MockCall, jobKey: JobRef) {
         const ctx = await this.indexerRepository.getDisputeContext(jobKey);
         if (!ctx) return null;
@@ -237,6 +289,10 @@ export class IndexerService {
                 free = balance ? Number(balance.available) : MOCK_START_BALANCE;
             }
             return disputeRefusal(call, ctx, this.now(), this.dao(), free);
+        }
+        if (call.method === 'rate') {
+            const job = jobKey ? await this.indexerRepository.getRatingContext(jobKey) : null;
+            return rateRefusal(call, job);
         }
         if (call.method === 'fund_job') {
             if (!jobKey) return 'Unknown job';

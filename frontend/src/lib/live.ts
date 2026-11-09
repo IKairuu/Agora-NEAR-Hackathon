@@ -1,4 +1,4 @@
-import { ARRIVE, BIDS, DONE_JOBS, HELD, JOB, ME, OTHER_JOBS, REVIEWERS, SPEC, liveOpenRef, setLiveOpenJobs, type Bid, type OpenJob, type Order, type OtherJob } from '../data/sample';
+import { ARRIVE, BIDS, DONE_JOBS, GIGS, HELD, JOB, ME, OTHER_JOBS, REVIEWERS, SELLERS_DIR, SPEC, gigBy, liveOpenRef, setLiveOpenJobs, type Bid, type Gig, type OpenJob, type Order, type OtherJob, type SellerDir } from '../data/sample';
 import type { ChatMsg } from '../store/store';
 import { getState, setState, toast, type LiveNote } from '../store/store';
 import type { Thread } from '../store/actions';
@@ -11,7 +11,8 @@ import { api, ApiError } from './api';
  */
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
-const SNAP = { ME: clone(ME), JOB: clone(JOB), SPEC: clone(SPEC), OTHER: clone(OTHER_JOBS), DONE: clone(DONE_JOBS), BIDS: clone(BIDS), HELD: clone(HELD), ARRIVE: clone(ARRIVE), REVIEWERS: clone(REVIEWERS) };
+const SNAP = { ME: clone(ME), JOB: clone(JOB), SPEC: clone(SPEC), OTHER: clone(OTHER_JOBS), DONE: clone(DONE_JOBS), BIDS: clone(BIDS), HELD: clone(HELD), ARRIVE: clone(ARRIVE), REVIEWERS: clone(REVIEWERS), GIGS: clone(GIGS), SELLERS: clone(SELLERS_DIR) };
+let likedBefore: string[] | null = null;
 const replace = <T,>(target: T[], items: T[]) => { target.splice(0, target.length, ...items); };
 
 interface MeView { id: string; name: string; acct: string; agents: string; initials: string; email: string; role: 'hire' | 'work' | null; mode: 'buy' | 'sell'; seller: boolean }
@@ -51,8 +52,10 @@ export async function goLive(): Promise<void> {
     return;
   }
   Object.assign(ME, { name: me.name, acct: me.acct, agents: me.agents, initials: me.initials, email: me.email });
+  if (likedBefore === null) likedBefore = getState().liked;
   replace(OTHER_JOBS, []); replace(DONE_JOBS, []); replace(BIDS, []); replace(HELD as unknown as HeldView[], []); replace(ARRIVE, []);
   setState((s) => ({ live: true, seller: me.seller, role: s.role ?? me.role, mode: me.mode, orders: [], newJobs: [], extra: [], tLog: {}, chatLog: {} }));
+  await Promise.allSettled([loadMarket(), loadSaved()]);
   await refreshAll(true);
   if (!timer) timer = setInterval(() => { void refreshAll(false); }, 8000);
 }
@@ -63,7 +66,10 @@ export function leaveLive(): void {
   Object.assign(ME, SNAP.ME); Object.assign(JOB, SNAP.JOB);
   replace(SPEC, clone(SNAP.SPEC)); replace(OTHER_JOBS, clone(SNAP.OTHER)); replace(DONE_JOBS, clone(SNAP.DONE));
   replace(BIDS, clone(SNAP.BIDS)); replace(HELD as unknown as unknown[], clone(SNAP.HELD)); replace(ARRIVE, clone(SNAP.ARRIVE)); replace(REVIEWERS, clone(SNAP.REVIEWERS));
+  replace(GIGS, clone(SNAP.GIGS)); replace(SELLERS_DIR, clone(SNAP.SELLERS));
   setLiveOpenJobs(null);
+  if (likedBefore !== null) { setState({ liked: likedBefore }); likedBefore = null; }
+  setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));
   setState({ live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null });
 }
 
@@ -252,8 +258,14 @@ export async function livePlaceBid(): Promise<void> {
   if (res) { toast(`Offer sent on ${ref}: ${price.toFixed(2)} USDC in ${days} day${days === 1 ? '' : 's'}.`); await refreshAll(false); }
 }
 
-export async function liveRequestService(text: string): Promise<boolean> {
-  const res = await api<{ ref: string }>('/requests/v1', { body: { text } }).catch(() => null);
+export async function liveRequestService(text: string, serviceId?: string): Promise<boolean> {
+  const body: Record<string, unknown> = { text };
+  if (serviceId && UUID.test(serviceId)) body['service_id'] = serviceId;
+  const repo = fieldValue('rq-repo');
+  if (repo && repo !== 'github.com/lumen-labs/payroll-vault') body['repo_url'] = /^https:\/\//.test(repo) ? repo : `https://${repo.replace(/^http:\/\//, '')}`;
+  const budget = fieldValue('rq-b');
+  if (budget) body['budget_label'] = budget.slice(0, 40);
+  const res = await api<{ ref: string }>('/requests/v1', { body }).catch(() => null);
   if (!res) return false;
   toast(`${res.ref} created. The spec writer is drafting the tests.`);
   await refreshAll(false);
@@ -369,6 +381,10 @@ export async function livePublishSeller(): Promise<boolean> {
   if (!res) return false;
   setState({ seller: true });
   toast(`${res.message}. Selling as ${res.acct}.`);
+  if (getState().stake) {
+    const staked = await api<{ stake: number }>('/seller-profile/v1/stake', { body: { amount: 10 } }).catch(() => null);
+    if (staked) toast(`Starter stake of 10.00 USDC added. Your starter cap is now 60 USDC.`);
+  }
   await refreshAll(false);
   return true;
 }
@@ -523,4 +539,58 @@ export async function liveDisputeNext(): Promise<void> {
   if (!d.recheck?.outcome) { toast('The free re-check is still running. The reviewers decide 2 of 3.', 'hold'); return; }
   const until = d.finalizeAfter ? new Date(d.finalizeAfter).toLocaleString() : 'later';
   toast(`The re-check says ${d.recheck.outcome}. It stands unless the other side asks the DAO; it can be finalized after ${until}.`, 'hold', 5200);
+}
+
+/* ---------------- Find services, the sellers directory and Saved ---------------- */
+
+type GigView = Gig & { sellerKey?: string };
+type SellerDirView = SellerDir & { id?: string };
+interface SavedView { services: string[]; sellers: string[] }
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** Copies the live services and sellers into the sample lists. An empty market keeps the samples. */
+async function loadMarket(): Promise<void> {
+  const [gigs, sellers] = await Promise.all([
+    api<GigView[]>('/services/v1', { quiet: true }).catch(() => null),
+    api<SellerDirView[]>('/sellers/v1', { quiet: true }).catch(() => null),
+  ]);
+  if (gigs?.length) replace(GIGS, gigs);
+  if (sellers?.length) replace(SELLERS_DIR, sellers);
+  setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));
+}
+
+async function loadSaved(): Promise<void> {
+  const res = await api<SavedView>('/saved/v1', { quiet: true }).catch(() => null);
+  if (res) setState({ liked: res.services });
+}
+
+/** Saves or removes a service. Sample ids (when the market is empty) only toggle locally. */
+export async function liveLike(id: string): Promise<void> {
+  const on = getState().liked.includes(id);
+  setState((s) => ({ liked: on ? s.liked.filter((x) => x !== id) : [...s.liked, id] }));
+  if (!UUID.test(id)) return;
+  const res = on
+    ? await api(`/saved/v1/${id}`, { method: 'DELETE' }).catch(() => null)
+    : await api('/saved/v1', { body: { kind: 'service', target_id: id } }).catch(() => null);
+  if (!res) { setState((s) => ({ liked: on ? [...s.liked, id] : s.liked.filter((x) => x !== id) })); return; }
+  if (!on) toast(`Saved ${gigBy(id)?.seller ?? 'this seller'}. Your buyer agent will ask them first on matching jobs.`);
+}
+
+/** Refreshes one service from the API before its page shows. */
+export async function liveOpenGig(id: string): Promise<void> {
+  if (!UUID.test(id)) return;
+  const gig = await api<GigView>(`/services/v1/${id}`, { quiet: true }).catch(() => null);
+  if (!gig) return;
+  const i = GIGS.findIndex((g) => g.id === id);
+  if (i >= 0) GIGS[i] = gig; else GIGS.push(gig);
+  setState({});
+}
+
+/** Refreshes one seller's directory entry before their profile shows. */
+export async function liveWho(key: string): Promise<void> {
+  const seller = await api<SellerDirView>(`/sellers/v1/${encodeURIComponent(key)}`, { quiet: true }).catch(() => null);
+  if (!seller) return;
+  const i = SELLERS_DIR.findIndex((x) => x.key === key || x.key === seller.key);
+  if (i >= 0) SELLERS_DIR[i] = seller; else SELLERS_DIR.push(seller);
+  setState({});
 }

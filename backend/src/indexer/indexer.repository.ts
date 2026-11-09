@@ -107,7 +107,7 @@ export class IndexerRepository {
                 update: {},
                 select: { id: true },
             });
-        });
+        }, MONEY_TX);
     }
 
     async fundJob(key: JobRef, txHash: string, startBalance: number) {
@@ -332,10 +332,57 @@ export class IndexerRepository {
                         approvedSellers: { select: { sellerId: true } },
                     },
                 },
-                seller: { select: { id: true, nearAccountId: true } },
+                seller: { select: { id: true, nearAccountId: true, stake: true } },
                 acceptedBid: { select: { fraudScore: true, priceCheck: true, ownerApprovedRisk: true } },
             },
         });
+    }
+
+    async getRatingContext(key: JobRef) {
+        return prisma.job.findFirst({
+            where: key,
+            select: {
+                id: true, status: true, buyerId: true,
+                buyer: { select: { nearAccountId: true } },
+                seller: { select: { id: true, nearAccountId: true, ownerId: true } },
+                ratings: { select: { raterId: true } },
+            },
+        });
+    }
+
+    async getStakeContext(accountId: string) {
+        const [seller, rep] = await Promise.all([
+            prisma.seller.findUnique({ where: { nearAccountId: accountId }, select: { id: true, stake: true } }),
+            prisma.reputation.findUnique({ where: { accountId }, select: { settledJobs: true, disputedJobs: true } }),
+        ]);
+        return { seller, settled: rep?.settledJobs ?? 0, disputes: rep?.disputedJobs ?? 0 };
+    }
+
+    async addStake(accountId: string, amount: number, txHash: string, startBalance: number) {
+        return prisma.$transaction(async (tx) => {
+            const add = new Prisma.Decimal(amount);
+            const row = await tx.balance.findUnique({ where: { accountId }, select: { accountId: true } });
+            if (row) {
+                await tx.balance.update({ where: { accountId }, data: { available: { decrement: add }, syncedAt: new Date() }, select: { accountId: true } });
+            } else {
+                const owner = await tx.profile.findFirst({ where: { OR: [{ nearAccountId: accountId }, { agentsAccountId: accountId }] }, select: { id: true } });
+                await tx.balance.create({ data: { accountId, profileId: owner?.id ?? null, available: new Prisma.Decimal(startBalance).sub(add), syncedAt: new Date() }, select: { accountId: true } });
+            }
+            const seller = await tx.seller.update({ where: { nearAccountId: accountId }, data: { stake: { increment: add } }, select: { id: true, stake: true } });
+            await tx.sellerProfile.updateMany({ where: { sellerId: seller.id }, data: { stakeTx: txHash } });
+            return { sellerId: seller.id, stake: Number(seller.stake) };
+        }, MONEY_TX);
+    }
+
+    async returnStake(accountId: string) {
+        return prisma.$transaction(async (tx) => {
+            const seller = await tx.seller.findUnique({ where: { nearAccountId: accountId }, select: { id: true, ownerId: true, stake: true } });
+            if (!seller || seller.stake.lte(0)) return null;
+            await tx.seller.update({ where: { id: seller.id }, data: { stake: 0 }, select: { id: true } });
+            await tx.sellerProfile.updateMany({ where: { sellerId: seller.id }, data: { stakeTx: null } });
+            await this.credit(tx, accountId, seller.ownerId, seller.stake);
+            return { sellerId: seller.id, returned: Number(seller.stake) };
+        }, MONEY_TX);
     }
 
     async getBalance(accountId: string) {

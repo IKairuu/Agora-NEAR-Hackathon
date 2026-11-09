@@ -351,6 +351,7 @@ model Seller {
   deliveryTerms     String?   @map("delivery_terms")
   payoutChain       String?   @map("payout_chain")
   payoutAddress     String?   @map("payout_address")
+  stake             Decimal   @default(0) @db.Decimal(20, 6)
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 

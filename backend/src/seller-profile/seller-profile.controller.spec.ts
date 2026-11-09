@@ -12,6 +12,8 @@ describe('SellerProfileController', () => {
             getProfile: jest.fn().mockResolvedValue({ step: 0 }),
             editProfile: jest.fn().mockResolvedValue({ message: 'ok' }),
             publishProfile: jest.fn().mockResolvedValue({ message: 'ok' }),
+            addStake: jest.fn().mockResolvedValue({ message: 'ok' }),
+            returnStake: jest.fn().mockResolvedValue({ message: 'ok' }),
         };
         const module = await Test.createTestingModule({
             controllers: [SellerProfileController],
@@ -24,5 +26,9 @@ describe('SellerProfileController', () => {
         expect(service.editProfile).toHaveBeenCalledWith('Bearer t', { step: 1 });
         await controller.publishProfile('Bearer t');
         expect(service.publishProfile).toHaveBeenCalledWith('Bearer t');
+        await controller.addStake('Bearer t', { amount: 10 });
+        expect(service.addStake.mock.calls[0]).toEqual(['Bearer t', { amount: 10 }]);
+        await controller.returnStake('Bearer t');
+        expect(service.returnStake.mock.calls[0]).toEqual(['Bearer t']);
     });
 });
