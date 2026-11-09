@@ -1,8 +1,9 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
 import { AuthService } from '../auth/auth.service';
+import { ChainService } from '../chain/chain.service';
 import { JobRow, JobsRepository } from './jobs.repository';
-import { ago, JobsService, toOtherJob } from './jobs.service';
+import { ago, budgetHintOf, JobsService, toOtherJob } from './jobs.service';
 
 const USER = '0f9b6c1e-4a2d-4c8e-9b1a-7d3e5f6a8b90';
 const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
@@ -19,10 +20,22 @@ const row = (overrides: Partial<JobRow> = {}): JobRow => ({
 describe('JobsService', () => {
     let repo: jest.Mocked<JobsRepository>;
     let service: JobsService;
+    let chain: jest.Mocked<ChainService>;
+    const post = (over: object = {}) => ({
+        id: JOB, ref: 'J-1042', category: 'rust', onchainId: null, postedTx: null, budgetLabel: 'under 40', budgetMaxPublic: null,
+        buyer: { nearAccountId: 'lumen.testnet', agentsAccountId: 'agents.lumen.testnet' }, acceptanceSpecs: [{ specHash: 'ab'.repeat(32) }], ...over,
+    });
 
     beforeEach(() => {
-        repo = { getJobs: jest.fn(), getJob: jest.fn(), getOwnedJob: jest.fn(), publishJob: jest.fn() } as unknown as jest.Mocked<JobsRepository>;
-        service = new JobsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService);
+        repo = {
+            getJobs: jest.fn(), getJob: jest.fn(), getOwnedJob: jest.fn(), publishJob: jest.fn(),
+            getPostContext: jest.fn().mockResolvedValue(post()), setOnchainJob: jest.fn().mockResolvedValue(1), setBuyerAccounts: jest.fn(),
+        } as unknown as jest.Mocked<JobsRepository>;
+        chain = {
+            callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-post_job-5', explorer_url: '', ok: true, result: '1790000005' }),
+            createAccount: jest.fn().mockResolvedValue({ account_id: 'agora-0f9b6c1e.testnet', agents_account_id: 'agents.agora-0f9b6c1e.testnet' }),
+        } as unknown as jest.Mocked<ChainService>;
+        service = new JobsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService, chain);
     });
 
     it('maps rows to the OtherJob shape', () => {
@@ -50,7 +63,47 @@ describe('JobsService', () => {
     it('publishes a draft job with a locked spec', async () => {
         repo.getOwnedJob.mockResolvedValue(row({ status: 'draft' }));
         repo.publishJob.mockResolvedValue(1);
-        await expect(service.publishJob('Bearer t', { id: 'J-1042' })).resolves.toEqual({ message: 'Job Successfully Published', id: JOB, ref: 'J-1042' });
+        await expect(service.publishJob('Bearer t', { id: 'J-1042' })).resolves.toEqual({
+            message: 'Job Successfully Published', id: JOB, ref: 'J-1042', posted: true, onchainId: '1790000005', postTx: 'mock-post_job-5', postError: null,
+        });
+        const [role, signer, method, args] = chain.callAs.mock.calls[0]!;
+        expect([role, signer, method]).toEqual(['transaction_agent', 'agents.lumen.testnet', 'post_job']);
+        expect(args).toMatchObject({ category: 'rust', budget_hint: '40000000', spec_hash: 'ab'.repeat(32) });
+        expect(BigInt(args['deadline'] as string)).toBeGreaterThan(BigInt(Date.now()) * 1_000_000n);
+        expect(repo.setOnchainJob.mock.calls[0]).toEqual([USER, JOB, 1790000005n, 'mock-post_job-5']);
+    });
+
+    it('creates the buyer accounts before the first post_job', async () => {
+        repo.getOwnedJob.mockResolvedValue(row({ status: 'draft' }));
+        repo.publishJob.mockResolvedValue(1);
+        repo.getPostContext.mockResolvedValue(post({ buyer: { nearAccountId: null, agentsAccountId: null } }) as never);
+        await service.publishJob('Bearer t', { id: 'J-1042' });
+        expect(repo.setBuyerAccounts.mock.calls[0]).toEqual([USER, 'agora-0f9b6c1e.testnet', 'agents.agora-0f9b6c1e.testnet']);
+        expect(chain.callAs.mock.calls[0]![1]).toBe('agents.agora-0f9b6c1e.testnet');
+    });
+
+    it('does not post a job that is already on chain', async () => {
+        repo.getOwnedJob.mockResolvedValue(row({ status: 'open' }));
+        repo.publishJob.mockResolvedValue(1);
+        repo.getPostContext.mockResolvedValue(post({ onchainId: 1790000001n, postedTx: 'mock-post_job-1' }) as never);
+        await expect(service.publishJob('Bearer t', { id: 'J-1042' })).resolves.toMatchObject({ posted: true, onchainId: '1790000001', postTx: 'mock-post_job-1' });
+        expect(chain.callAs.mock.calls).toHaveLength(0);
+    });
+
+    it('keeps the publish when post_job is refused', async () => {
+        repo.getOwnedJob.mockResolvedValue(row({ status: 'draft' }));
+        repo.publishJob.mockResolvedValue(1);
+        chain.callAs.mockRejectedValue(new Error('No signing key for agents.lumen.testnet'));
+        await expect(service.publishJob('Bearer t', { id: 'J-1042' })).resolves.toMatchObject({
+            message: 'Job Successfully Published', posted: false, onchainId: null, postError: 'No signing key for agents.lumen.testnet',
+        });
+        expect(repo.setOnchainJob.mock.calls).toHaveLength(0);
+    });
+
+    it('turns the public budget into a budget hint', () => {
+        expect(budgetHintOf({ budgetMaxPublic: 55 as never, budgetLabel: 'under 40' })).toBe('55000000');
+        expect(budgetHintOf({ budgetMaxPublic: null, budgetLabel: '30–60' })).toBe('60000000');
+        expect(budgetHintOf({ budgetMaxPublic: null, budgetLabel: null })).toBe('0');
     });
 
     it('formats relative times', () => {
