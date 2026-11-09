@@ -50,28 +50,38 @@ export interface State {
 const storage = {
   get(k: string) { try { return localStorage.getItem(k); } catch { return null; } },
   set(k: string, v: string) { try { localStorage.setItem(k, v); } catch { /* ignore */ } },
+  remove(k: string) { try { localStorage.removeItem(k); } catch { /* ignore */ } },
 };
 export { storage };
 
+/* ---------------- signed-in session, kept across reloads and new tabs ---------------- */
+/** What is needed to show the signed-in app again after a reload. Real Google or GitHub tokens stay with Supabase. */
+interface SavedSession { via: string; role: State['role']; mode: State['mode']; seller: boolean; user: AuthUser | null }
+const SESSION_KEY = 'agora-session';
+function loadSession(): SavedSession | null {
+  try { const raw = storage.get(SESSION_KEY); return raw ? (JSON.parse(raw) as SavedSession) : null; } catch { return null; }
+}
+const saved = loadSession();
+
 let state: State = {
-  stage: 0, tour: -1, tourMin: false,
+  stage: saved ? 1 : 0, tour: -1, tourMin: false,
   jobTab: 'bids', dTab: 'open', walTab: 'assets',
   specGen: false, votes: null, voting: false, attack: null,
   cats: { rust: true, fe: true, tests: true, scripts: false }, strict: false, payout: 'near',
-  role: null, rolePick: null, after: null,
-  draft: '', seller: false, sellStep: 0, skills: { Rust: true, 'NEAR SDK': true, Tests: true }, stake: false, sellPay: 'near',
+  role: saved?.role ?? null, rolePick: null, after: null,
+  draft: '', seller: saved?.seller ?? false, sellStep: 0, skills: { Rust: true, 'NEAR SDK': true, Tests: true }, stake: false, sellPay: 'near',
   chatWith: 'patchsmith', chatLog: {}, typing: false,
   tLog: {}, thread: '', seenThreads: [], inboxF: '', flat: false,
-  mode: 'buy', oTab: 'active', orders: ORDERS.map((o) => ({ ...o })),
+  mode: saved?.mode ?? 'buy', oTab: 'active', orders: ORDERS.map((o) => ({ ...o })),
   liked: ['g3'], newJobs: [], nextJob: 1043, svc: 'g1',
   sort: 'best', f: {}, q: '', online: false, newOnly: false,
-  signVia: '', sellCoder: 'me', expOpen: 'cv', cvFile: '', avatarImg: '', coverImg: '', ghLinked: false,
+  signVia: saved?.via ?? '', sellCoder: 'me', expOpen: 'cv', cvFile: '', avatarImg: '', coverImg: '', ghLinked: false,
   fold: storage.get('agora-fold') === '1',
   hire: 'patchsmith', offerSt: '', declined: [], preNeg: false,
   asked: false, askText: '', bidsShown: 0, streamId: 0, jf: 'all', extra: [],
   who: 'patchsmith', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
-  user: null,
+  user: saved?.user ?? null,
   live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
   modal: null,
 };
@@ -79,6 +89,21 @@ let state: State = {
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
 const subscribe = (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; };
+
+/**
+ * Writes the session while the user is signed in and removes it once they sign out.
+ * Skipped during the demo tour, which moves `stage` itself, including to 0 on its first step.
+ */
+let savedRaw = saved ? JSON.stringify(saved) : '';
+listeners.add(() => {
+  if (state.tour >= 0) return;
+  const raw = state.stage >= 1
+    ? JSON.stringify({ via: state.signVia, role: state.role, mode: state.mode, seller: state.seller, user: state.user } satisfies SavedSession)
+    : '';
+  if (raw === savedRaw) return;
+  savedRaw = raw;
+  if (raw) storage.set(SESSION_KEY, raw); else storage.remove(SESSION_KEY);
+});
 
 export const getState = () => state;
 export function setState(patch: Partial<State> | ((s: State) => Partial<State>)) {
