@@ -1,0 +1,284 @@
+{
+  "name": "Agora transaction",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agora/transaction",
+        "options": {}
+      },
+      "id": "7c5e4ea6-1f48-4189-8bad-f672b2e8e197",
+      "name": "Webhook",
+      "webhookId": "2afeaaf9-5231-4f2b-bfad-5187c869b7e2",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $input.first().json;\nconst SIDE = { post_job: 'buyer', accept_offer: 'buyer', fund_job: 'buyer',\n               place_bid: 'seller', submit_delivery: 'seller' };\nif (!SIDE[e.action]) throw new Error('Action not allowed: ' + e.action);\nif (SIDE[e.action] !== e.side) throw new Error(`${e.action} must be signed by the ${SIDE[e.action]} side`);\nreturn [{ json: { ...e, milestoneIdx: e.milestoneIdx ?? 0, bidId: e.bidId ?? null } }];"
+      },
+      "id": "610a4049-103d-4ea0-8b13-247333bfe48f",
+      "name": "Allow-list",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT j.id AS job_id, j.category, j.buyer_id, j.seller_id, j.agreed_price, j.accepted_bid_id,\n  (SELECT row_to_json(x) FROM (\n     SELECT id, price, proposed_milestones, seller_id FROM bids\n      WHERE id = coalesce($2::uuid, j.accepted_bid_id)) x) AS bid,\n  (SELECT row_to_json(x) FROM (\n     SELECT idx, amount, status::text AS status FROM milestones\n      WHERE job_id = j.id AND idx = $3::int) x) AS milestone,\n  (SELECT row_to_json(x) FROM (\n     SELECT d.commit_sha, d.attempt FROM deliveries d\n       JOIN milestones m ON m.id = d.milestone_id\n      WHERE m.job_id = j.id AND m.idx = $3::int\n      ORDER BY d.attempt DESC LIMIT 1) x) AS delivery,\n  (SELECT a.spec_hash FROM acceptance_specs a\n    WHERE a.job_id = j.id AND a.locked_at IS NOT NULL\n    ORDER BY a.version DESC LIMIT 1) AS spec_hash,\n  (SELECT s.near_account_id FROM sellers s\n    WHERE s.id = coalesce(j.seller_id,\n          (SELECT seller_id FROM bids WHERE id = coalesce($2::uuid, j.accepted_bid_id)))) AS seller_account\nFROM jobs j\nWHERE j.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $json.jobId, $json.bidId, $json.milestoneIdx ] }}"
+        }
+      },
+      "id": "36c34f7f-3f1a-4d36-a5c9-214366a9cccc",
+      "name": "Load from DB",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "alwaysOutputData": true,
+      "position": [
+        672,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const e = $('Allow-list').first().json;\nconst j = $input.first().json;\nif (!j.job_id) throw new Error('Job not found');\nconst units = (x) => BigInt(Math.round(Number(x) * 1e6)).toString();\nconst ms = (b) => (Array.isArray(b?.proposed_milestones) && b.proposed_milestones.length\n  ? b.proposed_milestones.map((m) => units(m.amount))\n  : [units(b?.price ?? 0)]);\nlet args, amount = null;\n\nswitch (e.action) {\n  case 'post_job':\n    args = { job_id: j.job_id, category: j.category, spec_hash: j.spec_hash };\n    break;\n  case 'place_bid':\n    if (!j.bid) throw new Error('Bid not found');\n    args = { job_id: j.job_id, price: units(j.bid.price), milestones: ms(j.bid) };\n    break;\n  case 'accept_offer':\n    if (!j.bid) throw new Error('No bid to accept');\n    if (!j.spec_hash) throw new Error('No locked acceptance spec: lock the spec before accepting');\n    args = { job_id: j.job_id, bid_id: j.bid.id, seller: j.seller_account,\n             milestones: ms(j.bid), spec_hash: j.spec_hash };\n    amount = Number(j.bid.price);\n    break;\n  case 'fund_job':\n    if (!j.milestone) throw new Error('Milestone not found');\n    args = { job_id: j.job_id, milestone_idx: j.milestone.idx };\n    amount = Number(j.milestone.amount);\n    break;\n  case 'submit_delivery':\n    if (!j.delivery) throw new Error('No delivery recorded for this milestone');\n    args = { job_id: j.job_id, milestone_idx: e.milestoneIdx, commit_sha: j.delivery.commit_sha };\n    break;\n}\nreturn [{ json: {\n  signer: e.side === 'buyer' ? 'tx-buyer' : 'tx-seller',\n  method: e.action, args, amount,\n  ownerId: e.ownerId || j.buyer_id, jobId: j.job_id,\n} }];"
+      },
+      "id": "a5c83492-9fb0-4edd-9f27-bc7e199dbc2d",
+      "name": "Build args",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "kWwau45O3BaWYc1t",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/kWwau45O3BaWYc1t",
+          "cachedResultName": "Agora lib: chain-call"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "d8c8d4d5-3732-47b3-8481-147f9b347ce4",
+      "name": "Chain call",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1072,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const env = $('Read envelope').first().json;\nconst r = $input.first().json;\nconst amount = r.amount != null ? ` ${r.amount} USDC` : '';\nconst message = r.ok\n  ? `${r.method}${amount} signed by ${r.signer} (tx ${r.txHash})`\n  : `Contract refused ${r.method}${amount}: ${r.error} [${r.rejectedBy}]`;\nreturn [{ json: {\n  runId: env.runId, ownerId: env.ownerId, agentId: env.agentId, jobId: env.jobId,\n  actorLabel: 'Transaction agent', message, severity: r.ok ? 'ok' : 'block',\n  data: { method: r.method, ok: r.ok, txHash: r.txHash, explorer: r.explorer,\n          rejectedBy: r.rejectedBy, amount: r.amount },\n  notify: { runId: env.runId, role: 'transaction', ok: r.ok, jobId: env.jobId,\n            result: { method: r.method, txHash: r.txHash, explorer: r.explorer, rejectedBy: r.rejectedBy },\n            error: r.ok ? null : r.error },\n} }];"
+      },
+      "id": "2906d1c0-f80d-45fa-a764-b554d0e81256",
+      "name": "Finish",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1296,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "koU3lJvPFjQvlFkl",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/koU3lJvPFjQvlFkl",
+          "cachedResultName": "Agora lib: log-event"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "087a186e-4c68-464d-899d-f7ef086b0a67",
+      "name": "Log event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1520,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "r3JfXTsdFLB8aMM0",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/r3JfXTsdFLB8aMM0",
+          "cachedResultName": "Agora lib: notify-nest"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "bb2bd86f-96ed-441f-a467-4ddb7036514c",
+      "name": "Notify Nest",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1744,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const b = $input.first().json.body || {};\nif (!b.runId) throw new Error('Missing runId in the request body');\nreturn [{ json: {\n  runId: b.runId, ownerId: b.ownerId ?? null, jobId: b.jobId ?? null, agentId: b.agentId ?? null,\n  ...(b.payload || {}),\n} }];"
+      },
+      "id": "9077d729-b6b3-4ef2-81c0-22dd99ea7cbe",
+      "name": "Read envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Allow-list": {
+      "main": [
+        [
+          {
+            "node": "Load from DB",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load from DB": {
+      "main": [
+        [
+          {
+            "node": "Build args",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build args": {
+      "main": [
+        [
+          {
+            "node": "Chain call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chain call": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish": {
+      "main": [
+        [
+          {
+            "node": "Log event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log event": {
+      "main": [
+        [
+          {
+            "node": "Notify Nest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read envelope": {
+      "main": [
+        [
+          {
+            "node": "Allow-list",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "dba153b3-ac3a-4710-882b-01a7ede9d234",
+  "meta": {
+    "instanceId": "5bc1f41ff2889bec057c4b16904248e981cf8fde880ea6ae71e5a4721ead5080"
+  },
+  "nodeGroups": [],
+  "id": "G3vfO7G9deSRsMzl",
+  "tags": []
+}
