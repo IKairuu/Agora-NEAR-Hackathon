@@ -23,7 +23,7 @@ const offerSelect = {
     bidId: true,
     jobId: true,
     createdAt: true,
-    job: { select: { ref: true, buyerId: true, status: true, onchainId: true, buyer: { select: { nearAccountId: true, agentsAccountId: true } } } },
+    job: { select: { id: true, ref: true, buyerId: true, status: true, onchainId: true, buyer: { select: { nearAccountId: true, agentsAccountId: true } } } },
     seller: { select: { id: true, ownerId: true, displayName: true } },
 } satisfies Prisma.HireOfferSelect;
 
@@ -115,6 +115,18 @@ export class NegotiationsRepository {
             });
             return updated.count;
         });
+    }
+
+    async getAcceptTerms(jobId: string, bidId: string | null) {
+        const [bid, spec] = await Promise.all([
+            bidId ? prisma.bid.findFirst({ where: { id: bidId, jobId }, select: { id: true, onchainId: true, deliveryDays: true } }) : null,
+            prisma.acceptanceSpec.findFirst({
+                where: { jobId, lockedAt: { not: null } },
+                orderBy: { version: 'desc' },
+                select: { specHash: true, holdoutHash: true },
+            }),
+        ]);
+        return { bid, spec };
     }
 
     async setBuyerAccounts(buyerId: string, nearAccountId: string, agentsAccountId: string) {

@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { isUUID } from 'class-validator';
 import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
+import { chainIdOf, chainJobId, ChainService, usdcUnits } from '../chain/chain.service.js';
 import { CreateBid } from './dto/CreateBid.dto.js';
 import { CreateBidBulk } from './dto/CreateBidBulk.dto.js';
 import { EditBid } from './dto/EditBid.dto.js';
@@ -9,6 +10,13 @@ import { ExplainBid } from './dto/ExplainBid.dto.js';
 import { BidRow, BidsRepository, JobKey, ReputationRow } from './bids.repository.js';
 
 const BIDDABLE_STATUSES = ['open', 'negotiating'];
+
+export interface PlaceResult {
+    placed: boolean;
+    onchainBidId: string | null;
+    bidTx: string | null;
+    bidError: string | null;
+}
 const MIN_OFFERS = 3;
 
 const daysLabel = (days: number | null): string => (days === null ? '' : days === 1 ? '1 day' : `${days} days`);
@@ -70,6 +78,7 @@ export class BidsService {
         private readonly bidsRepository: BidsRepository,
         private readonly authService: AuthService,
         private readonly agentsService: AgentsService,
+        private readonly chainService: ChainService,
     ) {}
 
     async createBid(token: string, body: CreateBid) {
@@ -77,21 +86,24 @@ export class BidsService {
         const plan = await this.planBid(authId, body);
         const row = await this.bidsRepository.createBid(plan);
         if (!row) throw new ConflictException('You already made an offer on this job. Edit it instead.');
+        const chain = await this.placeBid(authId, plan, row);
         await this.checkBid(plan.buyerId, plan.jobId, row.id);
-        return { message: 'Bid Successfully Created', id: row.id };
+        return { message: 'Bid Successfully Created', id: row.id, ...chain };
     }
 
     async createBids(token: string, body: CreateBidBulk) {
         const authId = await this.authId(token);
         const ids: string[] = [];
+        const onchain: (PlaceResult & { id: string })[] = [];
         for (const item of body.items) {
             const plan = await this.planBid(authId, item);
             const row = await this.bidsRepository.createBid(plan);
             if (!row) throw new ConflictException(`You already made an offer on ${item.job_id}`);
+            onchain.push({ id: row.id, ...(await this.placeBid(authId, plan, row)) });
             await this.checkBid(plan.buyerId, plan.jobId, row.id);
             ids.push(row.id);
         }
-        return { message: 'Bids Successfully Created', ids };
+        return { message: 'Bids Successfully Created', ids, onchain };
     }
 
     async getBids(token: string, job: string) {
@@ -165,7 +177,27 @@ export class BidsService {
             const service = job.serviceId ? await this.bidsRepository.getServiceSeller(job.serviceId) : null;
             if (!service || service.sellerId !== seller.id) throw new ForbiddenException('This request was sent to another seller');
         }
-        return { jobId: job.id, buyerId: job.buyerId, sellerId: seller.id, price: body.price, days: body.days, note: body.note?.trim() || null };
+        return {
+            jobId: job.id, buyerId: job.buyerId, sellerId: seller.id, price: body.price, days: body.days, note: body.note?.trim() || null,
+            sellerAccount: seller.nearAccountId, chainJobId: chainJobId(job),
+        };
+    }
+
+    private async placeBid(
+        authId: string,
+        plan: { price: number; days: number; sellerAccount: string; chainJobId: string },
+        row: { id: string; onchainId: bigint | null; onchainTx: string | null },
+    ): Promise<PlaceResult> {
+        if (row.onchainId !== null) return { placed: true, onchainBidId: row.onchainId.toString(), bidTx: row.onchainTx, bidError: null };
+        try {
+            const tx = await this.chainService.callAs('owner', plan.sellerAccount, 'place_bid', { job_id: plan.chainJobId, price: usdcUnits(plan.price), days: plan.days });
+            const onchainId = chainIdOf(tx.result);
+            if (onchainId === null) throw new BadRequestException('place_bid returned no bid id');
+            await this.bidsRepository.setOnchainBid(authId, row.id, onchainId, tx.tx_hash);
+            return { placed: true, onchainBidId: onchainId.toString(), bidTx: tx.tx_hash, bidError: null };
+        } catch (e) {
+            return { placed: false, onchainBidId: null, bidTx: null, bidError: e instanceof Error ? e.message : 'Placing the bid on chain failed' };
+        }
     }
 
     private async checkBid(buyerId: string, jobId: string, bidId: string) {

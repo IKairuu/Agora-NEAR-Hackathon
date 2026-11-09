@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
+import { chainBidId, chainJobId, ChainService } from '../chain/chain.service.js';
 import { IndexerService } from '../indexer/indexer.service.js';
 import { InternalRepository, NotificationInput } from './internal.repository.js';
 
@@ -66,6 +67,12 @@ export const judgeRun = (r: Pick<RunResult, 'error' | 'exitCode' | 'installExit'
     return { verdict: 'pass', reason: null };
 };
 
+export const bidFlagsOf = (bid: { priceCheck: string | null; fraudScore: number | null }) => ({
+    price_check_ok: bid.priceCheck !== 'held',
+    fraud_score: Math.min(100, Math.max(0, Math.round(bid.fraudScore ?? 0))),
+    held: bid.priceCheck === 'held',
+});
+
 const text = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
 
 @Injectable()
@@ -73,6 +80,7 @@ export class InternalService {
     constructor(
         private readonly internalRepository: InternalRepository,
         private readonly indexer: IndexerService,
+        private readonly chainService: ChainService,
     ) {}
 
     async agentNotify(raw: unknown) {
@@ -92,6 +100,7 @@ export class InternalService {
                 const count = await this.internalRepository.setBidStatus(bid.id, bid.status, decision.status, decision.reason);
                 if (count > 0) {
                     actions.push(`bid ${decision.status}`);
+                    actions.push(await this.flagBid(bid));
                     const price = Number(bid.price).toFixed(2);
                     notes.push(decision.status === 'live'
                         ? { userId: bid.job.buyerId, kind: 'offer', title: `New offer on ${bid.job.ref}`, body: `${bid.seller.displayName} offered ${price} USDC`, link: `/job?id=${bid.job.ref}` }
@@ -150,6 +159,16 @@ export class InternalService {
         const notified = await this.internalRepository.createNotifications(notes);
         if (notified > 0) actions.push(`notified ${notified}`);
         return { message: 'Agent Result Successfully Received', role: body.role, actions };
+    }
+
+    private async flagBid(bid: { id: string; onchainId: bigint | null; priceCheck: string | null; fraudScore: number | null; job: { ref: string; onchainId: bigint | null } }): Promise<string> {
+        try {
+            const oracle = process.env['AGORA_FRAUD_ORACLE_ACCOUNT'] ?? 'oracle.agora-testnet.testnet';
+            await this.chainService.callAs('fraud_oracle', oracle, 'set_bid_flags', { job_id: chainJobId(bid.job), bid_id: chainBidId(bid), ...bidFlagsOf(bid) });
+            return 'bid flags on chain';
+        } catch {
+            return 'bid flags not on chain';
+        }
     }
 
     async runnerResult(raw: unknown) {

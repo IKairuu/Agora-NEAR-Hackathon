@@ -2,6 +2,7 @@ jest.mock('../prisma', () => ({ prisma: {} }));
 
 import { AgentsService } from '../agents/agents.service';
 import { AuthService } from '../auth/auth.service';
+import { ChainService } from '../chain/chain.service';
 import { BidRow, BidsRepository } from './bids.repository';
 import { bestPickOf, BidsService, toOffer } from './bids.service';
 
@@ -23,6 +24,7 @@ describe('BidsService', () => {
     let repo: jest.Mocked<BidsRepository>;
     let service: BidsService;
     let agents: jest.Mocked<AgentsService>;
+    let chain: jest.Mocked<ChainService>;
     let caller = BUYER;
 
     beforeEach(() => {
@@ -30,26 +32,62 @@ describe('BidsService', () => {
         repo = {
             getJobForBidding: jest.fn(), getServiceSeller: jest.fn(), getMySellers: jest.fn(), createBid: jest.fn(),
             getOwnedBid: jest.fn(), editBid: jest.fn(), explainBid: jest.fn(), deleteBid: jest.fn(),
-            getOwnedJob: jest.fn(), getBids: jest.fn(), getReputations: jest.fn(),
+            getOwnedJob: jest.fn(), getBids: jest.fn(), getReputations: jest.fn(), setOnchainBid: jest.fn().mockResolvedValue(1),
         } as unknown as jest.Mocked<BidsRepository>;
+        chain = { callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-place_bid-9', explorer_url: '', ok: true, result: '1790000009' }) } as unknown as jest.Mocked<ChainService>;
         agents = { dispatch: jest.fn().mockResolvedValue({ status: 'sent' }) } as unknown as jest.Mocked<AgentsService>;
-        service = new BidsService(repo, { verifySessionToken: jest.fn(async () => caller) } as unknown as AuthService, agents);
+        service = new BidsService(repo, { verifySessionToken: jest.fn(async () => caller) } as unknown as AuthService, agents, chain);
     });
 
     describe('createBid', () => {
-        const open = { id: JOB, ref: 'J-1042', buyerId: BUYER, status: 'open', visibility: 'public', serviceId: null } as never;
+        const open = { id: JOB, ref: 'J-1042', onchainId: null, buyerId: BUYER, status: 'open', visibility: 'public', serviceId: null } as never;
 
         it('places an offer on an open public job', async () => {
             caller = SELLER_USER;
             repo.getJobForBidding.mockResolvedValue(open);
-            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent' }]);
-            repo.createBid.mockResolvedValue({ id: 'b1' });
-            await expect(service.createBid('Bearer t', { job_id: 'J-1042', price: 36, days: 1 } as never)).resolves.toEqual({ message: 'Bid Successfully Created', id: 'b1' });
-            expect(repo.createBid.mock.calls[0]![0]).toEqual({ jobId: JOB, buyerId: BUYER, sellerId: SELLER, price: 36, days: 1, note: null });
+            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent', nearAccountId: 'patchsmith.testnet' }]);
+            repo.createBid.mockResolvedValue({ id: 'b1', onchainId: null, onchainTx: null });
+            await expect(service.createBid('Bearer t', { job_id: 'J-1042', price: 36, days: 1 } as never)).resolves.toEqual({
+                message: 'Bid Successfully Created', id: 'b1', placed: true, onchainBidId: '1790000009', bidTx: 'mock-place_bid-9', bidError: null,
+            });
+            expect(repo.createBid.mock.calls[0]![0]).toMatchObject({ jobId: JOB, buyerId: BUYER, sellerId: SELLER, price: 36, days: 1, note: null });
+            expect(chain.callAs.mock.calls[0]).toEqual(['owner', 'patchsmith.testnet', 'place_bid', { job_id: 'J-1042', price: '36000000', days: 1 }]);
+            expect(repo.setOnchainBid.mock.calls[0]).toEqual([SELLER_USER, 'b1', 1790000009n, 'mock-place_bid-9']);
             expect(agents.dispatch.mock.calls).toEqual([
                 ['fraud_lure', { ownerId: BUYER, jobId: JOB, payload: { subjectType: 'bid', subjectId: 'b1' } }],
                 ['price_check', { ownerId: BUYER, jobId: JOB, payload: { bidId: 'b1' } }],
             ]);
+        });
+
+        it('sends the numeric job id once the job is on chain', async () => {
+            caller = SELLER_USER;
+            repo.getJobForBidding.mockResolvedValue({ ...(open as object), onchainId: 1790000001n } as never);
+            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent', nearAccountId: 'patchsmith.testnet' }]);
+            repo.createBid.mockResolvedValue({ id: 'b1', onchainId: null, onchainTx: null });
+            await service.createBid('Bearer t', { job_id: 'J-1042', price: 32.5, days: 2 } as never);
+            expect(chain.callAs.mock.calls[0]![3]).toEqual({ job_id: '1790000001', price: '32500000', days: 2 });
+        });
+
+        it('keeps the offer when place_bid is refused', async () => {
+            caller = SELLER_USER;
+            repo.getJobForBidding.mockResolvedValue(open);
+            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent', nearAccountId: 'patchsmith.testnet' }]);
+            repo.createBid.mockResolvedValue({ id: 'b1', onchainId: null, onchainTx: null });
+            chain.callAs.mockRejectedValue(new Error('Contract refused place_bid: Not a registered seller'));
+            await expect(service.createBid('Bearer t', { job_id: 'J-1042', price: 36, days: 1 } as never)).resolves.toMatchObject({
+                id: 'b1', placed: false, onchainBidId: null, bidError: 'Contract refused place_bid: Not a registered seller',
+            });
+            expect(repo.setOnchainBid.mock.calls).toHaveLength(0);
+            expect(agents.dispatch.mock.calls).toHaveLength(2);
+        });
+
+        it('does not place a re-opened offer twice', async () => {
+            caller = SELLER_USER;
+            repo.getJobForBidding.mockResolvedValue(open);
+            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent', nearAccountId: 'patchsmith.testnet' }]);
+            repo.createBid.mockResolvedValue({ id: 'b1', onchainId: 1790000004n, onchainTx: 'mock-place_bid-4' });
+            await expect(service.createBid('Bearer t', { job_id: 'J-1042', price: 36, days: 1 } as never)).resolves.toMatchObject({ placed: true, onchainBidId: '1790000004', bidTx: 'mock-place_bid-4' });
+            expect(chain.callAs.mock.calls).toHaveLength(0);
         });
 
         it('blocks self-dealing', async () => {
@@ -67,7 +105,7 @@ describe('BidsService', () => {
         it('rejects a second offer on the same job', async () => {
             caller = SELLER_USER;
             repo.getJobForBidding.mockResolvedValue(open);
-            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent' }]);
+            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent', nearAccountId: 'patchsmith.testnet' }]);
             repo.createBid.mockResolvedValue(null);
             await expect(service.createBid('Bearer t', { job_id: 'J-1042', price: 36, days: 1 } as never)).rejects.toThrow('already made an offer');
         });
@@ -75,7 +113,7 @@ describe('BidsService', () => {
         it('keeps direct requests for the chosen seller', async () => {
             caller = SELLER_USER;
             repo.getJobForBidding.mockResolvedValue({ ...(open as object), visibility: 'direct', serviceId: 'svc' } as never);
-            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent' }]);
+            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'agent', nearAccountId: 'patchsmith.testnet' }]);
             repo.getServiceSeller.mockResolvedValue({ sellerId: 'someone-else' });
             await expect(service.createBid('Bearer t', { job_id: 'J-1042', price: 36, days: 1 } as never)).rejects.toThrow('another seller');
         });

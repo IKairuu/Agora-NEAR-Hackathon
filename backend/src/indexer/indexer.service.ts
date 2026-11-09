@@ -12,6 +12,8 @@ const DISPUTE_METHODS = ['open_dispute', 'ft_transfer_call', 'resolve_dispute', 
 export const STARTER_STAKE = 10;
 export const STAKED_SELLER_CAP = 60;
 const NEW_SELLER_SETTLED_JOBS = 3;
+const MAX_BIDS_PER_JOB = 20;
+const LISTING_METHODS = ['post_job', 'place_bid', 'accept_offer', 'set_bid_flags'];
 
 export type Party = 'buyer' | 'seller';
 export type Outcome = 'release' | 'refund' | 'split';
@@ -187,6 +189,93 @@ export const stakeRefusal = (
     return null;
 };
 
+export type BidKey = { onchainId: bigint } | { id: string };
+
+export const bidRefOf = (value: unknown): BidKey | null => {
+    const v = typeof value === 'number' || typeof value === 'bigint' ? String(value) : value;
+    if (typeof v !== 'string') return null;
+    if (/^\d{1,19}$/.test(v)) return { onchainId: BigInt(v) };
+    if (/^[0-9a-f-]{36}$/i.test(v)) return { id: v };
+    return null;
+};
+
+const bigOf = (value: unknown): bigint | null => {
+    const v = typeof value === 'number' || typeof value === 'bigint' ? String(value) : value;
+    return typeof v === 'string' && /^\d{1,39}$/.test(v) ? BigInt(v) : null;
+};
+
+const filled = (value: unknown): boolean => typeof value === 'string' && value.length > 0;
+
+const futureRefusal = (deadline: unknown, nowNs: bigint): string | null => {
+    const d = bigOf(deadline);
+    return d === null || d <= nowNs ? 'Deadline must be in the future' : null;
+};
+
+type ChainJob = NonNullable<Awaited<ReturnType<IndexerRepository['getChainJob']>>>;
+type ChainBid = NonNullable<Awaited<ReturnType<IndexerRepository['getChainBid']>>>;
+
+export const postJobRefusal = (args: Record<string, unknown>, nowNs: bigint): string | null => {
+    if (!filled(args['category'])) return 'Category is required';
+    if (!filled(args['spec_hash'])) return 'Spec hash is required';
+    return futureRefusal(args['deadline'], nowNs);
+};
+
+export const placeBidRefusal = (
+    call: Pick<MockCall, 'signer' | 'args'>,
+    ctx: { registered: boolean; job: ChainJob | null; bidsOnJob: number; alreadyBid: boolean },
+): string | null => {
+    if (!ctx.registered) return 'Not a registered seller';
+    const price = bigOf(call.args['price']);
+    if (price === null || price <= 0n) return 'Price must be positive';
+    const days = Number(call.args['days']);
+    if (!(Number.isInteger(days) && days > 0)) return 'Days must be positive';
+    if (!ctx.job) return 'Job not found';
+    if (!['open', 'negotiating'].includes(ctx.job.status)) return 'Job is not open for bids';
+    if (ctx.job.buyer.nearAccountId && ctx.job.buyer.nearAccountId === ownerOf(call.signer)) return 'Cannot bid on your own job';
+    if (ctx.bidsOnJob >= MAX_BIDS_PER_JOB) return 'Too many bids on this job';
+    if (ctx.alreadyBid) return 'Seller already bid on this job';
+    return null;
+};
+
+export const acceptOfferRefusal = (
+    call: Pick<MockCall, 'signer' | 'args'>,
+    ctx: { job: ChainJob | null; alreadyAccepted: boolean; bid: ChainBid | null },
+    nowNs: bigint,
+): string | null => {
+    const { job, bid } = ctx;
+    if (!job) return 'Job not found';
+    if (!job.buyer.nearAccountId || job.buyer.nearAccountId !== ownerOf(call.signer)) return 'Only the buyer can accept an offer';
+    if (ctx.alreadyAccepted || !['open', 'negotiating', 'agreed'].includes(job.status)) return 'Job is not open';
+    if (!bid) return 'Bid not found';
+    if (bid.jobId !== job.id) return 'Bid is not on this job';
+    if (bid.seller.ownerId === job.buyerId || ownerOf(bid.seller.nearAccountId) === job.buyer.nearAccountId) return 'Self-dealing: seller is the buyer';
+    const price = bigOf(call.args['price']);
+    if (price === null || price <= 0n || price > baseUnits(bid.price)) return 'Price must be positive and not above the bid';
+    if (!filled(call.args['spec_hash'])) return 'Spec hash is required';
+    if (!filled(call.args['holdout_hash'])) return 'Holdout hash is required';
+    if (!(Number(call.args['attempts']) >= 1)) return 'At least one attempt';
+    return futureRefusal(call.args['deadline'], nowNs);
+};
+
+export const bidFlagsRefusal = (call: Pick<MockCall, 'signer' | 'args'>, oracle: string, bid: ChainBid | null, jobId: string | null): string | null => {
+    if (call.signer !== oracle) return 'Only the fraud oracle can flag bids';
+    const score = Number(call.args['fraud_score']);
+    if (!(Number.isInteger(score) && score >= 0 && score <= 100)) return 'Fraud score is 0 to 100';
+    if (!bid) return 'Bid not found';
+    if (bid.jobId !== jobId) return 'Bid is not on this job';
+    return null;
+};
+
+export interface RealCall {
+    txHash: string;
+    signer: string;
+    method: string;
+    args: Record<string, unknown>;
+    ok: boolean;
+    error: string | null;
+    jobKey: JobRef | null;
+}
+
 @Injectable()
 export class IndexerService {
     now: () => number = () => Date.now();
@@ -199,6 +288,20 @@ export class IndexerService {
 
     private dao(): string {
         return process.env['AGORA_DAO_ACCOUNT'] ?? 'agora-dao.sputnikv2.testnet';
+    }
+
+    private oracle(): string {
+        return process.env['AGORA_FRAUD_ORACLE_ACCOUNT'] ?? 'oracle.agora-testnet.testnet';
+    }
+
+    private nowNs(): bigint {
+        return BigInt(this.now()) * 1_000_000n;
+    }
+
+    async recordRealCall(call: RealCall) {
+        return this.indexerRepository.recordTx({
+            txHash: call.txHash, signer: call.signer, method: call.method, args: call.args as Prisma.InputJsonValue, ok: call.ok, error: call.error, jobKey: call.jobKey,
+        });
     }
 
     async onMockCall(call: MockCall) {
@@ -280,7 +383,24 @@ export class IndexerService {
         });
     }
 
+    private async listingRefusal(call: MockCall, jobKey: JobRef | null): Promise<string | null> {
+        if (call.method === 'post_job') return postJobRefusal(call.args, this.nowNs());
+        const job = jobKey ? await this.indexerRepository.getChainJob(jobKey) : null;
+        if (call.method === 'place_bid') {
+            const registered = await this.indexerRepository.isSeller(ownerOf(call.signer));
+            const bidsOnJob = job ? await this.indexerRepository.countSuccessTxs(job.id, 'place_bid') : 0;
+            const alreadyBid = job ? (await this.indexerRepository.countSuccessTxs(job.id, 'place_bid', call.signer)) > 0 : false;
+            return placeBidRefusal(call, { registered, job, bidsOnJob, alreadyBid });
+        }
+        const bidKey = bidRefOf(call.args['bid_id']);
+        const bid = bidKey ? await this.indexerRepository.getChainBid(bidKey) : null;
+        if (call.method === 'set_bid_flags') return bidFlagsRefusal(call, this.oracle(), bid, job?.id ?? null);
+        const alreadyAccepted = job ? (await this.indexerRepository.countSuccessTxs(job.id, 'accept_offer')) > 0 : false;
+        return acceptOfferRefusal(call, { job, alreadyAccepted, bid }, this.nowNs());
+    }
+
     private async refusalFor(call: MockCall, jobKey: JobRef | null): Promise<string | null> {
+        if (LISTING_METHODS.includes(call.method)) return this.listingRefusal(call, jobKey);
         if (DISPUTE_METHODS.includes(call.method)) {
             const ctx = jobKey ? await this.indexerRepository.getDisputeContext(jobKey) : null;
             let free = 0;

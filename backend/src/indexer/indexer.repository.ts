@@ -338,6 +338,29 @@ export class IndexerRepository {
         });
     }
 
+    async getChainJob(key: JobRef) {
+        return prisma.job.findFirst({
+            where: key,
+            select: { id: true, status: true, buyerId: true, buyer: { select: { nearAccountId: true } } },
+        });
+    }
+
+    async getChainBid(key: { onchainId: bigint } | { id: string }) {
+        return prisma.bid.findFirst({
+            where: key,
+            select: { id: true, jobId: true, price: true, seller: { select: { nearAccountId: true, ownerId: true } } },
+        });
+    }
+
+    async isSeller(accountId: string) {
+        const row = await prisma.seller.findUnique({ where: { nearAccountId: accountId }, select: { id: true } });
+        return row !== null;
+    }
+
+    async countSuccessTxs(jobId: string, method: string, signer?: string) {
+        return prisma.chainTx.count({ where: { jobId, method, status: 'success', ...(signer ? { signerAccount: signer } : {}) } });
+    }
+
     async getRatingContext(key: JobRef) {
         return prisma.job.findFirst({
             where: key,

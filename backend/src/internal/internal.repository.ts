@@ -44,8 +44,8 @@ export class InternalRepository {
         return prisma.bid.findFirst({
             where: { id },
             select: {
-                id: true, status: true, price: true, priceCheck: true, fraudScore: true, holdReason: true,
-                job: { select: { id: true, ref: true, buyerId: true } },
+                id: true, onchainId: true, status: true, price: true, priceCheck: true, fraudScore: true, holdReason: true,
+                job: { select: { id: true, ref: true, onchainId: true, buyerId: true } },
                 seller: { select: { displayName: true, ownerId: true } },
             },
         });

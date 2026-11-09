@@ -586,6 +586,7 @@ model Bid {
   sellerExplanation   String?                  @map("seller_explanation")
   ownerApprovedRisk   Boolean                  @default(false) @map("owner_approved_risk")
   onchainTx           String?                  @map("onchain_tx")
+  onchainId           BigInt?                  @unique @map("onchain_id")
 
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)

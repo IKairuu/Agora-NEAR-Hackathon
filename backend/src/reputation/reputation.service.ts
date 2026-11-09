@@ -63,7 +63,7 @@ export class ReputationService {
         const rater = asBuyer ? job.buyer.nearAccountId : job.seller.nearAccountId;
         const ratee = asBuyer ? job.seller.nearAccountId : job.buyer.nearAccountId;
         if (!rater || !ratee) throw new BadRequestException('Both sides need a NEAR account to rate');
-        const tx = await this.chainService.callAs('owner', rater, 'rate', { job_id: job.ref, stars: body.stars });
+        const tx = await this.chainService.callAs('owner', rater, 'rate', { job_id: job.onchainId?.toString() ?? job.ref, stars: body.stars });
         try {
             const row = await this.reputationRepository.createRating({
                 jobId: job.id, raterId: authId, rateeAccount: ratee, rateeUserId: asBuyer ? job.seller.ownerId : job.buyerId,

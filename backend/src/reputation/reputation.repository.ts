@@ -33,7 +33,7 @@ export class ReputationRepository {
         return prisma.job.findFirst({
             where: { ...key, OR: [{ buyerId: userId }, { seller: { ownerId: userId } }] },
             select: {
-                id: true, ref: true, status: true, buyerId: true,
+                id: true, ref: true, onchainId: true, status: true, buyerId: true,
                 buyer: { select: { nearAccountId: true } },
                 seller: { select: { ownerId: true, nearAccountId: true } },
                 ratings: { where: { raterId: userId }, select: { id: true } },

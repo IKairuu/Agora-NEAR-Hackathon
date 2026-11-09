@@ -87,6 +87,31 @@ export class JobsRepository {
         });
     }
 
+    async getPostContext(userId: string, id: string) {
+        return prisma.job.findFirst({
+            where: { id, buyerId: userId },
+            select: {
+                id: true, ref: true, category: true, onchainId: true, postedTx: true, budgetLabel: true, budgetMaxPublic: true,
+                buyer: { select: { nearAccountId: true, agentsAccountId: true } },
+                acceptanceSpecs: { where: { lockedAt: { not: null } }, select: { specHash: true }, orderBy: { version: 'desc' }, take: 1 },
+            },
+        });
+    }
+
+    async setBuyerAccounts(userId: string, nearAccountId: string, agentsAccountId: string) {
+        return prisma.$transaction(async (tx) =>
+            tx.profile.update({ where: { id: userId }, data: { nearAccountId, agentsAccountId }, select: { id: true } }),
+        );
+    }
+
+    async setOnchainJob(userId: string, id: string, onchainId: bigint, txHash: string) {
+        return prisma.$transaction(async (tx) => {
+            const updated = await tx.job.updateMany({ where: { id, buyerId: userId, onchainId: null }, data: { onchainId, postedTx: txHash } });
+            await tx.chainTx.updateMany({ where: { txHash, jobId: null }, data: { jobId: id } });
+            return updated.count;
+        });
+    }
+
     async publishJob(userId: string, id: string) {
         return prisma.$transaction(async (tx) => {
             const updated = await tx.job.updateMany({

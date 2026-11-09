@@ -1,8 +1,11 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { AuthService } from '../auth/auth.service.js';
+import { chainIdOf, ChainService, deadlineIn, usdcUnits } from '../chain/chain.service.js';
 import { PublishJob } from './dto/PublishJob.dto.js';
 import { JobKey, JobRow, JobsRepository, OpenJobRow } from './jobs.repository.js';
+
+export const POST_DEADLINE_DAYS = 30;
 
 type Pill = [string, string];
 
@@ -29,6 +32,19 @@ export const STAGES: Record<string, StageInfo> = {
     expired: { stage: 'Expired', at: 7, grp: 'done', status: ['', 'Expired'] },
     cancelled: { stage: 'Cancelled', at: 0, grp: 'done', status: ['', 'Cancelled'] },
 };
+
+export const budgetHintOf = (job: { budgetMaxPublic: { toString(): string } | null; budgetLabel: string | null }): string => {
+    if (job.budgetMaxPublic !== null) return usdcUnits(job.budgetMaxPublic);
+    const numbers = (job.budgetLabel ?? '').match(/\d+(\.\d+)?/g)?.map(Number) ?? [];
+    return numbers.length > 0 ? usdcUnits(Math.max(...numbers)) : '0';
+};
+
+export interface PostResult {
+    posted: boolean;
+    onchainId: string | null;
+    postTx: string | null;
+    postError: string | null;
+}
 
 const stageOf = (status: string): StageInfo => STAGES[status] ?? STAGES['draft']!;
 
@@ -120,6 +136,7 @@ export class JobsService {
     constructor(
         private readonly jobsRepository: JobsRepository,
         private readonly authService: AuthService,
+        private readonly chainService: ChainService,
     ) {}
 
     async getJobs(token: string, grp?: string) {
@@ -144,7 +161,33 @@ export class JobsService {
         if (!row.acceptanceSpecs[0]?.lockedAt) throw new BadRequestException('Lock the spec before posting the job');
         const count = await this.jobsRepository.publishJob(authId, row.id);
         if (count === 0) throw new BadRequestException('This job is already past the offers stage');
-        return { message: 'Job Successfully Published', id: row.id, ref: row.ref };
+        const chain = await this.postJob(authId, row.id);
+        return { message: 'Job Successfully Published', id: row.id, ref: row.ref, ...chain };
+    }
+
+    private async postJob(authId: string, id: string): Promise<PostResult> {
+        try {
+            const job = await this.jobsRepository.getPostContext(authId, id);
+            if (!job) throw new NotFoundException('Job not found');
+            if (job.onchainId !== null) return { posted: true, onchainId: job.onchainId.toString(), postTx: job.postedTx, postError: null };
+            const specHash = job.acceptanceSpecs[0]?.specHash;
+            if (!specHash) throw new BadRequestException('The locked spec has no hash');
+            let agents = job.buyer.agentsAccountId;
+            if (!agents) {
+                const created = await this.chainService.createAccount(authId);
+                agents = created.agents_account_id;
+                await this.jobsRepository.setBuyerAccounts(authId, job.buyer.nearAccountId ?? created.account_id, agents);
+            }
+            const tx = await this.chainService.callAs('transaction_agent', agents, 'post_job', {
+                category: job.category, budget_hint: budgetHintOf(job), spec_hash: specHash, deadline: deadlineIn(POST_DEADLINE_DAYS),
+            });
+            const onchainId = chainIdOf(tx.result);
+            if (onchainId === null) throw new BadRequestException('post_job returned no job id');
+            await this.jobsRepository.setOnchainJob(authId, id, onchainId, tx.tx_hash);
+            return { posted: true, onchainId: onchainId.toString(), postTx: tx.tx_hash, postError: null };
+        } catch (e) {
+            return { posted: false, onchainId: null, postTx: null, postError: e instanceof Error ? e.message : 'Posting the job on chain failed' };
+        }
     }
 
     async getOpenJobs(category?: string, q?: string) {

@@ -34,7 +34,7 @@ export class BidsRepository {
     async getJobForBidding(job: JobKey) {
         return prisma.job.findFirst({
             where: job,
-            select: { id: true, ref: true, buyerId: true, status: true, visibility: true, serviceId: true },
+            select: { id: true, ref: true, onchainId: true, buyerId: true, status: true, visibility: true, serviceId: true },
         });
     }
 
@@ -46,7 +46,7 @@ export class BidsRepository {
         return prisma.seller.findMany({
             where: { ownerId: userId },
             orderBy: { createdAt: 'asc' },
-            select: { id: true, kind: true },
+            select: { id: true, kind: true, nearAccountId: true },
         });
     }
 
@@ -58,13 +58,20 @@ export class BidsRepository {
                 return tx.bid.update({
                     where: { id: existing.id },
                     data: { price: data.price, deliveryDays: data.days, note: data.note, status: 'pending_check', holdReason: null, fraudScore: null },
-                    select: { id: true },
+                    select: { id: true, onchainId: true, onchainTx: true },
                 });
             }
             return tx.bid.create({
                 data: { jobId: data.jobId, sellerId: data.sellerId, price: data.price, deliveryDays: data.days, note: data.note },
-                select: { id: true },
+                select: { id: true, onchainId: true, onchainTx: true },
             });
+        });
+    }
+
+    async setOnchainBid(userId: string, id: string, onchainId: bigint, txHash: string) {
+        return prisma.$transaction(async (tx) => {
+            const updated = await tx.bid.updateMany({ where: { id, seller: { ownerId: userId }, onchainId: null }, data: { onchainId, onchainTx: txHash } });
+            return updated.count;
         });
     }
 

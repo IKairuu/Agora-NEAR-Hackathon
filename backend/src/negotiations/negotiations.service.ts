@@ -1,7 +1,7 @@
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { AuthService } from '../auth/auth.service.js';
-import { ChainService } from '../chain/chain.service.js';
+import { chainBidId, chainJobId, ChainService, deadlineIn, usdcUnits } from '../chain/chain.service.js';
 import { CreateNegotiation } from './dto/CreateNegotiation.dto.js';
 import { CreateNegotiationBulk } from './dto/CreateNegotiationBulk.dto.js';
 import { HireSeller } from './dto/HireSeller.dto.js';
@@ -10,6 +10,18 @@ import { BidContext, JobKey, NegotiationsRepository, OfferRow } from './negotiat
 export const MAX_ROUNDS = 3;
 const NEGOTIABLE_JOB = ['open', 'negotiating'];
 const HIREABLE_BID = ['pending_check', 'live', 'shortlisted'];
+export const ACCEPT_ATTEMPTS = 3;
+export const ACCEPT_GRACE_DAYS = 3;
+export const NO_HOLDOUT = 'none';
+
+export interface ChainAccept {
+    accepted: boolean;
+    acceptTx: string | null;
+    acceptError: string | null;
+    funded: boolean;
+    fundTx: string | null;
+    fundError: string | null;
+}
 
 const OFFER_STATE: Record<string, string> = { sent: 'wait', accepted: 'accepted', declined: 'declined' };
 
@@ -115,19 +127,47 @@ export class NegotiationsService {
         return { message: 'Hire Offer Successfully Accepted', id, offerSt: 'accepted', ...funding };
     }
 
-    private async fundJob(offer: OfferRow): Promise<{ funded: boolean; fundTx: string | null; fundError: string | null }> {
+    private async fundJob(offer: OfferRow): Promise<ChainAccept> {
+        let agents: string;
         try {
-            let agents = offer.job.buyer.agentsAccountId;
-            if (!agents) {
-                const created = await this.chainService.createAccount(offer.job.buyerId);
-                agents = created.agents_account_id;
-                await this.negotiationsRepository.setBuyerAccounts(offer.job.buyerId, offer.job.buyer.nearAccountId ?? created.account_id, agents);
-            }
-            const tx = await this.chainService.callAs('transaction_agent', agents, 'fund_job', { job_id: offer.job.onchainId?.toString() ?? offer.job.ref });
-            return { funded: true, fundTx: tx.tx_hash, fundError: null };
+            agents = await this.buyerAgents(offer);
         } catch (e) {
-            return { funded: false, fundTx: null, fundError: e instanceof Error ? e.message : 'Funding failed' };
+            const error = e instanceof Error ? e.message : 'Funding failed';
+            return { accepted: false, acceptTx: null, acceptError: error, funded: false, fundTx: null, fundError: error };
         }
+        const jobId = chainJobId(offer.job);
+        let acceptTx: string;
+        try {
+            const terms = await this.negotiationsRepository.getAcceptTerms(offer.jobId, offer.bidId);
+            if (!terms.bid) throw new BadRequestException('The hire offer has no bid');
+            if (!terms.spec?.specHash) throw new BadRequestException('The job has no locked spec');
+            const tx = await this.chainService.callAs('transaction_agent', agents, 'accept_offer', {
+                job_id: jobId,
+                bid_id: chainBidId(terms.bid),
+                price: usdcUnits(offer.price),
+                spec_hash: terms.spec.specHash,
+                holdout_hash: terms.spec.holdoutHash || NO_HOLDOUT,
+                attempts: ACCEPT_ATTEMPTS,
+                deadline: deadlineIn((terms.bid.deliveryDays ?? 7) + ACCEPT_GRACE_DAYS),
+            });
+            acceptTx = tx.tx_hash;
+        } catch (e) {
+            const error = e instanceof Error ? e.message : 'Accepting on chain failed';
+            return { accepted: false, acceptTx: null, acceptError: error, funded: false, fundTx: null, fundError: error };
+        }
+        try {
+            const tx = await this.chainService.callAs('transaction_agent', agents, 'fund_job', { job_id: jobId });
+            return { accepted: true, acceptTx, acceptError: null, funded: true, fundTx: tx.tx_hash, fundError: null };
+        } catch (e) {
+            return { accepted: true, acceptTx, acceptError: null, funded: false, fundTx: null, fundError: e instanceof Error ? e.message : 'Funding failed' };
+        }
+    }
+
+    private async buyerAgents(offer: OfferRow): Promise<string> {
+        if (offer.job.buyer.agentsAccountId) return offer.job.buyer.agentsAccountId;
+        const created = await this.chainService.createAccount(offer.job.buyerId);
+        await this.negotiationsRepository.setBuyerAccounts(offer.job.buyerId, offer.job.buyer.nearAccountId ?? created.account_id, created.agents_account_id);
+        return created.agents_account_id;
     }
 
     async declineOffer(token: string, id: string) {
