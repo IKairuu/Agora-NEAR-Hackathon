@@ -1,15 +1,15 @@
 import { useState, type ReactNode } from 'react';
-import { ME, OTHER_JOBS, usd } from '../data/sample';
+import { ME, OTHER_JOBS, usd } from '../data/data';
 import { liveReadNotes } from '../lib/live';
-import { act, unreadThreads } from '../store/actions';
+import { act, newRequest, unreadThreads } from '../store/actions';
 import { escrow, free, hb, hPrice, paused, useApp } from '../store/store';
 import { Icon, Logo, type IconName } from './icons';
 import { Pop, RLink, usePop } from './parts';
 
-function NavItem({ r, label, icon, cur, count }: { r: string; label: string; icon: IconName; cur: string; count?: string }) {
+function NavItem({ r, label, icon, cur, count, onClick }: { r: string; label: string; icon: IconName; cur: string; count?: string; onClick?: () => void }) {
   const on = cur === r;
   return (
-    <RLink r={r} className={on ? 'on' : ''} {...(on ? { 'aria-current': 'page' } : {})}>
+    <RLink r={r} className={on ? 'on' : ''} onClick={onClick} {...(on ? { 'aria-current': 'page' } : {})}>
       <Icon name={icon} /><span className="t">{label}</span>{count && <span className="count">{count}</span>}
     </RLink>
   );
@@ -25,7 +25,7 @@ function MeMenu({ close, cur }: { close: () => void; cur: string }) {
         <span className="small"><b className="num">{usd(free(s))} USDC</b> <span className="muted">{escrow(s) ? usd(escrow(s)) + ' protected' : 'available'}</span></span>
       </div>
       <hr />
-      <RLink r="ask" className="mi" role="menuitem" onClick={close}><Icon name="spark" />Start a request</RLink>
+      <RLink r="ask" className="mi" role="menuitem" onClick={() => { close(); newRequest(); }}><Icon name="spark" />Start a request</RLink>
       <RLink r="jobs" className="mi" role="menuitem" onClick={close}><Icon name="brief" />Job requests</RLink>
       <RLink r="chat" className="mi" role="menuitem" onClick={close}><Icon name="chat" />Messages{unread > 0 && <span className="aside">{unread} unread</span>}</RLink>
       <hr />
@@ -112,7 +112,7 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
           ) : (
             <>
               <div className="nav-group">Hire</div>
-              <NavItem r="ask" label="New request" icon="spark" cur={cur === 'post' ? 'ask' : cur} />
+              <NavItem r="ask" label="New request" icon="spark" cur={cur === 'post' ? 'ask' : cur} onClick={newRequest} />
               <NavItem r="dash" label="Overview" icon="home" cur={cur} />
               <NavItem r="explore" label="Find services" icon="explore" cur={cur === 'profile' ? 'explore' : cur} />
               <NavItem r="jobs" label="Job requests" icon="job" cur={cur === 'job' ? 'jobs' : cur} count={jobsCount ? String(jobsCount) : ''} />

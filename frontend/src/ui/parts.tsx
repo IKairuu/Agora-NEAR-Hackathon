@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { createPortal } from 'react-dom';
 import { Link, type LinkProps } from 'react-router';
-import { dirKey, GIGS, LIFE, OTHER_JOBS, sellerBy, usd, type Gig, type OtherJob } from '../data/sample';
+import { agentPick, dirKey, GIGS, LIFE, ME, OTHER_JOBS, sellerBy, usd, type Gig, type OtherJob } from '../data/data';
 import { act, pathOf } from '../store/actions';
+import { fetchReputation, type ReputationView } from '../lib/live';
 import { getState, hb, hPrice, openModal, useApp, type State } from '../store/store';
 import { Icon, type IconName } from './icons';
 
@@ -66,10 +67,10 @@ export function Tl({ k, h, p, n = '' }: { k: '' | 'ok' | 'block' | 'now' | 'hold
   );
 }
 
-export function Review({ who, txt, when }: { who: string; txt: string; when: string }) {
+export function Review({ who, txt, when, stars = 5 }: { who: string; txt: string; when: string; stars?: number }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 4, borderBottom: '1px solid var(--color-rule)', paddingBottom: 12 }}>
-      <div className="row"><b style={{ fontWeight: 500 }} className="small">{who}</b><span className="muted xsmall">5 of 5</span><span className="muted xsmall" style={{ marginLeft: 'auto' }}>{when}</span></div>
+      <div className="row"><b style={{ fontWeight: 500 }} className="small">{who}</b><span className="muted xsmall">{stars} of 5</span><span className="muted xsmall" style={{ marginLeft: 'auto' }}>{when}</span></div>
       <span className="muted small">{txt}</span>
       <span className="status ok"><Icon name="check" />Settled job</span>
     </div>
@@ -88,11 +89,12 @@ export function feedItems(s: State): FeedItem[] {
   if (stage >= 6) add('16:24:40', 'Reviewers', 'Rejected commit 3b9c2aa: it edited the locked test. 0 of 3 approved.', 'block');
   if (stage >= 5) { add('16:12:02', 'Transaction agent', `Moved ${A} USDC into Protected payment for J-1042. 9 limit checks passed.`, 'ok'); add('16:12:01', H.name, 'Accepted the hire offer.', 'ok'); }
   if (stage >= 4 && (s.offerSt || stage >= 5)) add('16:11:52', 'Buyer agent', `Sent the hire offer to ${H.name}: ${A} USDC, tests locked. Waiting for an answer.`);
-  s.declined.filter((k) => k !== s.hire).slice().reverse().forEach((k) => { const x = sellerBy(k)!; add('16:11:50', x.name, 'Declined the hire offer. Nothing was locked.', 'block'); add('16:11:45', 'Buyer agent', `Sent the hire offer to ${x.name}.`); });
-  if (stage >= 4 && !s.preNeg) add('16:11:40', 'Buyer agent', 'Negotiated patchsmith from 36.00 to 32.00 USDC, under the 35.50 median.');
+  s.declined.filter((k) => k !== s.hire).slice().reverse().forEach((k) => { const x = sellerBy(k); if (!x) return; add('16:11:50', x.name, 'Declined the hire offer. Nothing was locked.', 'block'); add('16:11:45', 'Buyer agent', `Sent the hire offer to ${x.name}.`); });
+  const pick = agentPick();
+  if (stage >= 4 && !s.preNeg && pick) add('16:11:40', 'Buyer agent', `Negotiated ${pick.name} from ${usd(pick.price)} to ${usd(pick.final)} USDC, under the 35.50 median.`);
   if (stage >= 3) { add('16:08:13', 'Fraud and lure agent', 'Held 2 offers: one asked for off-platform payment, one priced 94% below the usual price.', 'hold'); add('16:07:55', 'Buyer agent', '3 valid offers in. You can choose now.'); }
   if (stage >= 2) add('16:03:20', 'Spec writer', 'You locked 2 failing tests and 6 checks for J-1042. Sent privately to 9 matching sellers.');
-  if (stage >= 1) add('16:01:02', 'Account', 'Created lumen.testnet and agents.lumen.testnet. Gas paid by relayer.');
+  if (stage >= 1) add('16:01:02', 'Account', `Created ${ME.acct} and ${ME.agents}. Gas paid by relayer.`);
   return items;
 }
 export function Feed({ short }: { short?: boolean }) {
@@ -195,5 +197,30 @@ export function Pop({ anchor, onClose, wide, children }: { anchor: RefObject<HTM
   return createPortal(
     <div ref={box} className={`pop ${wide ? 'wide' : ''}`} role="menu" style={{ top: r.bottom + 10, right: Math.max(12, innerWidth - r.right) }}>{children}</div>,
     document.body,
+  );
+}
+
+/** A seller's reputation from the backend. `undefined` while loading, `null` when there is none. */
+export function useReputation(acct: string | undefined): ReputationView | null | undefined {
+  const [rep, setRep] = useState<ReputationView | null | undefined>(undefined);
+  useEffect(() => {
+    let on = true; setRep(undefined);
+    if (!acct) { setRep(null); return; }
+    void fetchReputation(acct).then((r) => { if (on) setRep(r); });
+    return () => { on = false; };
+  }, [acct]);
+  return rep;
+}
+export const dateOf = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-US', { day: 'numeric', month: 'short', year: 'numeric' }); };
+/** Reviews from settled jobs, with an empty state. `lead` is a review to show first (the demo's settled job). */
+export function SellerReviews({ rep, lead }: { rep: ReputationView | null | undefined; lead?: ReactNode }) {
+  const items = rep?.recent ?? [];
+  return (
+    <>
+      {lead}
+      {items.map((r) => <Review key={r.job + r.at} who={r.title} txt={r.comment || 'No comment left.'} when={dateOf(r.at)} stars={r.stars} />)}
+      {rep === undefined && !lead && <p className="muted small">Loading reviews…</p>}
+      {rep !== undefined && !items.length && !lead && <div className="empty"><Icon name="star" /><b>No reviews yet</b><span>Reviews appear here once a job with this seller is paid.</span></div>}
+    </>
   );
 }

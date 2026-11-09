@@ -1,13 +1,14 @@
 import { useSyncExternalStore, type ReactNode } from 'react';
 import type { AuthUser } from '../lib/auth';
 import type { Thread } from './actions';
-import { BIDS, ORDERS, type Bid, type FilterKey, type Order, type OtherJob } from '../data/sample';
+import { BIDS, type Bid, type FilterKey, type Order, type OtherJob } from '../data/data';
 
 /*
  * App state, mirroring the prototype's `S` object.
  * `stage` drives the scripted demo: 0 signed out, 1 signed in, 2 job posted, 3 bids in,
  * 4 negotiated, 5 funded, 6 bad delivery rejected, 7 released and settled, 8 paused by guardian.
  */
+export interface FollowUp { id: string; text: string; t: string; sending: boolean; reply?: string; link?: boolean }
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
@@ -22,7 +23,7 @@ export interface State {
   role: 'hire' | 'work' | null; rolePick: 'hire' | 'work' | null; after: 'sell' | 'ask' | null;
   draft: string; seller: boolean; sellStep: number; skills: Record<string, boolean>; stake: boolean; sellPay: string;
   chatWith: string; chatLog: Record<string, ChatMsg[]>; typing: boolean;
-  tLog: Record<string, ChatMsg[]>; thread: string; seenThreads: string[]; inboxF: '' | 'buy' | 'sell' | 'all'; flat: boolean;
+  tLog: Record<string, ChatMsg[]>; thread: string; seenThreads: string[]; inboxF: '' | 'buy' | 'sell' | 'all';
   mode: 'buy' | 'sell'; oTab: 'active' | 'req' | 'done'; orders: Order[];
   liked: string[]; newJobs: OtherJob[]; nextJob: number; svc: string;
   sort: 'best' | 'rating' | 'price'; f: Partial<Record<FilterKey, string>>; q: string; online: boolean; newOnly: boolean;
@@ -32,6 +33,10 @@ export interface State {
   hire: string; offerSt: '' | 'wait' | 'accepted' | 'declined'; declined: string[]; preNeg: boolean;
   asked: boolean; askText: string; bidsShown: number; streamId: number; jf: string;
   extra: { id: string; text: string; t: string; posted: boolean }[];
+  /** Live: the first message of a New request is on its way and the job is being created. */
+  pendingAsk: boolean;
+  /** Live: messages sent after the first one, about the same job, and the agent's answer to each. */
+  followUps: FollowUp[];
   who: string; oj: number; exTab: 'services' | 'sellers'; ssort: 'rating' | 'jobs' | 'price'; fromHero: string;
   stars: number; dReason: string; mail: string; walletLinked: boolean;
   /** The real signed-in account from Google or GitHub; null in the simulated demo. */
@@ -45,6 +50,8 @@ export interface State {
   /** Live balances and pause state from the wallet and limits API. */
   money: { available: number; escrowed: number; usedToday: number; paused: boolean } | null;
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
+  /** True once the startup load from the backend has finished, whether or not it returned anything. */
+  dataReady: boolean;
 }
 
 const storage = {
@@ -70,20 +77,20 @@ let state: State = {
   cats: { rust: true, fe: true, tests: true, scripts: false }, strict: false, payout: 'near',
   role: saved?.role ?? null, rolePick: null, after: null,
   draft: '', seller: saved?.seller ?? false, sellStep: 0, skills: { Rust: true, 'NEAR SDK': true, Tests: true }, stake: false, sellPay: 'near',
-  chatWith: 'patchsmith', chatLog: {}, typing: false,
-  tLog: {}, thread: '', seenThreads: [], inboxF: '', flat: false,
-  mode: saved?.mode ?? 'buy', oTab: 'active', orders: ORDERS.map((o) => ({ ...o })),
-  liked: ['g3'], newJobs: [], nextJob: 1043, svc: 'g1',
+  chatWith: '', chatLog: {}, typing: false,
+  tLog: {}, thread: '', seenThreads: [], inboxF: '',
+  mode: saved?.mode ?? 'buy', oTab: 'active', orders: [],
+  liked: [], newJobs: [], nextJob: 1043, svc: '',
   sort: 'best', f: {}, q: '', online: false, newOnly: false,
   signVia: saved?.via ?? '', sellCoder: 'me', expOpen: 'cv', cvFile: '', avatarImg: '', coverImg: '', ghLinked: false,
   fold: storage.get('agora-fold') === '1',
-  hire: 'patchsmith', offerSt: '', declined: [], preNeg: false,
+  hire: '', offerSt: '', declined: [], preNeg: false,
   asked: false, askText: '', bidsShown: 0, streamId: 0, jf: 'all', extra: [],
-  who: 'patchsmith', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
+  who: '', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: saved?.user ?? null,
   live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
-  modal: null,
+  modal: null, dataReady: false, pendingAsk: false, followUps: [],
 };
 
 const listeners = new Set<() => void>();
@@ -120,8 +127,8 @@ export function useApp(): State {
 /** Stand-in while no offer exists, e.g. right after a live sign-in empties BIDS, so views never read a field of undefined. */
 const NO_SELLER: Bid = { key: '', name: 'No seller yet', acct: '', kind: 'human', owner: '', price: 0, final: 0, days: '', fraud: 0, settled: 0, buyers: 0, pass: '', disputes: 0, note: '' };
 export const hb = (s: State): Bid => BIDS.find((b) => b.key === s.hire) || BIDS[0] || NO_SELLER;
-/** patchsmith's price drops to the negotiated one once the agent has negotiated. */
-export const priceOf = (s: State, b: Bid) => (b.key === 'patchsmith' && s.stage >= 4 && !s.preNeg ? b.final : b.price);
+/** A seller's price drops to the negotiated `final` once the agent has negotiated (the demo data sets it lower for one seller). */
+export const priceOf = (s: State, b: Bid) => (s.stage >= 4 && !s.preNeg ? b.final : b.price);
 export const hPrice = (s: State) => priceOf(s, hb(s));
 export const free = (s: State) => (s.live && s.money ? s.money.available : s.stage >= 5 ? 120 - hPrice(s) : s.stage >= 1 ? 120 : 0);
 export const escrow = (s: State) => (s.live && s.money ? s.money.escrowed : s.stage >= 5 && s.stage < 7 ? hPrice(s) : 0);

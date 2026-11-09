@@ -992,8 +992,8 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.5; }
 .jc-by .xsmall { display: inline-flex; align-items: center; gap: var(--space-3xs); }
 .jc-by .xsmall .ic { width: 12px; height: 12px; fill: var(--color-hold); color: var(--color-hold); }
 .avatar.sm { width: 30px; height: 30px; font-size: 11px; }
-.heart.flat { position: static; background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; border: 1px solid var(--color-rule); }
-.heart.flat.on { color: var(--color-block); } .heart.flat.on .ic { fill: currentColor; }
+.heart.plain { position: static; background: none; box-shadow: none; -webkit-backdrop-filter: none; backdrop-filter: none; border: 1px solid var(--color-rule); }
+.heart.plain.on { color: var(--color-block); } .heart.plain.on .ic { fill: currentColor; }
 .jcard h3 { font-size: var(--text-lg); letter-spacing: -0.01em; }
 .jcard p { display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
 .jcard .chips .chip { min-height: 28px; font-size: var(--text-xs); }
@@ -1117,17 +1117,6 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.5; }
   .trow { min-width: 240px; border: 1px solid var(--color-rule); }
   .inbox-r .msgs { max-height: none; }
 }
-/* ---------- v6 sample: fewer boxes (Overview only) ---------- */
-.flat .panel { background: transparent; border: 0; box-shadow: none; border-radius: 0; }
-.flat .panel-h { padding-inline: 0; border-bottom: 1px solid var(--color-rule); }
-.flat .panel-b { padding-inline: 0; }
-.flat .job-card { padding-inline: 0; border-radius: 0; }
-.flat .job-card:hover { background: transparent; }
-.flat .job-card:hover h3 { color: var(--color-accent-text); }
-.flat .grid.g-main { gap: var(--space-2xl); }
-.flat .grid.g-main > .panel + .panel { padding-left: var(--space-xl); border-left: 1px solid var(--color-rule); }
-.cmp button { min-height: 34px; font-size: var(--text-xs); }
-@media (max-width: 60rem) { .flat .grid.g-main > .panel + .panel { padding-left: 0; border-left: 0; } }
 .ib-f button { white-space: nowrap; font-size: var(--text-xs); padding-inline: var(--space-xs); }
 .trow.on .avatar:not(.ag) { background: var(--color-paper); }
 /* ---------- v6.1: fluid content, smooth fold, sidebar header lines up with the top bar ---------- */

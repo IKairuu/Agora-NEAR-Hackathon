@@ -1,29 +1,40 @@
 import { useRef, type ChangeEvent, type ReactNode } from 'react';
-import { CATS, COUNTRIES, gigBy, GIGS, ME, PAYOUTS, SELL_STEPS, sellerDir, SKILLS, usd } from '../data/sample';
-import { act } from '../store/actions';
+import { CATS, COUNTRIES, DAO_COUNCIL, gigBy, GIGS, ME, PAYOUTS, SELL_STEPS, sellerDir, SETTLED, SKILLS, usd } from '../data/data';
+import { act, newRequest } from '../store/actions';
 import { isLive, liveSaveSellStep } from '../lib/live';
-import { getState, setState, toast, useApp, type State } from '../store/store';
+import { getState, hb, hPrice, setState, toast, useApp, type State } from '../store/store';
 import { Icon, Tile, type IconName } from '../ui/icons';
-import { Gate, Head, levelClass, Review, RLink, SignInButton, T, Thumb } from '../ui/parts';
+import { Gate, Head, levelClass, Review, RLink, SellerReviews, SignInButton, T, Thumb, useReputation } from '../ui/parts';
 import { Shell } from '../ui/Shell';
 
-/* ---------------- a seller's profile, from the sellers directory ---------------- */
-const RECORDS: [string, string, string][] = [['#391', 'Fix NEP-141 refund on failed transfer', '28.00'], ['#377', 'Add view method for escrow totals', '15.00'], ['#360', 'Split dust bug in payroll vault', '22.00'], ['#341', 'Storage deposit check in register()', '12.00'], ['#329', 'Gas estimate for batch payouts', '40.00']];
+/* ---------------- a seller's profile: the sellers directory plus their reputation from the backend ---------------- */
 export function Profile() {
   const s = useApp();
-  const p = sellerDir(s.who || 'patchsmith'), isP = p.key === 'patchsmith', extra = isP && s.stage >= 7 ? 1 : 0, g = gigBy(p.gig) || GIGS[0];
-  const all: [string, string, string][] = [...(extra ? [['#412', 'Make test_split_rounding pass', '32.00'] as [string, string, string]] : []), ...RECORDS];
-  const recs = all.slice(0, Math.max(1, Math.min(5, p.settled)));
+  const p = sellerDir(s.who);
+  const rep = useReputation(p?.acct);
+  if (!p) return (
+    <Shell cur="profile">
+      <Head crumbs={<RLink r="explore" onClick={() => setState({ exTab: 'sellers' })}>Sellers</RLink>} title="Seller" />
+      <div className="empty"><Icon name="agents" /><b>{s.dataReady ? 'No sellers yet' : 'Loading sellers…'}</b>{s.dataReady && <span>Sellers appear here once they publish a profile.</span>}<RLink r="explore" className="btn" onClick={() => setState({ exTab: 'sellers' })}>Back to sellers</RLink></div>
+    </Shell>
+  );
+  /* in the demo, the hired seller earns one more record and review when the demo job settles */
+  const extra = !s.live && s.stage >= 7 && !!SETTLED.record && hb(s).name === p.name ? 1 : 0;
+  const g = gigBy(p.gig) || GIGS.find((x) => x.seller === p.name);
+  const recs: [string, string, string][] = [
+    ...(extra ? [[SETTLED.record, SETTLED.title, usd(hPrice(s))] as [string, string, string]] : []),
+    ...(rep?.records ?? []).map((r): [string, string, string] => ['#' + r.tokenId, r.title, usd(r.amount)]),
+  ];
   const saved = s.liked.includes(p.gig);
   return (
     <Shell cur="profile">
       <Head crumbs={<><RLink r="explore" onClick={() => setState({ exTab: 'sellers' })}>Sellers</RLink> / {p.name}</>} title={p.name} actions={<>
-        <button className={`btn ${saved ? 'on' : ''}`} onClick={() => act.like(p.gig)} aria-pressed={saved}><Icon name="heart" />{saved ? 'Saved' : 'Save'}</button>
+        {p.gig && <button className={`btn ${saved ? 'on' : ''}`} onClick={() => act.like(p.gig)} aria-pressed={saved}><Icon name="heart" />{saved ? 'Saved' : 'Save'}</button>}
         <RLink r="chat" className="btn"><Icon name="chat" />Message</RLink>
-        <RLink r="ask" className="btn primary">Invite to a job</RLink>
+        <RLink r="ask" className="btn primary" onClick={newRequest}>Invite to a job</RLink>
       </>} />
       <div className="panel prof-top">
-        <div className="cover night-cover" aria-hidden="true"><Thumb g={g} /></div>
+        <div className="cover night-cover" aria-hidden="true">{g && <Thumb g={g} />}</div>
         <div className="prof-row">
           <span className={`avatar xl ${p.kind === 'agent' ? 'ag' : ''}`}>{p.initials}</span>
           <div style={{ flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column', gap: 6 }}>
@@ -36,20 +47,20 @@ export function Profile() {
       <div className="tally">
         <div><span className="lbl">Settled jobs</span><b className="num">{p.settled + extra}</b><span className="sub">from {p.buyers} distinct buyers</span></div>
         <div><span className="lbl">Tests pass first try</span><b className="num">{p.pass}%</b><span className="sub">reviewer-verified</span></div>
-        <div><span className="lbl">Settled volume</span><b className="num">{usd(p.volume + extra * 32)}<span className="u">USDC</span></b><span className="sub">all time</span></div>
-        <div><span className="lbl">Rating</span><b className="num">{p.rating.toFixed(1)}<span className="u">of 5</span></b><span className="sub">from {p.settled} settled jobs</span></div>
+        <div><span className="lbl">Settled volume</span><b className="num">{usd(p.volume + (extra ? hPrice(s) : 0))}<span className="u">USDC</span></b><span className="sub">all time</span></div>
+        <div><span className="lbl">Rating</span><b className="num">{rep?.rating != null ? rep.rating.toFixed(1) : '—'}<span className="u">of 5</span></b><span className="sub">{rep?.ratings ? `from ${rep.ratings} ratings` : 'no ratings yet'}</span></div>
       </div>
       <div className="grid g-main">
         <div className="panel"><div className="panel-h"><h2>Completion records</h2><span className="muted xsmall">Minted by the contract on settlement. Can't be bought or moved.</span></div>
-          <div className="tablewrap"><table>
-            <thead><tr><th>Record</th><th>Job</th><th>Paid</th><th>Review</th></tr></thead>
-            <tbody>{recs.map((r) => <tr key={r[0]}><td className="mono muted">{r[0]}</td><td>{r[1]}</td><td className="num">{r[2]} USDC</td><td><span className="status ok"><Icon name="check" />2 of 3</span></td></tr>)}</tbody>
-          </table></div>
+          {recs.length ? (
+            <div className="tablewrap"><table>
+              <thead><tr><th>Record</th><th>Job</th><th>Paid</th><th>Review</th></tr></thead>
+              <tbody>{recs.map((r) => <tr key={r[0]}><td className="mono muted">{r[0]}</td><td>{r[1]}</td><td className="num">{r[2]} USDC</td><td><span className="status ok"><Icon name="check" />2 of 3</span></td></tr>)}</tbody>
+            </table></div>
+          ) : <div className="panel-b"><div className="empty"><Icon name="profile" /><b>{rep === undefined ? 'Loading records…' : 'No completion records yet'}</b>{rep !== undefined && <span>A record is minted each time a job with this seller is paid.</span>}</div></div>}
         </div>
         <div className="panel"><div className="panel-h"><h3>Reviews</h3><span className="muted xsmall">Only from settled jobs</span></div><div className="panel-b">
-          {isP && s.stage >= 7 && <Review who="Lumen Labs" txt="Fixed the split and added the dust test. Second commit was clean." when="just now" />}
-          <Review who="Pollen Grants" txt="Delivered in under a day and explained the edge case." when="3 days ago" />
-          {p.settled > 1 && <Review who="Ostrich DAO" txt="Good work. Had to clarify scope once." when="2 weeks ago" />}
+          <SellerReviews rep={rep} lead={extra ? <Review who={SETTLED.reviewer} txt={SETTLED.review} when="just now" /> : undefined} />
           <p className="muted xsmall">Ratings sit below objective outcomes because ratings drift upward over time.</p>
         </div></div>
       </div>
@@ -241,7 +252,7 @@ export function Sell() {
       <Acc id="gh" title="Connect GitHub" time="1 min" badge={s.ghLinked ? <span className="pill ok">Connected</span> : undefined}>
         <p className="muted small">We show your public repositories and languages on your profile. Ratings still come only from settled jobs.</p>
         {s.ghLinked
-          ? <div className="repos">{([['payroll-vault', 'Rust', 41], ['near-split', 'Rust', 12], ['wallet-kit', 'TypeScript', 30]] as const).map((r) => <span key={r[0]}><Icon name="repo" /><b>{r[0]}</b><span className="muted xsmall">{r[1]}, {r[2]} stars</span></span>)}</div>
+          ? <p className="note-b small"><Icon name="github" /> GitHub is connected. Your public repositories appear on your profile after you publish it.</p>
           : <button className="btn" onClick={act.ghconnect}><Icon name="github" />Connect GitHub</button>}
       </Acc>
       <Acc id="man" title="Fill out manually" time="5 min" icon="edit">
@@ -274,7 +285,7 @@ export function Sell() {
     <div className="panel"><div className="panel-h"><h2>Get paid</h2><div className="r"><T name="Chain Signatures" tip="Your NEAR account signs a payout on another chain" /></div></div><div className="panel-b">
       <div className="field"><span className="lab">Payout</span><div className="seg" role="group" aria-label="Payout chain">{PAYOUTS.map(([k, label]) => <button key={k} className={s.sellPay === k ? 'on' : ''} aria-pressed={s.sellPay === k} onClick={() => setState({ sellPay: k })}>{label}</button>)}</div></div>
       {s.sellPay === 'near'
-        ? <p className="muted">Released milestones land in <span className="mono">{agent ? 'lumenfix.agents.lumen.testnet' : ME.acct}</span>. Only your full-access key can withdraw.</p>
+        ? <p className="muted">Released milestones land in <span className="mono">{agent ? `lumenfix.${ME.agents}` : ME.acct}</span>. Only your full-access key can withdraw.</p>
         : <div className="field"><label htmlFor="sl-addr">Payout address</label><input className="input mono" id="sl-addr" defaultValue="0x8b1F…4e2C" /><span className="hint">Your NEAR account signs the transfer on {s.sellPay === 'eth' ? 'Ethereum' : 'Base'}. No bridge, no second wallet.</span></div>}
       <div className="row" style={{ flexWrap: 'nowrap', alignItems: 'flex-start' }}>
         <button className={`switch ${s.stake ? 'on' : ''}`} onClick={() => setState({ stake: !s.stake })} aria-label="Optional starter stake" aria-pressed={s.stake} />
@@ -362,7 +373,6 @@ export function Seller() {
 }
 
 /* ---------------- disputes: one simple ladder, re-check then DAO vote then result ---------------- */
-const DAO_COUNCIL: [string, string, string, boolean][] = [['aria', 'aria.near', 'Rust auditor', true], ['bo', 'bo-dev.near', 'Front-end lead', false], ['chen', 'chen.near', 'Protocol engineer', false], ['dami', 'dami.near', 'QA engineer', false]];
 function Step({ n, state, title, line, children }: { n: number; state: 'done' | 'now' | 'next'; title: string; line: string; children?: ReactNode }) {
   return (
     <li className={`ds ${state}`}>
@@ -378,7 +388,7 @@ function Step({ n, state, title, line, children }: { n: number; state: 'done' | 
 export function Dispute() {
   const s = useApp();
   const ruled = s.dTab === 'ruled', votes = ruled ? 2 : 1;
-  const voters = DAO_COUNCIL.filter((m) => !m[3]), out = DAO_COUNCIL.find((m) => m[3])!;
+  const voters = DAO_COUNCIL.filter((m) => !m.recused), out = DAO_COUNCIL.find((m) => m.recused);
   return (
     <Shell cur="dispute">
       <Head title="Disputes" sub="Most disputes end at a free re-check. Only if that doesn't settle it does the DAO vote." actions={<T name="Sputnik DAO" tip="The arbiter DAO's proposal is the only way resolve_dispute can be called" />} />
@@ -393,8 +403,8 @@ export function Dispute() {
           <Step n={1} state="done" title="Free re-check" line="3 fresh reviewers on different AI models re-ran every test. Same result: one locked test fails, and 2 of 3 flagged that the test contradicts the spec." />
           <Step n={2} state={ruled ? 'done' : 'now'} title="DAO vote" line="rustwright put down a 1.00 USDC bond to ask the DAO. It comes back if the claim holds. 2 of 3 votes decide.">
             <div className="ds-vote"><div className="row small"><span>{votes} of 3 votes</span><span className="muted" style={{ marginLeft: 'auto' }}>2 needed</span></div><div className="bar ok"><i style={{ transform: `scaleX(${votes / 3})` }} /></div></div>
-            <div className="ds-who">{voters.map((m, i) => <span key={m[0]} className="ds-m"><span className="avatar xs">{m[1].slice(0, 2).toUpperCase()}</span><span className="mono xsmall">{m[1]}</span>{i < votes && <Icon name="check" className="ok" />}</span>)}</div>
-            <p className="muted xsmall">{out[1]} sits this one out automatically: they have traded with you before.</p>
+            <div className="ds-who">{voters.map((m, i) => <span key={m.key} className="ds-m"><span className="avatar xs">{m.acct.slice(0, 2).toUpperCase()}</span><span className="mono xsmall">{m.acct}</span>{i < votes && <Icon name="check" className="ok" />}</span>)}</div>
+            {out && <p className="muted xsmall">{out.acct} sits this one out automatically: they have traded with you before.</p>}
             {!ruled && <button className="btn primary sm" onClick={act.daovote}>Cast the 2nd vote, demo</button>}
           </Step>
           <Step n={3} state={ruled ? 'done' : 'next'} title="Result" line={ruled ? 'Split 70/30. The test was wrong; the rest of the work passed.' : 'The contract pays out exactly what the vote says. Nobody at AGORA can move the money.'}>

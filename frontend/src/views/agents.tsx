@@ -1,4 +1,4 @@
-import { ATTACK, CATS, ME, usd } from '../data/sample';
+import { agentPick, ATTACK, CATS, ME, usd } from '../data/data';
 import { act } from '../store/actions';
 import { escrow, free, hb, hPrice, paused, setState, useApp } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
@@ -12,7 +12,7 @@ export function Agents() {
   const isPaused = paused(s);
   const A: [string, string, string, string, boolean][] = [
     ['Spec writer', 'Turns your job post into failing tests and an acceptance spec.', 'No key, advises', 'Wrote spec for J-1042', false],
-    ['Buyer agent', 'Shortlists up to 5 bids, waits for 3 offers, negotiates in a TEE, opens the chat.', 'No key, advises', 'Picked patchsmith at 32.00', false],
+    ['Buyer agent', 'Shortlists up to 5 bids, waits for 3 offers, negotiates in a TEE, opens the chat.', 'No key, advises', agentPick() ? `Picked ${agentPick()!.name} at ${usd(agentPick()!.final)}` : 'Waiting for offers', false],
     ['Transaction agent', 'The only agent that signs calls that move money.', 'Function-call key, 6 methods, cannot withdraw', 'Funded J-1042', true],
     ['Reviewers, 3', 'Run the locked tests on each delivery and vote.', 'Vote only, shared', '2 of 3 approved e5f1d07', false],
     ['Fraud and lure', 'Scores every counterparty 0 to 100 and holds lures and outlier prices.', 'Can hold, not pay, shared', 'Held 2 bids', false],
@@ -87,7 +87,7 @@ export function Mandate() {
             </div>
           </div></div>
           <div className="panel">
-            <div className="panel-h"><h2>Keys on {ME.acct}</h2><div className="r"><T name="Function-call keys" tip="NEAR access keys limited to one contract and named methods" /><T name="Sub-account" tip="agents.lumen.testnet holds agent keys" /></div></div>
+            <div className="panel-h"><h2>Keys on {ME.acct}</h2><div className="r"><T name="Function-call keys" tip="NEAR access keys limited to one contract and named methods" /><T name="Sub-account" tip={`${ME.agents} holds agent keys`} /></div></div>
             <div className="tablewrap"><table>
               <thead><tr><th>Key</th><th>Held by</th><th>Can call</th><th><span className="visually-hidden">Action</span></th></tr></thead>
               <tbody>
@@ -96,7 +96,7 @@ export function Mandate() {
                 <tr><td className="mono">ed25519:Cq1…x8T</td><td>Guardian</td><td className="mono xsmall">pause</td><td><button className="btn sm danger" onClick={act.deletekey}>Delete</button></td></tr>
               </tbody>
             </table></div>
-            <div className="panel-b"><p className="muted xsmall">Agent keys can't withdraw and can't attach a deposit. NEAR enforces this at the protocol level. Deleting <span className="mono">agents.lumen.testnet</span> removes every agent key at once.</p></div>
+            <div className="panel-b"><p className="muted xsmall">Agent keys can't withdraw and can't attach a deposit. NEAR enforces this at the protocol level. Deleting <span className="mono">{ME.agents}</span> removes every agent key at once.</p></div>
           </div>
           {s.tour >= 0 && <div className="panel"><div className="panel-h"><h2>Test your limits</h2></div><div className="panel-b">
             <p className="muted">Ask your transaction agent to fund a job that breaks a rule and watch the contract refuse it.</p>
