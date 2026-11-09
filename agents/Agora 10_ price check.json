@@ -1,0 +1,208 @@
+{
+  "name": "Agora 10: price check",
+  "nodes": [
+    {
+      "parameters": {
+        "jsCode": "// Called by fraud and lure with the bid (subjectId) or directly with bidId\nconst i = $input.first().json;\nconst bidId = i.bidId || i.subjectId;\nif (!bidId) throw new Error('No bid id given');\nreturn [{ json: { bidId } }];"
+      },
+      "id": "f93a8503-c7a3-4f54-b82f-bebb2316511a",
+      "name": "Read envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT b.id, b.price, b.job_id, j.category\nFROM bids b JOIN jobs j ON j.id = b.job_id\nWHERE b.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $json.bidId ] }}"
+        }
+      },
+      "id": "47aa25ad-0973-4d7a-b573-ac4d6e45e340",
+      "name": "Load bid",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "alwaysOutputData": true,
+      "position": [
+        448,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT price FROM (\n  SELECT j.agreed_price AS price\n    FROM jobs j\n   WHERE j.category = $2 AND j.status IN ('settled', 'released') AND j.agreed_price IS NOT NULL\n  UNION ALL\n  SELECT x.price\n    FROM bids x JOIN jobs j ON j.id = x.job_id\n   WHERE j.category = $2 AND x.job_id <> $1::uuid\n     AND x.status IN ('live', 'shortlisted', 'accepted')\n) r\nLIMIT 200;",
+        "options": {
+          "queryReplacement": "={{ [ $json.job_id, $json.category ] }}"
+        }
+      },
+      "id": "4f564194-580b-4c4f-9f8d-ea6d821190ff",
+      "name": "Reference prices",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        672,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const bid = $('Load bid').first().json;\nif (!bid.id) throw new Error('Bid not found');\nconst p = $input.all()\n  .map((i) => Number(i.json.price))\n  .filter((x) => Number.isFinite(x) && x > 0)\n  .sort((a, b) => a - b);\nconst n = p.length;\nconst price = Number(bid.price);\nconst median = n ? (n % 2 ? p[(n - 1) / 2] : (p[n / 2 - 1] + p[n / 2]) / 2) : null;\nlet result = 'cleared';\nlet reason = null;\nif (n < 5) {\n  result = 'unverified';\n  reason = `Only ${n} comparable prices, so this bid is not checked`;\n} else if (price < 0.3 * median || price > 3 * median) {\n  result = 'held';\n  reason = `Similar ${bid.category} jobs went for about USD ${median.toFixed(0)}; `\n    + `this bid is USD ${price} (${Math.round((price / median) * 100)}% of that)`;\n}\nreturn [{ json: { bidId: bid.id, jobId: bid.job_id, price, result, reason, median, n } }];"
+      },
+      "id": "8e85f818-1260-4deb-8827-6750fbbaa9d6",
+      "name": "Apply rule",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE bids\n   SET price_check = $2::price_check_result,\n       reference_median = $3::numeric,\n       reference_sample_size = $4::int,\n       hold_reason = $5,\n       status = CASE WHEN $2 = 'held' THEN 'held'::bid_status ELSE status END\n WHERE id = $1::uuid\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.bidId, $json.result, $json.median, $json.n, $json.reason ] }}"
+        }
+      },
+      "id": "147352b0-4537-4110-8a85-a1a720680d38",
+      "name": "Save result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1120,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "900f6a23-a7e7-48be-953f-e8a479260a4f",
+      "name": "When Executed by Another Workflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        16,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $('Apply rule').first().json;\nreturn [{ json: { priceCheck: r.result, median: r.median, n: r.n, reason: r.reason } }];"
+      },
+      "id": "f6b9d696-804c-42a9-b474-b59cc4560023",
+      "name": "Return",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Read envelope": {
+      "main": [
+        [
+          {
+            "node": "Load bid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load bid": {
+      "main": [
+        [
+          {
+            "node": "Reference prices",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reference prices": {
+      "main": [
+        [
+          {
+            "node": "Apply rule",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Apply rule": {
+      "main": [
+        [
+          {
+            "node": "Save result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save result": {
+      "main": [
+        [
+          {
+            "node": "Return",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Read envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "9ba4cec8-1678-4bb2-b29e-a18988d26c18",
+  "meta": {
+    "instanceId": "5bc1f41ff2889bec057c4b16904248e981cf8fde880ea6ae71e5a4721ead5080"
+  },
+  "nodeGroups": [],
+  "id": "uPbbpijuLPZKyMpn",
+  "tags": []
+}

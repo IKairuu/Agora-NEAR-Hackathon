@@ -1,0 +1,364 @@
+{
+  "name": "Agora 14b timers",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 1
+            }
+          ]
+        }
+      },
+      "id": "7a96026d-9ab8-4c60-b533-ca021f305929",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3f8d6626-5fd3-4ed5-94ff-756e4942ef0d",
+              "name": "cfg",
+              "value": "={{ { windowMinutes: Number($env.AGORA_BID_WINDOW_MINUTES || 10) } }}",
+              "type": "object"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "b7b644e8-ee6c-4d18-b35d-48ba60bc59ee",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT m.job_id, m.idx, m.amount, j.buyer_id\nFROM milestones m\nJOIN jobs j ON j.id = m.job_id\nWHERE m.status = 'in_review' AND m.review_deadline < now()\n  AND NOT EXISTS (SELECT 1 FROM disputes d\n                   WHERE d.milestone_id = m.id AND d.status <> 'resolved')\n  AND NOT EXISTS (SELECT 1 FROM chain_txs c\n                   WHERE c.job_id = m.job_id AND c.method = 'release_expired'\n                     AND c.args->>'milestone_idx' = m.idx::text AND c.status <> 'rejected');",
+        "options": {}
+      },
+      "id": "5c5e71df-a35e-4b2e-934a-ff1a8ceec88f",
+      "name": "Expired reviews",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        448,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "kWwau45O3BaWYc1t",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/kWwau45O3BaWYc1t",
+          "cachedResultName": "Agora lib: chain-call"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "5412e3df-41ac-4eac-af36-3e430c84db89",
+      "name": "Chain call",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        896,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(({ json: r }) => ({ json: {\n  runId: 'timer-' + Date.now(), ownerId: r.ownerId, agentId: null, jobId: r.jobId,\n  actorLabel: 'Auto-release',\n  message: r.ok\n    ? `Released ${r.amount} USDC: no dispute before the review window ended (tx ${r.txHash})`\n    : `Auto-release refused: ${r.error}`,\n  severity: r.ok ? 'ok' : 'block',\n  data: { txHash: r.txHash, ok: r.ok },\n  notify: { runId: 'timer-' + Date.now(), role: 'auto_release', ok: r.ok, jobId: r.jobId,\n            result: { txHash: r.txHash }, error: r.error || null },\n} }));"
+      },
+      "id": "7c78b237-c684-4b98-ad9e-908cb6882f1b",
+      "name": "Release events",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "koU3lJvPFjQvlFkl",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/koU3lJvPFjQvlFkl",
+          "cachedResultName": "Agora lib: log-event"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "aea79e14-52a0-42b3-8473-c5aae6869fbe",
+      "name": "Log release",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1344,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "r3JfXTsdFLB8aMM0",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/r3JfXTsdFLB8aMM0",
+          "cachedResultName": "Agora lib: notify-nest"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "2cffb593-3b78-4e14-a323-a66a741d7f0d",
+      "name": "Notify release",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1568,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "return $input.all().map(({ json: m }) => ({ json: {\n  signer: 'platform', method: 'release_expired',\n  args: { job_id: m.job_id, milestone_idx: m.idx },\n  ownerId: m.buyer_id, jobId: m.job_id, amount: Number(m.amount),\n} }));"
+      },
+      "id": "2cff490d-16e5-4faa-958b-6d8f678667ba",
+      "name": "Release args",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT j.id AS job_id, j.buyer_id\nFROM jobs j\nWHERE j.status = 'open' AND j.accepted_bid_id IS NULL\n  AND j.posted_at <= now() - make_interval(mins => $1::int)\n  AND j.posted_at >  now() - make_interval(mins => $1::int) - interval '1 minute'\n  AND EXISTS (SELECT 1 FROM bids b WHERE b.job_id = j.id AND b.status IN ('live', 'shortlisted'));",
+        "options": {
+          "queryReplacement": "={{ [ $json.cfg.windowMinutes ] }}"
+        }
+      },
+      "id": "d1186f22-e319-48d8-8778-4fe72d89e9c4",
+      "name": "Bid windows ended",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        592,
+        208
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nest re-runs the buyer agent with the private max price\nreturn $input.all().map(({ json: j }) => ({ json: {\n  notify: { runId: 'window-' + Date.now(), role: 'buyer_window', ok: true, jobId: j.job_id,\n            result: { ownerId: j.buyer_id }, error: null },\n} }));"
+      },
+      "id": "e30a2017-2f68-4ff6-b641-9f744f06723a",
+      "name": "Window notify",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        816,
+        208
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "r3JfXTsdFLB8aMM0",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/r3JfXTsdFLB8aMM0",
+          "cachedResultName": "Agora lib: notify-nest"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "74a13fab-13bf-4dcb-a65b-8b47cac37f23",
+      "name": "Notify window",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1040,
+        208
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Expired reviews",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Bid windows ended",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Expired reviews": {
+      "main": [
+        [
+          {
+            "node": "Release args",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Chain call": {
+      "main": [
+        [
+          {
+            "node": "Release events",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release events": {
+      "main": [
+        [
+          {
+            "node": "Log release",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log release": {
+      "main": [
+        [
+          {
+            "node": "Notify release",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Release args": {
+      "main": [
+        [
+          {
+            "node": "Chain call",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bid windows ended": {
+      "main": [
+        [
+          {
+            "node": "Window notify",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Window notify": {
+      "main": [
+        [
+          {
+            "node": "Notify window",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "c2ca64b9-0a29-4cb2-aafe-b892fc111150",
+  "meta": {
+    "instanceId": "5bc1f41ff2889bec057c4b16904248e981cf8fde880ea6ae71e5a4721ead5080"
+  },
+  "nodeGroups": [],
+  "id": "J9i1N2lKU7AFbN0J",
+  "tags": []
+}
