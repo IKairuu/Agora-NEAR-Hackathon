@@ -4,6 +4,7 @@ import { CreateSpec } from './dto/CreateSpec.dto.js';
 import { CreateSpecBulk } from './dto/CreateSpecBulk.dto.js';
 import { EditSpec } from './dto/EditSpec.dto.js';
 import { LockSpec } from './dto/LockSpec.dto.js';
+import { SealSpecHoldout } from './dto/SealSpecHoldout.dto.js';
 import { SpecsService } from './specs.service.js';
 
 @Controller('specs')
@@ -29,6 +30,13 @@ export class SpecsController {
     @UseGuards(AuthGuard)
     lockSpec(@Headers('authorization') auth: string, @Body(ValidationPipe) body: LockSpec) {
         return this.specsService.lockSpec(auth, body);
+    }
+
+    @Post('v1/holdout')
+    @HttpCode(200)
+    @UseGuards(AuthGuard)
+    sealHoldout(@Headers('authorization') auth: string, @Body(ValidationPipe) body: SealSpecHoldout) {
+        return this.specsService.sealHoldout(auth, body);
     }
 
     @Get('v1')

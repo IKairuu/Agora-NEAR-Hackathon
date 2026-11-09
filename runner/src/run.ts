@@ -5,6 +5,7 @@ import path from 'node:path';
 import { config } from './config.js';
 import { runStep, StepOptions, StepOutcome } from './docker.js';
 import { scopeOk } from './glob.js';
+import { holdoutCounts, HoldoutError, openHoldout } from './holdout.js';
 import { RunError, RunRequest, RunResult, Step } from './schema.js';
 
 const EXIT_CLONE_FAILED = 40;
@@ -128,6 +129,8 @@ export const executeRun = async (req: RunRequest): Promise<RunResult> => {
 
     const workDir = path.join(config.workDir, runId);
     const testsDir = path.join(config.workDir, `${runId}-tests`);
+    const holdoutDir = path.join(config.workDir, `${runId}-holdout`);
+    const holdoutLog = path.join(config.workDir, `${runId}-holdout.log`);
     const logFile = path.join(config.logDir, `${runId}.log`);
     const testFiles = req.testFiles ?? [];
 
@@ -149,6 +152,7 @@ export const executeRun = async (req: RunRequest): Promise<RunResult> => {
         durationMs: 0,
         timedOut: false,
         holdoutExit: null,
+        holdoutCounts: null,
         failingTests: req.failingTests ?? [],
         image: await imageId(),
         steps,
@@ -248,6 +252,10 @@ export const executeRun = async (req: RunRequest): Promise<RunResult> => {
                 result.error = failed;
             }
         }
+
+        if (!result.error && result.exitCode === 0 && (req.holdoutBlob || req.holdoutRef)) {
+            result.error = await runHoldout(req, commitSha, lockedPaths, testMounts, holdoutDir, holdoutLog, step, stop, result);
+        }
     } catch (err) {
         result.error = 'internal';
         await writeFile(logFile, `\ninternal error: ${(err as Error).message}\n`, { flag: 'a' }).catch(() => undefined);
@@ -258,11 +266,69 @@ export const executeRun = async (req: RunRequest): Promise<RunResult> => {
     result.logTail = await readTail(logFile, config.logTailBytes);
     result.logSha256 = await sha256File(logFile);
 
-    await cleanup(runId, workDir, testsDir);
+    await cleanup(runId, workDir, [testsDir, holdoutDir, holdoutLog]);
     return result;
 };
 
-const cleanup = async (runId: string, workDir: string, testsDir: string): Promise<void> => {
+type StepFn = (name: string, script: string, extra: Partial<StepOptions>) => Promise<StepOutcome>;
+
+const runHoldout = async (
+    req: RunRequest,
+    commitSha: string,
+    lockedPaths: string,
+    testMounts: [string, string][],
+    holdoutDir: string,
+    holdoutLog: string,
+    step: StepFn,
+    stop: (outcome: StepOutcome) => RunError | null,
+    result: RunResult,
+): Promise<RunError | null> => {
+    const note = (line: string) => writeFile(path.join(config.logDir, `${result.runId}.log`), `\n=== hidden checks: ${line} ===\n`, { flag: 'a' });
+    if (!req.holdoutBlob || !req.holdoutRef) {
+        await note('missing');
+        return 'internal';
+    }
+    if (!config.holdoutPrivateKey) {
+        await note('this runner has no holdout key');
+        return 'internal';
+    }
+    try {
+        await mkdir(holdoutDir, { recursive: true });
+        await chmod(holdoutDir, 0o755);
+        await writeFile(holdoutLog, '');
+        const plain = openHoldout(config.holdoutPrivateKey, req.holdoutBlob, req.holdoutRef);
+        const locked = new Set(lockedPaths.split('\n').filter(Boolean));
+        const hiddenMounts: [string, string][] = [];
+        for (const file of plain.files) {
+            const target = path.resolve(holdoutDir, file.path);
+            if (!target.startsWith(holdoutDir + path.sep) || locked.has(file.path)) throw new HoldoutError('Holdout file path is not allowed');
+            await mkdir(path.dirname(target), { recursive: true, mode: 0o755 });
+            await writeFile(target, file.content, { mode: 0o644 });
+            hiddenMounts.push([target, `/work/repo/${file.path}`]);
+        }
+        const allPaths = [...locked, ...plain.files.map((f) => f.path)].join('\n');
+        const command = plain.command ?? req.testCommand;
+        const checkout = await step('holdout-checkout', CHECKOUT_SCRIPT, { env: { TARGET_SHA: commitSha, LOCKED_PATHS: allPaths }, logFile: holdoutLog });
+        const failed = stop(checkout);
+        if (failed || checkout.exitCode !== 0) {
+            await note('could not prepare');
+            return failed ?? 'internal';
+        }
+        const run = await step('holdout', COMMAND_SCRIPT, { env: { RUN_COMMAND: command }, extraMounts: [...testMounts, ...hiddenMounts], logFile: holdoutLog });
+        result.holdoutExit = run.exitCode;
+        result.holdoutCounts = holdoutCounts(await readFile(holdoutLog, 'utf8').catch(() => ''));
+        await note(`exit ${run.exitCode ?? 'none'}, ${result.holdoutCounts.passed} passed, ${result.holdoutCounts.failed} failed`);
+        return stop(run);
+    } catch (err) {
+        await note(err instanceof HoldoutError ? err.message : 'could not run');
+        return 'internal';
+    } finally {
+        await rm(holdoutDir, { recursive: true, force: true }).catch(() => undefined);
+        await rm(holdoutLog, { force: true }).catch(() => undefined);
+    }
+};
+
+const cleanup = async (runId: string, workDir: string, extras: string[]): Promise<void> => {
     const scratchLog = path.join(config.logDir, `${runId}.cleanup.log`);
     await runStep({
         runId,
@@ -275,5 +341,5 @@ const cleanup = async (runId: string, workDir: string, testsDir: string): Promis
     }).catch(() => undefined);
     await unlink(scratchLog).catch(() => undefined);
     await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
-    await rm(testsDir, { recursive: true, force: true }).catch(() => undefined);
+    for (const extra of extras) await rm(extra, { recursive: true, force: true }).catch(() => undefined);
 };

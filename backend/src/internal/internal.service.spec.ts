@@ -4,7 +4,7 @@ import { AgentsService } from '../agents/agents.service';
 import { ChainService } from '../chain/chain.service';
 import { IndexerService } from '../indexer/indexer.service';
 import { InternalRepository } from './internal.repository';
-import { bidFlagsOf, decideBid, InternalService, judgeRun } from './internal.service';
+import { bidFlagsOf, decideBid, HIDDEN_FAILED, InternalService, judgeRun } from './internal.service';
 
 const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
 const BID = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
@@ -100,10 +100,14 @@ describe('InternalService', () => {
         expect(judgeRun(runResult({ error: 'bad_commit', exitCode: null })).reason).toBe('Commit not found or not built on the base commit');
         expect(judgeRun(runResult({ installExit: 101 })).reason).toBe('The build failed');
         expect(judgeRun(runResult({ changedFiles: [] })).reason).toBe('The commit changes no files');
+        expect(judgeRun(runResult({ holdoutExit: 101 }), true)).toEqual({ verdict: 'fail', reason: 'Hidden checks failed' });
+        expect(judgeRun(runResult({ holdoutExit: 0 }), true)).toEqual({ verdict: 'pass', reason: null });
+        expect(judgeRun(runResult({ holdoutExit: null }), true)).toEqual({ verdict: 'fail', reason: 'Hidden checks did not run' });
+        expect(judgeRun(runResult({ exitCode: 101, holdoutExit: null }), true).reason).toBe('The locked tests fail');
     });
 
     it('saves a runner result and tells both sides', async () => {
-        repo.getReviewRun.mockResolvedValue({ id: 'rr', status: 'running', delivery: { id: 'd1', attempt: 1, commitSha: 'abc', milestone: { job: { id: JOB, ref: 'J-1042', title: 'x', buyerId: 'buyer', seller: { ownerId: 'seller' } } } } } as never);
+        repo.getReviewRun.mockResolvedValue({ id: 'rr', status: 'running', delivery: { id: 'd1', attempt: 1, commitSha: 'abc', milestone: { job: { id: JOB, ref: 'J-1042', title: 'x', buyerId: 'buyer', seller: { ownerId: 'seller' }, acceptanceSpecs: [{ holdoutHash: null }] } } } } as never);
         await expect(service.runnerResult(runResult({ exitCode: 101 }))).resolves.toMatchObject({ verdict: 'fail', reason: 'The locked tests fail' });
         expect(repo.saveRunResult.mock.calls[0]![0]).toMatchObject({ runId: 'run-12345678', deliveryId: 'd1', verdict: 'fail', failed: false, logHash: 'abc' });
         expect(repo.createNotifications.mock.calls[0]![0]).toEqual([
@@ -113,7 +117,7 @@ describe('InternalService', () => {
     });
 
     it('ignores a repeated runner callback', async () => {
-        repo.getReviewRun.mockResolvedValue({ id: 'rr', status: 'done', delivery: { id: 'd1', attempt: 1, commitSha: 'abc', milestone: { job: { id: JOB, ref: 'J-1042', title: 'x', buyerId: 'buyer', seller: null } } } } as never);
+        repo.getReviewRun.mockResolvedValue({ id: 'rr', status: 'done', delivery: { id: 'd1', attempt: 1, commitSha: 'abc', milestone: { job: { id: JOB, ref: 'J-1042', title: 'x', buyerId: 'buyer', seller: null, acceptanceSpecs: [] } } } } as never);
         repo.saveRunResult.mockResolvedValue(0);
         await expect(service.runnerResult(runResult())).resolves.toMatchObject({ message: 'Runner Result Already Received' });
         expect(repo.createNotifications.mock.calls).toHaveLength(0);
@@ -270,5 +274,17 @@ describe('InternalService', () => {
         const res = await service.agentNotify({ runId: 'window-1', role: 'buyer_window', ok: true, jobId: JOB, result: { ownerId: 'buyer' } });
         expect(agents.dispatchBuyer.mock.calls[0]).toEqual([JOB]);
         expect(res.actions).toEqual(['buyer sent']);
+    });
+
+    it('fails a run whose hidden checks fail without revealing them', async () => {
+        const secret = 'hidden_overflow_case';
+        repo.getReviewRun.mockResolvedValue({ id: 'rr', status: 'running', delivery: { id: 'd1', attempt: 1, commitSha: 'abc', milestone: { job: { id: JOB, ref: 'J-1042', title: 'x', buyerId: 'buyer', seller: { ownerId: 'seller' }, acceptanceSpecs: [{ holdoutHash: 'ab'.repeat(32) }] } } } } as never);
+        const out = await service.runnerResult({ ...runResult({ holdoutExit: 101, holdoutCounts: { passed: 3, failed: 1 } }), [secret]: secret });
+        expect(out).toMatchObject({ verdict: 'fail', reason: HIDDEN_FAILED });
+        const saved = repo.saveRunResult.mock.calls[0]![0];
+        expect(saved).toMatchObject({ verdict: 'fail', reason: HIDDEN_FAILED, result: { holdout: { exitCode: 101, passed: 3, failed: 1 } } });
+        const notes = repo.createNotifications.mock.calls[0]![0];
+        expect(notes[0]).toMatchObject({ title: 'Hidden checks fail on J-1042, attempt 1', body: HIDDEN_FAILED });
+        expect(JSON.stringify([out, saved, notes])).not.toContain(secret);
     });
 });

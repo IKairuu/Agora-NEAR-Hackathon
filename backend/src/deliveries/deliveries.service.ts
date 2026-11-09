@@ -5,6 +5,7 @@ import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { ChainService } from '../chain/chain.service.js';
 import { Prisma } from '../generated/prisma/client.js';
+import { holdoutRunOf } from '../holdout.js';
 import { dispatchRun, testFilesOf } from '../runner.js';
 import { DELIVERABLE_STATUSES, DeliveriesRepository, DeliveryRow, JobKey, ProofRow } from './deliveries.repository.js';
 import { CreateDelivery } from './dto/CreateDelivery.dto.js';
@@ -118,6 +119,7 @@ export class DeliveriesService {
             testFiles: testFilesOf(spec.testFiles),
             allowedPaths: spec.allowedPaths,
             failingTests: spec.failingTests,
+            ...holdoutRunOf(spec),
             runId,
             deliveryId: created.id,
         });

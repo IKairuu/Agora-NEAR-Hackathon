@@ -16,6 +16,7 @@ describe('SpecsController', () => {
         getSpec: jest.fn().mockResolvedValue({ id: 'x' }),
         editSpec: jest.fn().mockResolvedValue({ message: 'Spec Successfully Edited', id: 'x' }),
         deleteSpec: jest.fn().mockResolvedValue({ message: 'Spec Successfully Deleted' }),
+        sealHoldout: jest.fn().mockResolvedValue({ message: 'Hidden Tests Successfully Sealed', id: 'x', holdoutHash: 'h', files: 1 }),
     };
 
     beforeEach(async () => {
@@ -33,6 +34,9 @@ describe('SpecsController', () => {
         const body = { job_id: 'J-1042' } as never;
         await controller.createSpec('Bearer t', body);
         expect(service.createSpec).toHaveBeenCalledWith('Bearer t', body);
+        const holdout = { spec_id: 'x', test_files: [] } as never;
+        await controller.sealHoldout('Bearer t', holdout);
+        expect(service.sealHoldout).toHaveBeenCalledWith('Bearer t', holdout);
         await controller.lockSpec('Bearer t', { id: 'x' });
         expect(service.lockSpec).toHaveBeenCalledWith('Bearer t', { id: 'x' });
         await controller.getSpecs('Bearer t', 'J-1042');

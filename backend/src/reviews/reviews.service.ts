@@ -4,6 +4,7 @@ import { isUUID } from 'class-validator';
 import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { ChainService } from '../chain/chain.service.js';
+import { ciphertextHashOf, HOLDOUT_ALG, holdoutRunOf } from '../holdout.js';
 import { dispatchRun, testFilesOf } from '../runner.js';
 import { CreateReview } from './dto/CreateReview.dto.js';
 import { EvidenceRow, JobKey, PanelRow, ReviewsRepository } from './reviews.repository.js';
@@ -98,6 +99,7 @@ export const toEvidence = (job: EvidenceRow, generatedAt: Date) => {
             version: spec.version, specHash: spec.specHash, holdoutHash: spec.holdoutHash, lockedAt: spec.lockedAt, lockTx: spec.lockTx,
             testCommand: spec.testCommand, buildCommand: spec.buildCommand, failingTests: spec.failingTests, allowedPaths: spec.allowedPaths,
             testFiles: testFilesOf(spec.testFiles).map((f) => ({ path: f.path, sha256: sha256(f.content) })),
+            holdout: spec.holdout ? { holdoutHash: spec.holdout.holdoutHash, algorithm: HOLDOUT_ALG, keyId: spec.holdout.keyId, ciphertextSha256: ciphertextHashOf(spec.holdout.ciphertext) } : null,
             checks: spec.checks.map((c) => ({ name: c.name, howVerified: c.howVerified, weight: c.weight })),
         } : null,
         milestones: job.milestones.map((m) => ({
@@ -183,6 +185,7 @@ export class ReviewsService {
             testFiles: testFilesOf(spec.testFiles),
             allowedPaths: spec.allowedPaths,
             failingTests: spec.failingTests,
+            ...holdoutRunOf(spec),
             runId,
             deliveryId: d.id,
         });

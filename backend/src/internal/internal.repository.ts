@@ -107,7 +107,21 @@ export class InternalRepository {
             where: { runId },
             select: {
                 id: true, status: true,
-                delivery: { select: { id: true, attempt: true, commitSha: true, milestone: { select: { job: deliveryJob } } } },
+                delivery: {
+                    select: {
+                        id: true, attempt: true, commitSha: true,
+                        milestone: {
+                            select: {
+                                job: {
+                                    select: {
+                                        ...deliveryJob.select,
+                                        acceptanceSpecs: { where: { lockedAt: { not: null } }, select: { holdoutHash: true }, orderBy: { version: 'desc' }, take: 1 },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
             },
         });
     }

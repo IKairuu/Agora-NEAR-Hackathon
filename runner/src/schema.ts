@@ -21,10 +21,11 @@ export const runRequestSchema = z.object({
     allowedPaths: z.array(z.string().min(1).max(300)).max(100).nullish(),
     failingTests: z.array(z.string().max(300)).max(100).nullish(),
     baseline: z.boolean().nullish(),
-    holdoutRef: z.string().max(200).nullish(),
+    holdoutRef: z.string().regex(/^[0-9a-f]{64}$/, 'must be a sha256 hex hash').nullish(),
+    holdoutBlob: z.string().max(4_000_000).nullish(),
     timeoutSec: z.number().int().positive().nullish(),
     callbackUrl: z.string().url().nullish(),
-});
+}).refine((r) => !r.holdoutBlob || !!r.holdoutRef, { message: 'holdoutRef is required with holdoutBlob', path: ['holdoutRef'] });
 
 export type RunRequest = z.infer<typeof runRequestSchema>;
 
@@ -55,6 +56,7 @@ export const runResultSchema = z.object({
     durationMs: z.number().int(),
     timedOut: z.boolean(),
     holdoutExit: z.number().int().nullable(),
+    holdoutCounts: z.object({ passed: z.number().int(), failed: z.number().int() }).nullable(),
     failingTests: z.array(z.string()),
     image: z.string(),
     steps: z.array(stepSchema),

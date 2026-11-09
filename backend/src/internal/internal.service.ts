@@ -40,6 +40,8 @@ export const runResultSchema = z.object({
     logPath: z.string(),
     durationMs: z.number().int(),
     timedOut: z.boolean(),
+    holdoutExit: z.number().int().nullish(),
+    holdoutCounts: z.object({ passed: z.number().int().min(0), failed: z.number().int().min(0) }).nullish(),
     failingTests: z.array(z.string()),
     image: z.string(),
     steps: z.array(z.object({ name: z.string(), exitCode: z.number().int().nullable(), durationMs: z.number().int() })),
@@ -57,7 +59,10 @@ const RUN_ERRORS: Record<string, string> = {
 
 const isTestPath = (p: string): boolean => /(^|\/)(test|tests|__tests__)\/|\.(test|spec)\./.test(p);
 
-export const judgeRun = (r: Pick<RunResult, 'error' | 'exitCode' | 'installExit' | 'scopeOk' | 'changedFiles'>): { verdict: 'pass' | 'fail'; reason: string | null } => {
+export const HIDDEN_FAILED = 'Hidden checks failed';
+export const HIDDEN_MISSING = 'Hidden checks did not run';
+
+export const judgeRun = (r: Pick<RunResult, 'error' | 'exitCode' | 'installExit' | 'scopeOk' | 'changedFiles' | 'holdoutExit'>, hasHoldout = false): { verdict: 'pass' | 'fail'; reason: string | null } => {
     if (r.error) return { verdict: 'fail', reason: RUN_ERRORS[r.error] ?? r.error };
     if (r.changedFiles.length === 0) return { verdict: 'fail', reason: 'The commit changes no files' };
     const tests = r.changedFiles.filter(isTestPath);
@@ -65,6 +70,9 @@ export const judgeRun = (r: Pick<RunResult, 'error' | 'exitCode' | 'installExit'
     if (r.scopeOk === false) return { verdict: 'fail', reason: 'Edits files outside the allowed paths' };
     if (r.installExit !== null && r.installExit !== 0) return { verdict: 'fail', reason: 'The build failed' };
     if (r.exitCode !== 0) return { verdict: 'fail', reason: 'The locked tests fail' };
+    const hidden = r.holdoutExit ?? null;
+    if (hidden !== null && hidden !== 0) return { verdict: 'fail', reason: HIDDEN_FAILED };
+    if (hasHoldout && hidden === null) return { verdict: 'fail', reason: HIDDEN_MISSING };
     return { verdict: 'pass', reason: null };
 };
 
@@ -313,7 +321,9 @@ export class InternalService {
         const r = parsed.data;
         const run = await this.internalRepository.getReviewRun(r.runId);
         if (!run) throw new NotFoundException('Test run not found');
-        const { verdict, reason } = judgeRun(r);
+        const job = run.delivery.milestone.job;
+        const hasHoldout = !!job.acceptanceSpecs[0]?.holdoutHash;
+        const { verdict, reason } = judgeRun(r, hasHoldout);
         const saved = await this.internalRepository.saveRunResult({
             runId: r.runId,
             failed: r.error !== null,
@@ -326,17 +336,20 @@ export class InternalService {
             logPath: r.logPath,
             durationMs: r.durationMs,
             error: r.error,
-            result: { timedOut: r.timedOut, failingTests: r.failingTests, image: r.image, steps: r.steps, logTail: r.logTail.slice(-8000) },
+            result: {
+                timedOut: r.timedOut, failingTests: r.failingTests, image: r.image, steps: r.steps, logTail: r.logTail.slice(-8000),
+                holdout: hasHoldout ? { exitCode: r.holdoutExit ?? null, passed: r.holdoutCounts?.passed ?? null, failed: r.holdoutCounts?.failed ?? null } : null,
+            },
             deliveryId: run.delivery.id,
             verdict,
             reason,
             diffStats: r.diffStats,
         });
         if (saved === 0) return { message: 'Runner Result Already Received', runId: r.runId, verdict };
-        const job = run.delivery.milestone.job;
+        const hiddenFail = reason === HIDDEN_FAILED || reason === HIDDEN_MISSING;
         const title = verdict === 'pass'
             ? `Locked tests pass on ${job.ref}, attempt ${run.delivery.attempt}`
-            : `Locked tests fail on ${job.ref}, attempt ${run.delivery.attempt}`;
+            : `${hiddenFail ? 'Hidden checks fail' : 'Locked tests fail'} on ${job.ref}, attempt ${run.delivery.attempt}`;
         const body = verdict === 'pass' ? 'The three reviewers are voting.' : reason;
         const notes: NotificationInput[] = [{ userId: job.buyerId, kind: 'review', title, body, link: `/job?id=${job.ref}` }];
         if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title, body, link: '/orders' });
