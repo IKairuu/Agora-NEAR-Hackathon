@@ -19,9 +19,25 @@ describe('RequestsService', () => {
     });
 
     beforeEach(() => {
-        repo = { getService: jest.fn(), getOwnedJob: jest.fn(), createRequests: jest.fn(), editRequest: jest.fn(), keepWaiting: jest.fn() } as unknown as jest.Mocked<RequestsRepository>;
+        repo = { getService: jest.fn(), getOwnedJob: jest.fn(), createRequests: jest.fn(), editRequest: jest.fn(), keepWaiting: jest.fn(), cancelRequest: jest.fn() } as unknown as jest.Mocked<RequestsRepository>;
         agents = { dispatch: jest.fn().mockResolvedValue({ status: 'sent' }) } as unknown as jest.Mocked<AgentsService>;
         service = new RequestsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService, agents);
+    });
+
+    it('discards a draft or open request before anyone is hired', async () => {
+        repo.getOwnedJob.mockResolvedValue({ id: JOB, ref: 'J-1042', status: 'draft' });
+        repo.cancelRequest.mockResolvedValue(1);
+        await expect(service.cancelRequest('Bearer t', JOB)).resolves.toEqual({ message: 'Request Successfully Discarded', id: JOB, ref: 'J-1042' });
+        expect(repo.cancelRequest.mock.calls[0]).toEqual([USER, JOB]);
+    });
+
+    it('refuses to discard a request that is already agreed, missing or badly addressed', async () => {
+        repo.getOwnedJob.mockResolvedValue({ id: JOB, ref: 'J-1042', status: 'agreed' });
+        await expect(service.cancelRequest('Bearer t', JOB)).rejects.toThrow('A request can only be discarded before anyone is hired');
+        repo.getOwnedJob.mockResolvedValue(null);
+        await expect(service.cancelRequest('Bearer t', JOB)).rejects.toThrow('Request not found');
+        await expect(service.cancelRequest('Bearer t', 'J-1042')).rejects.toThrow('Request id must be a valid id');
+        expect(repo.cancelRequest.mock.calls).toHaveLength(0);
     });
 
     it('turns a sentence into a private draft job with a sealed hidden maximum', async () => {

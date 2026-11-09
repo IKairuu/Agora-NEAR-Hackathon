@@ -1436,3 +1436,17 @@ body:has(.achat) #toasts, body:has(.inbox) #toasts { bottom: 104px; }
 .ds-treasury b { font-size: var(--text-xl); font-weight: 500; }
 @media (max-width: 36rem) { .ds-list { padding: var(--space-md); } .ds { gap: var(--space-sm); } .ds-treasury { grid-template-columns: minmax(0, 1fr); gap: var(--space-2xs); } }
 .ds-treasury b .u { margin-left: var(--space-2xs); font-size: var(--text-sm); color: var(--color-muted); }
+
+/* ---------- v7: a folded sidebar stays shut until the pointer leaves it; New request actions ---------- */
+@media (min-width: 60.01rem) {
+  .shell.folded .side.hold:hover, .shell.folded .side.hold:focus-within { clip-path: inset(0 172px 0 0); box-shadow: none; }
+  .shell.folded .side.hold :is(.nav a .t, .nav a .count, .nav-group, .brand-name, .side-foot, .mode .t, .fold) { opacity: 0; }
+  .shell.folded .side.hold .nav a.on { background: transparent; }
+  .shell.folded .side.hold .mode { background: transparent; box-shadow: none; margin-inline: 0; }
+  .shell.folded .side.hold .mode button:not(.on) { opacity: 0; }
+  .shell.folded .side.hold .mode button.on { justify-content: flex-start; padding-left: var(--space-xs); background: transparent; order: -1; }
+}
+.ac-head > .ac-acts { flex: none; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2xs); }
+.content { animation: page-in 220ms var(--ease-out) both; }
+@keyframes page-in { from { opacity: 0; transform: translateY(6px); } }
+@media (prefers-reduced-motion: reduce) { .content { animation: none; } }

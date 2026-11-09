@@ -8,7 +8,7 @@ import { RequestsService } from './requests.service';
 
 describe('RequestsController', () => {
     it('passes the token and inputs through to the service', async () => {
-        const service = { createRequest: jest.fn().mockResolvedValue({}), createRequests: jest.fn(), editRequest: jest.fn(), keepWaiting: jest.fn().mockResolvedValue({}) };
+        const service = { createRequest: jest.fn().mockResolvedValue({}), createRequests: jest.fn(), editRequest: jest.fn(), keepWaiting: jest.fn().mockResolvedValue({}), cancelRequest: jest.fn().mockResolvedValue({}) };
         const module = await Test.createTestingModule({
             controllers: [RequestsController],
             providers: [{ provide: RequestsService, useValue: service }],
@@ -18,5 +18,7 @@ describe('RequestsController', () => {
         expect(service.createRequest).toHaveBeenCalledWith('Bearer t', { text: 'x' });
         await controller.keepWaiting('Bearer t', 'id');
         expect(service.keepWaiting).toHaveBeenCalledWith('Bearer t', 'id');
+        await controller.cancelRequest('Bearer t', 'id');
+        expect(service.cancelRequest.mock.calls[0]).toEqual(['Bearer t', 'id']);
     });
 });

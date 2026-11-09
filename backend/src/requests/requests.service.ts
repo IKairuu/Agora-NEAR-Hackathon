@@ -84,6 +84,17 @@ export class RequestsService {
         return { message: 'Your agent keeps the job private and checks again in 30 minutes', id };
     }
 
+    async cancelRequest(token: string, id: string) {
+        const authId = await this.authId(token);
+        if (!isUUID(id)) throw new BadRequestException('Request id must be a valid id');
+        const job = await this.requestsRepository.getOwnedJob(authId, id);
+        if (!job) throw new NotFoundException('Request not found');
+        if (!['draft', 'open'].includes(job.status)) throw new BadRequestException('A request can only be discarded before anyone is hired');
+        const count = await this.requestsRepository.cancelRequest(authId, id);
+        if (count === 0) throw new BadRequestException('A request can only be discarded before anyone is hired');
+        return { message: 'Request Successfully Discarded', id: job.id, ref: job.ref };
+    }
+
     private async authId(token: string): Promise<string> {
         return this.authService.verifySessionToken((token ?? '').replace('Bearer ', ''));
     }

@@ -183,15 +183,23 @@ async function loadThreads(): Promise<void> {
 
 export async function liveSubmitAsk(text: string): Promise<boolean> {
   const first = !getState().asked && getState().stage < 2;
-  const res = await api<{ id: string; ref: string }>('/requests/v1', { body: { text } }).catch(() => null);
-  if (!res) return false;
   if (first) {
-    setState({ liveJob: { id: res.id, ref: res.ref }, asked: true, askText: text });
+    Object.assign(JOB, { id: '', title: text, plain: text, repo: 'No repository attached yet', base: 'main', specHash: '' });
+    replace(SPEC, [['Tests are being written', 'The spec writer drafts failing tests from your repository', 'Pending']]);
+    setState({ asked: true, askText: text });
+  }
+  const res = await api<{ id: string; ref: string }>('/requests/v1', { body: { text } }).catch(() => null);
+  if (!res) {
+    if (first) setState({ asked: false, askText: '', draft: text });
+    return false;
+  }
+  if (first) {
+    setState({ liveJob: { id: res.id, ref: res.ref } });
     toast(`${res.ref} created. The spec writer is turning it into tests.`);
   } else {
     toast(`${res.ref} created as a separate request. It is in Job requests.`);
   }
-  await refreshAll(false);
+  void refreshAll(false);
   return true;
 }
 
@@ -222,6 +230,22 @@ export async function liveKeepWait(): Promise<void> {
   const id = getState().liveJob?.id; if (!id) return;
   const res = await api<{ message: string }>(`/requests/v1/${id}/keep-waiting`, { body: {} }).catch(() => null);
   if (res) toast(`${res.message}.`);
+}
+
+/** Stops following the current request so the New request page starts empty. The request stays in Job requests. */
+export function liveLeaveAsk(): void {
+  setState({ liveJob: null, asked: false, askText: '', stage: 1, offerSt: '', bidsShown: 0, draft: '' });
+  replace(BIDS, []); replace(ARRIVE, []);
+  void refreshAll(false);
+}
+
+/** Cancels the followed request (only before anyone is hired), then starts a new one. */
+export async function liveDiscardAsk(): Promise<void> {
+  const job = getState().liveJob; if (!job?.id) { liveLeaveAsk(); return; }
+  const res = await api<{ ref: string }>(`/requests/v1/${job.id}`, { method: 'DELETE' }).catch(() => null);
+  if (!res) return;
+  toast(`${res.ref} discarded. Start a new request.`);
+  liveLeaveAsk();
 }
 
 export async function liveAttachRepo(): Promise<void> {

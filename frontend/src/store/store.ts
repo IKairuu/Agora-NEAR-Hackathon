@@ -11,7 +11,7 @@ import { BIDS, ORDERS, type Bid, type FilterKey, type Order, type OtherJob } fro
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
-  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick';
+  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick' | 'discard';
 export interface LiveNote { id: string; kind: string; text: string; link: string | null; time: string; read: boolean }
 export interface State {
   stage: number;

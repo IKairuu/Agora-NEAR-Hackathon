@@ -141,7 +141,7 @@ export function Ask() {
   return (
     <Shell cur="ask">
       <div className="achat">
-        <div className="ac-head"><div><h1>New request</h1><p className="muted small">Spec writer, buyer agent and fraud and lure agent are working on this job.</p></div><RLink r="jobs" className="btn sm ghost"><Icon name="job" />Job requests</RLink></div>
+        <div className="ac-head"><div><h1>New request</h1><p className="muted small">Spec writer, buyer agent and fraud and lure agent are working on this job.</p></div><div className="ac-acts">{s.stage < 4 && (s.live ? !!s.liveJob : s.stage < 2) && <button className="btn sm ghost" onClick={act.discardask}><Icon name="x" />Discard</button>}<button className="btn sm ghost" onClick={act.newask}><Icon name="spark" />New request</button><RLink r="jobs" className="btn sm ghost"><Icon name="job" />Job requests</RLink></div></div>
         <div className="ac-log" id="aclog" aria-live="polite">
           <MeMsg text={s.askText || JOB.plain} />
           <AgentMsg who="Spec writer" t="16:02"><p>I read <span className="mono">payroll-vault</span> at <span className="mono">{JOB.base}</span>. Here are the tests a seller must make pass. Nothing is sent to anyone until you lock them.</p><SpecCard locked={s.stage >= 2} /></AgentMsg>

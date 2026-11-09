@@ -199,6 +199,16 @@ function Unpause() {
   );
 }
 
+function Discard({ job }: { job: string }) {
+  return (
+    <Frame>
+      <h2>Discard {job}?</h2>
+      <p className="muted">The request moves to Completed as cancelled. Sellers can no longer offer on it, and this can't be undone.</p>
+      <div className="acts"><Cancel label="Keep it" /><button className="btn danger" onClick={act.discardask2}><Icon name="x" />Discard request</button></div>
+    </Frame>
+  );
+}
+
 function RequestService() {
   const { svc } = useApp();
   const g = gigBy(svc)!;
@@ -277,6 +287,7 @@ export function ModalHost() {
     case 'reqsvc': return <RequestService />;
     case 'ojob': return <OtherJob id={modal.props?.id ?? ''} />;
     case 'offer': return <Offer id={modal.props?.id ?? ''} />;
+    case 'discard': return <Discard job={modal.props?.job ?? ''} />;
     default: return null;
   }
 }
