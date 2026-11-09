@@ -51,6 +51,39 @@ export class InternalRepository {
         });
     }
 
+    async getAgentBid(id: string) {
+        return prisma.bid.findFirst({
+            where: { id },
+            select: {
+                id: true, status: true, price: true,
+                job: { select: { id: true, ref: true, status: true, buyerId: true } },
+                seller: { select: { id: true, ownerId: true, agentId: true, kind: true, displayName: true } },
+            },
+        });
+    }
+
+    async createHireOffer(data: { jobId: string; bidId: string; sellerId: string; price: number }) {
+        return prisma.$transaction(async (tx) => {
+            const open = await tx.hireOffer.findFirst({ where: { jobId: data.jobId, status: 'sent' }, select: { id: true } });
+            if (open) return null;
+            return tx.hireOffer.create({ data, select: { id: true } });
+        });
+    }
+
+    async getOwner(id: string) {
+        return prisma.profile.findFirst({ where: { id }, select: { id: true } });
+    }
+
+    async pauseByGuardian(ownerId: string, txHash: string | null) {
+        return prisma.$transaction(async (tx) => {
+            const updated = await tx.mandate.updateMany({
+                where: { ownerId, paused: false },
+                data: { paused: true, pausedBy: 'guardian', pausedAt: new Date(), ...(txHash ? { lastTxHash: txHash } : {}) },
+            });
+            return updated.count;
+        });
+    }
+
     async setBidStatus(id: string, from: string, status: 'live' | 'held', holdReason: string | null) {
         return prisma.$transaction(async (tx) => {
             const updated = await tx.bid.updateMany({

@@ -1,4 +1,5 @@
 import { Module } from '@nestjs/common';
+import { AgentsModule } from '../agents/agents.module.js';
 import { ChainModule } from '../chain/chain.module.js';
 import { IndexerModule } from '../indexer/indexer.module.js';
 import { InternalKeyGuard } from './internal-key.guard.js';
@@ -7,7 +8,7 @@ import { InternalRepository } from './internal.repository.js';
 import { InternalService } from './internal.service.js';
 
 @Module({
-    imports: [IndexerModule, ChainModule],
+    imports: [IndexerModule, ChainModule, AgentsModule],
     controllers: [InternalController],
     providers: [InternalService, InternalRepository, InternalKeyGuard],
 })

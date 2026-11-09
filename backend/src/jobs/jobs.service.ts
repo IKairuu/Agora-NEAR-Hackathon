@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
+import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { chainIdOf, ChainService, deadlineIn, usdcUnits } from '../chain/chain.service.js';
 import { PublishJob } from './dto/PublishJob.dto.js';
@@ -137,6 +138,7 @@ export class JobsService {
         private readonly jobsRepository: JobsRepository,
         private readonly authService: AuthService,
         private readonly chainService: ChainService,
+        private readonly agentsService: AgentsService,
     ) {}
 
     async getJobs(token: string, grp?: string) {
@@ -162,7 +164,8 @@ export class JobsService {
         const count = await this.jobsRepository.publishJob(authId, row.id);
         if (count === 0) throw new BadRequestException('This job is already past the offers stage');
         const chain = await this.postJob(authId, row.id);
-        return { message: 'Job Successfully Published', id: row.id, ref: row.ref, ...chain };
+        const bidders = await this.agentsService.dispatchBidders(row.id);
+        return { message: 'Job Successfully Published', id: row.id, ref: row.ref, ...chain, bidders: bidders.filter((b) => b.status === 'sent').length };
     }
 
     private async postJob(authId: string, id: string): Promise<PostResult> {

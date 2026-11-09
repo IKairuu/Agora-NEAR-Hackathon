@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
+import { AgentsService } from '../agents/agents.service.js';
 import { chainBidId, chainJobId, ChainService } from '../chain/chain.service.js';
 import { IndexerService } from '../indexer/indexer.service.js';
 import { InternalRepository, NotificationInput } from './internal.repository.js';
@@ -75,12 +76,27 @@ export const bidFlagsOf = (bid: { priceCheck: string | null; fraudScore: number 
 
 const text = (v: unknown): string | null => (typeof v === 'string' && v.length > 0 ? v : null);
 
+const amount = (v: unknown): number | null => {
+    const n = typeof v === 'number' ? v : typeof v === 'string' ? Number(v) : NaN;
+    return Number.isFinite(n) && n > 0 ? Math.round(n * 1e6) / 1e6 : null;
+};
+
+const usdc = (n: number): string => `${n.toFixed(2)} USDC`;
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+export const HIREABLE_BID = ['pending_check', 'live', 'shortlisted'];
+const NEGOTIABLE_JOB = ['open', 'negotiating'];
+
+type NotifyJob = NonNullable<Awaited<ReturnType<InternalRepository['getJob']>>>;
+
 @Injectable()
 export class InternalService {
     constructor(
         private readonly internalRepository: InternalRepository,
         private readonly indexer: IndexerService,
         private readonly chainService: ChainService,
+        private readonly agentsService: AgentsService,
     ) {}
 
     async agentNotify(raw: unknown) {
@@ -107,6 +123,8 @@ export class InternalService {
                         : { userId: bid.job.buyerId, kind: 'held', title: `Held an offer on ${bid.job.ref}`, body: `${bid.seller.displayName}: ${decision.reason}`, link: `/job?id=${bid.job.ref}` });
                     if (decision.status === 'held') {
                         notes.push({ userId: bid.seller.ownerId, kind: 'held', title: `Your offer on ${bid.job.ref} is held`, body: `${decision.reason}. You can explain why it is fair.`, link: '/orders' });
+                    } else {
+                        actions.push(`buyer ${(await this.agentsService.dispatchBuyer(bid.job.id)).status}`);
                     }
                 }
             }
@@ -152,6 +170,18 @@ export class InternalService {
                     }
                 }
             }
+        } else if (body.role === 'buyer' && body.ok && job) {
+            await this.onBuyer(job, result, actions, notes);
+        } else if (body.role === 'bidding' && body.ok && job) {
+            await this.onBidding(job, result, actions, notes);
+        } else if (body.role === 'bidding') {
+            actions.push('bidding failed');
+        } else if (body.role === 'guardian') {
+            await this.onGuardian(body.ok, body.error ?? null, result, actions, notes);
+        } else if (body.role === 'auto_release' && body.ok && job) {
+            await this.onAutoRelease(job, result, actions, notes);
+        } else if (body.role === 'buyer_window' && job) {
+            actions.push(`buyer ${(await this.agentsService.dispatchBuyer(job.id)).status}`);
         } else if (!body.ok && job) {
             notes.push({ userId: job.buyerId, kind: 'agent', title: `Your ${body.role.replace(/_/g, ' ')} agent hit a problem on ${job.ref}`, body: body.error ?? null, link: `/job?id=${job.ref}` });
         }
@@ -159,6 +189,112 @@ export class InternalService {
         const notified = await this.internalRepository.createNotifications(notes);
         if (notified > 0) actions.push(`notified ${notified}`);
         return { message: 'Agent Result Successfully Received', role: body.role, actions };
+    }
+
+    private async onBuyer(job: NotifyJob, result: Record<string, unknown>, actions: string[], notes: NotificationInput[]) {
+        const decision = text(result['decision']);
+        if (decision === 'wait' || !decision) {
+            actions.push('buyer waiting');
+            return;
+        }
+        const bidId = text(result['bidId']);
+        const bid = bidId && UUID.test(bidId) ? await this.internalRepository.getAgentBid(bidId) : null;
+        if (!bid || bid.job.id !== job.id) {
+            actions.push('bid not found');
+            return;
+        }
+        const seller = bid.seller.displayName;
+        if (decision === 'counter') {
+            const offer = amount(result['offer']);
+            const round = typeof result['round'] === 'number' ? result['round'] : null;
+            const terms = `${offer !== null ? usdc(offer) : 'a lower price'}${round !== null ? `, round ${round} of 3` : ''}`;
+            notes.push({ userId: job.buyerId, kind: 'offer', title: `Your agent countered ${seller} on ${job.ref}`, body: `Counter at ${terms}`, link: `/job?id=${job.ref}` });
+            notes.push({ userId: bid.seller.ownerId, kind: 'offer', title: `The buyer's agent countered your offer on ${job.ref}`, body: `Counter at ${terms}`, link: '/orders' });
+            actions.push('counter sent');
+            if (bid.seller.kind === 'agent') actions.push(`bidding ${(await this.agentsService.dispatchBidding(bid.seller, job.id, 'negotiate')).status}`);
+            return;
+        }
+        if (decision === 'accept') {
+            const price = amount(result['price']) ?? Number(bid.price);
+            if (!NEGOTIABLE_JOB.includes(bid.job.status) || !HIREABLE_BID.includes(bid.status) || bid.seller.ownerId === job.buyerId) {
+                actions.push('offer not possible');
+                return;
+            }
+            const offer = await this.internalRepository.createHireOffer({ jobId: job.id, bidId: bid.id, sellerId: bid.seller.id, price });
+            if (!offer) {
+                actions.push('offer already sent');
+                return;
+            }
+            actions.push('hire offer sent');
+            notes.push({ userId: job.buyerId, kind: 'offer', title: `Your agent chose ${seller} on ${job.ref}`, body: `Hire offer sent at ${usdc(price)}. Funding starts when the seller accepts.`, link: `/job?id=${job.ref}` });
+            notes.push({ userId: bid.seller.ownerId, kind: 'offer', title: `Hire offer on ${job.ref}`, body: `The buyer offers ${usdc(price)}. Accept it to start.`, link: '/orders' });
+            return;
+        }
+        if (decision === 'no_deal') {
+            actions.push('no deal');
+            notes.push({ userId: job.buyerId, kind: 'agent', title: `No deal with ${seller} on ${job.ref}`, body: 'The offer is still above your budget after 3 rounds.', link: `/job?id=${job.ref}` });
+        }
+    }
+
+    private async onBidding(job: NotifyJob, result: Record<string, unknown>, actions: string[], notes: NotificationInput[]) {
+        if (text(result['skip'])) {
+            actions.push('bidding skipped');
+            return;
+        }
+        const bidId = text(result['bidId']);
+        const bid = bidId && UUID.test(bidId) ? await this.internalRepository.getAgentBid(bidId) : null;
+        if (!bid || bid.job.id !== job.id) {
+            actions.push('no bid');
+            return;
+        }
+        const price = amount(result['price']) ?? Number(bid.price);
+        if (result['action'] === 'negotiate') {
+            const accepted = result['accept'] === true;
+            const title = accepted ? `${bid.seller.displayName} accepted your agent's counter on ${job.ref}` : `${bid.seller.displayName} answered your agent on ${job.ref}`;
+            notes.push({ userId: job.buyerId, kind: 'offer', title, body: `Price now ${usdc(price)}`, link: `/job?id=${job.ref}` });
+            actions.push(accepted ? 'counter accepted' : 'seller replied');
+            actions.push(`buyer ${(await this.agentsService.dispatchBuyer(job.id)).status}`);
+            return;
+        }
+        await Promise.all([
+            this.agentsService.dispatch('fraud_lure', { ownerId: job.buyerId, jobId: job.id, payload: { subjectType: 'bid', subjectId: bid.id } }),
+            this.agentsService.dispatch('price_check', { ownerId: job.buyerId, jobId: job.id, payload: { bidId: bid.id } }),
+        ]);
+        actions.push('bid checks started');
+        notes.push({ userId: bid.seller.ownerId, kind: 'offer', title: `Your agent bid on ${job.ref}`, body: `${usdc(price)}. The fraud and price checks run before the buyer sees it.`, link: '/orders' });
+    }
+
+    private async onGuardian(ok: boolean, error: string | null, result: Record<string, unknown>, actions: string[], notes: NotificationInput[]) {
+        const ownerId = text(result['ownerId']);
+        if (!ownerId || !UUID.test(ownerId) || !(await this.internalRepository.getOwner(ownerId))) {
+            actions.push('owner not found');
+            return;
+        }
+        const reasons = Array.isArray(result['reasons']) ? result['reasons'].filter((r): r is string => typeof r === 'string').slice(0, 5) : [];
+        const why = reasons.length ? reasons.join('; ') : 'unusual activity';
+        if (ok) {
+            const paused = await this.internalRepository.pauseByGuardian(ownerId, text(result['pauseTx']));
+            actions.push(paused > 0 ? 'paused' : 'already paused');
+            notes.push({ userId: ownerId, kind: 'guardian', title: 'Your guardian paused your agents', body: `${why}. Only you can unpause.`, link: '/agents' });
+            return;
+        }
+        actions.push('pause failed');
+        notes.push({ userId: ownerId, kind: 'guardian', title: 'Your guardian tried to pause your agents', body: `${why}. The pause call failed${error ? `: ${error.slice(0, 300)}` : ''}. Check your limits.`, link: '/mandate' });
+    }
+
+    private async onAutoRelease(job: NotifyJob, result: Record<string, unknown>, actions: string[], notes: NotificationInput[]) {
+        if ((process.env['AGORA_CHAIN_MODE'] ?? 'mock') === 'mock') {
+            const released = await this.indexer.onMockRelease(job.id, text(result['txHash']) ?? `mock-release-expired-${Date.now()}`);
+            if (!released) {
+                actions.push('nothing to release');
+                return;
+            }
+            actions.push('released');
+        }
+        const title = `Payment released on ${job.ref}`;
+        const body = 'No dispute before the review window ended.';
+        notes.push({ userId: job.buyerId, kind: 'review', title, body, link: `/job?id=${job.ref}` });
+        if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title, body, link: '/orders' });
     }
 
     private async flagBid(bid: { id: string; onchainId: bigint | null; priceCheck: string | null; fraudScore: number | null; job: { ref: string; onchainId: bigint | null } }): Promise<string> {

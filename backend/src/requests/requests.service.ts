@@ -1,14 +1,14 @@
-import { BadRequestException, Injectable, InternalServerErrorException, NotFoundException } from '@nestjs/common';
-import { createCipheriv, createDecipheriv, randomBytes } from 'node:crypto';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
+import { sealLimit } from '../limits.js';
 import { CreateRequest } from './dto/CreateRequest.dto.js';
 import { CreateRequestBulk } from './dto/CreateRequestBulk.dto.js';
 import { EditRequest } from './dto/EditRequest.dto.js';
 import { NewJob, RequestsRepository } from './requests.repository.js';
 
-const KEY_REF = 'env:AGORA_LIMIT_KEY:v1';
+export { openLimit, sealLimit } from '../limits.js';
 
 const CATEGORY_BY_LABEL: Record<string, string> = {
     'smart contracts': 'rust',
@@ -31,28 +31,6 @@ export const titleOf = (text: string): string => {
     const cut = first.slice(0, 78);
     const space = cut.lastIndexOf(' ');
     return `${(space > 40 ? cut.slice(0, space) : cut).replace(/[\s,;:]+$/, '')}...`;
-};
-
-const limitKey = (): Buffer => {
-    const raw = process.env['AGORA_LIMIT_KEY'] ?? '';
-    const key = Buffer.from(raw, raw.length === 64 ? 'hex' : 'base64');
-    if (key.length !== 32) throw new InternalServerErrorException('Hidden budgets are not configured on the server');
-    return key;
-};
-
-export const sealLimit = (amount: number): { ciphertext: string; keyRef: string } => {
-    const iv = randomBytes(12);
-    const cipher = createCipheriv('aes-256-gcm', limitKey(), iv);
-    const body = Buffer.concat([cipher.update(amount.toFixed(6), 'utf8'), cipher.final()]);
-    return { ciphertext: [iv, cipher.getAuthTag(), body].map((b) => b.toString('base64')).join('.'), keyRef: KEY_REF };
-};
-
-export const openLimit = (ciphertext: string): number => {
-    const [iv, tag, body] = ciphertext.split('.').map((p) => Buffer.from(p, 'base64'));
-    if (!iv || !tag || !body) throw new Error('Malformed hidden budget');
-    const decipher = createDecipheriv('aes-256-gcm', limitKey(), iv);
-    decipher.setAuthTag(tag);
-    return Number(Buffer.concat([decipher.update(body), decipher.final()]).toString('utf8'));
 };
 
 @Injectable()
