@@ -431,11 +431,11 @@ Import each JSON file in [`agents/`](agents) into n8n (**Workflows → Import fr
 | Name | Role |
 |---|---|
 | **Jhon Lloyd M. Valencia** | Project manager |
-| **Kyle Allen M. Abandia** | AI engineer |
+| **Kyle Allen M. Abandia** | AI Automation Engineer |
 | **Siegfred Josh L. Calayag** | UI/UX designer |
-| **Maurenzio Franck M. Altamarino** | Frontend engineer |
-| **Maria Veronica G. Amparo** | Research |
-| **Mary Rose P. de los Reyes** | Backend engineer |
+| **Maurenzio Franck M. Altamarino** | *Role to be confirmed* |
+| **Maria Veronica G. Amparo** | *Role to be confirmed* |
+| **Mary Rose P. de los Reyes** | *Role to be confirmed* |
 | **Leanne Elech P. Rosales** | *Role to be confirmed* |
 | **Raphael Augustin V. Dator** | *Role to be confirmed* |
 
