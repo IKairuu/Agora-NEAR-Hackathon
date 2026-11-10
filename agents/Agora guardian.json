@@ -57,7 +57,7 @@
     },
     {
       "parameters": {
-        "jsCode": "return $input.all().map(({ json: a }) => ({ json: {\n  signer: 'guardian-buyer', method: 'pause', args: { owner: a.owner_id },\n  ownerId: a.owner_id, jobId: null, amount: null,\n} }));"
+        "jsCode": "return $input.all().map(({ json: a }) => ({ json: {\n  signer: 'guardian-buyer', method: 'pause', args: {}, // team contract: pause() acts for the caller's owner\n  ownerId: a.owner_id, jobId: null, amount: null,\n} }));"
       },
       "id": "3b56488f-a02e-4ddf-a44b-bee0b4c48cd0",
       "name": "Pause args",

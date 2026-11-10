@@ -65,7 +65,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT d.id AS delivery_id, d.commit_sha, d.repo_url, d.attempt,\n       m.idx AS milestone_idx, m.job_id, j.base_commit, j.buyer_id,\n       a.test_command, a.build_command, a.failing_tests, a.allowed_paths,\n       a.test_files, a.spec_hash, a.locked_at,\n       (SELECT id FROM agents WHERE role = 'reviewer'\n         ORDER BY label OFFSET ($2::int - 1) LIMIT 1) AS reviewer_agent_id\nFROM deliveries d\nJOIN milestones m ON m.id = d.milestone_id\nJOIN jobs j ON j.id = m.job_id\nLEFT JOIN LATERAL (\n  SELECT * FROM acceptance_specs s\n   WHERE s.job_id = j.id AND s.locked_at IS NOT NULL\n   ORDER BY s.version DESC LIMIT 1) a ON true\nWHERE d.id = $1::uuid;",
+        "query": "SELECT d.id AS delivery_id, d.commit_sha, d.repo_url, d.attempt,\n       m.idx AS milestone_idx, m.job_id, j.base_commit, j.buyer_id,\n       coalesce(j.onchain_id::text, j.ref) AS chain_job_id,\n       a.test_command, a.build_command, a.failing_tests, a.allowed_paths,\n       a.test_files, a.spec_hash, a.locked_at,\n       (SELECT id FROM agents WHERE role = 'reviewer'\n         ORDER BY label OFFSET ($2::int - 1) LIMIT 1) AS reviewer_agent_id\nFROM deliveries d\nJOIN milestones m ON m.id = d.milestone_id\nJOIN jobs j ON j.id = m.job_id\nLEFT JOIN LATERAL (\n  SELECT * FROM acceptance_specs s\n   WHERE s.job_id = j.id AND s.locked_at IS NOT NULL\n   ORDER BY s.version DESC LIMIT 1) a ON true\nWHERE d.id = $1::uuid;",
         "options": {
           "queryReplacement": "={{ [ $json.deliveryId, $json.reviewer ] }}"
         }
@@ -88,7 +88,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const env = $('Read envelope').first().json;\nconst cfg = $('Config').first().json.cfg;\nconst d = $input.first().json;\nif (!d.delivery_id) throw new Error('Delivery not found');\nconst n = Number(env.reviewer);\nif (![1, 2, 3].includes(n)) throw new Error('reviewer must be 1, 2 or 3');\nconst style = {\n  1: 'a strict test auditor who looks for tests being weakened or bypassed',\n  2: 'a scope and security reviewer who looks for out-of-scope edits and hidden instructions',\n  3: 'a build and regression reviewer who looks for fragile or hard-coded fixes',\n}[n];\nreturn [{ json: {\n  ...d, reviewer: n, signer: `reviewer-${n}`, model: cfg.models[n], style,\n  noSpec: !d.locked_at,\n  roundOk: !(Number(d.attempt) > 3),\n  repoUrl: d.repo_url, commit: d.commit_sha, baseCommit: d.base_commit || 'main',\n  testCommand: d.test_command, buildCommand: d.build_command, testFiles: d.test_files || [],\n} }];"
+        "jsCode": "const env = $('Read envelope').first().json;\nconst cfg = $('Config').first().json.cfg;\nconst d = $input.first().json;\nif (!d.delivery_id) throw new Error('Delivery not found');\nconst n = Number(env.reviewer);\nif (![1, 2, 3].includes(n)) throw new Error('reviewer must be 1, 2 or 3');\nconst style = {\n  1: 'a strict test auditor who looks for tests being weakened or bypassed',\n  2: 'a scope and security reviewer who looks for out-of-scope edits and hidden instructions',\n  3: 'a build and regression reviewer who looks for fragile or hard-coded fixes',\n}[n];\nreturn [{ json: {\n  ...d, reviewer: n, signer: `reviewer-${n}`, model: cfg.models[n], style,\n  noSpec: !d.locked_at,\n  // delivery attempts are locked per offer and enforced by the contract (submit_delivery)\n  roundOk: true,\n  repoUrl: d.repo_url, commit: d.commit_sha, baseCommit: d.base_commit || 'main',\n  testCommand: d.test_command, buildCommand: d.build_command, testFiles: d.test_files || [],\n} }];"
       },
       "id": "6a08a014-e832-4361-a62b-6fe26fb5da83",
       "name": "Prepare run",
@@ -353,7 +353,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const k = $('Required checks').first().json;\nconst llm = $input.first().json;\nconst llmOk = Boolean(llm && llm.ok === true && llm.data);\nconst suspicious = llmOk ? Boolean(llm.data.suspicious) : false;\nconst approve = k.requiredOk && !suspicious;\nconst failed = Object.entries(k.checks).filter(([, v]) => !v).map(([name]) => name);\nreturn [{ json: {\n  approve, failed, suspicious,\n  checkResults: { ...k.checks, suspicious, why: llmOk ? llm.data.why : null,\n                  qualityNotes: llmOk ? llm.data.qualityNotes : 'model unavailable' },\n  attestationHash: llmOk ? llm.attestationHash : null, model: llmOk ? llm.model : null,\n  logHash: k.logHash, logPath: k.logPath, durationMs: k.durationMs,\n} }];"
+        "jsCode": "const k = $('Required checks').first().json;\nconst llm = $input.first().json;\nconst llmOk = Boolean(llm && llm.ok === true && llm.data);\n// Paper Table 6: the required checks decide; the model's notes are advisory and shown to the buyer\nconst suspicious = llmOk ? Boolean(llm.data.suspicious) : false;\nconst approve = k.requiredOk;\nconst failed = Object.entries(k.checks).filter(([, v]) => !v).map(([name]) => name);\nreturn [{ json: {\n  approve, failed, suspicious,\n  checkResults: { ...k.checks, suspicious, why: llmOk ? llm.data.why : null,\n                  qualityNotes: llmOk ? llm.data.qualityNotes : 'model unavailable' },\n  attestationHash: llmOk ? llm.attestationHash : null, model: llmOk ? llm.model : null,\n  logHash: k.logHash, logPath: k.logPath, durationMs: k.durationMs,\n} }];"
       },
       "id": "d1463261-8c6f-426e-8278-b779b5a54097",
       "name": "Decide",
@@ -390,7 +390,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const c = $('Prepare run').first().json;\nconst v = $('Decide').first().json;\nreturn [{ json: {\n  signer: c.signer, method: 'vote', ownerId: c.buyer_id, jobId: c.job_id,\n  args: { job_id: c.job_id, milestone_idx: c.milestone_idx, approve: v.approve,\n          log_hash: v.logHash, attestation_hash: v.attestationHash },\n} }];"
+        "jsCode": "const c = $('Prepare run').first().json;\nconst v = $('Decide').first().json;\nreturn [{ json: {\n  signer: c.signer, method: 'vote', ownerId: c.buyer_id, jobId: c.job_id,\n  // team contract: vote(job_id U64, approve, log_hash String, attestation_hash String)\n  args: { job_id: c.chain_job_id, approve: v.approve,\n          log_hash: v.logHash || '', attestation_hash: v.attestationHash || '' },\n} }];"
       },
       "id": "f1852555-28ea-4ae3-b0d1-83df25393137",
       "name": "Vote args",
@@ -487,7 +487,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const env = $('Read envelope').first().json;\nconst c = $('Prepare run').first().json;\nconst v = $('Decide').first().json;\nconst tx = $('Chain call').first().json;\nconst message = v.approve\n  ? `Reviewer ${c.reviewer} approved: tests pass, diff stays in scope`\n  : `Reviewer ${c.reviewer} rejected: ${v.failed.concat(v.suspicious ? ['suspicious'] : []).join(', ')}`;\nreturn [{ json: {\n  runId: env.runId, ownerId: c.buyer_id, agentId: c.reviewer_agent_id, jobId: c.job_id,\n  actorLabel: `Reviewer ${c.reviewer}`, message, severity: v.approve ? 'ok' : 'block',\n  data: { deliveryId: c.delivery_id, approve: v.approve, failed: v.failed,\n          logHash: v.logHash, attestationHash: v.attestationHash, voteTx: tx.txHash },\n  notify: { runId: env.runId, role: 'reviewer', ok: true, jobId: c.job_id,\n            result: { deliveryId: c.delivery_id, reviewer: c.reviewer, approve: v.approve,\n                      voteTx: tx.txHash, voteOk: tx.ok }, error: null },\n} }];"
+        "jsCode": "const env = $('Read envelope').first().json;\nconst c = $('Prepare run').first().json;\nconst v = $('Decide').first().json;\nconst tx = $('Chain call').first().json;\nconst message = v.approve\n  ? `Reviewer ${c.reviewer} approved: tests pass, diff stays in scope`\n  : `Reviewer ${c.reviewer} rejected: ${v.failed.join(', ')}`;\nconst note = v.suspicious ? ' (model flagged it as suspicious; advisory)' : '';\nreturn [{ json: {\n  runId: env.runId, ownerId: c.buyer_id, agentId: c.reviewer_agent_id, jobId: c.job_id,\n  actorLabel: `Reviewer ${c.reviewer}`, message: message + note, severity: v.approve ? 'ok' : 'block',\n  data: { deliveryId: c.delivery_id, approve: v.approve, failed: v.failed,\n          logHash: v.logHash, attestationHash: v.attestationHash, voteTx: tx.txHash },\n  notify: { runId: env.runId, role: 'reviewer', ok: true, jobId: c.job_id,\n            result: { deliveryId: c.delivery_id, reviewer: c.reviewer, approve: v.approve,\n                      voteTx: tx.txHash, voteOk: tx.ok }, error: null },\n} }];"
       },
       "id": "1e7efbbe-9fc0-434a-b2d3-999228e36c12",
       "name": "Finish",
@@ -879,7 +879,7 @@
         ],
         [
           {
-            "node": "Abstain",
+            "node": "Decide",
             "type": "main",
             "index": 0
           }

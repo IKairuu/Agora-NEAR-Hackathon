@@ -17,7 +17,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT b.id, b.price, b.job_id, j.category\nFROM bids b JOIN jobs j ON j.id = b.job_id\nWHERE b.id = $1::uuid;",
+        "query": "SELECT b.id, b.price, b.job_id, b.seller_id, j.category\nFROM bids b JOIN jobs j ON j.id = b.job_id\nWHERE b.id = $1::uuid;",
         "options": {
           "queryReplacement": "={{ [ $json.bidId ] }}"
         }
@@ -41,9 +41,9 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT price FROM (\n  SELECT j.agreed_price AS price\n    FROM jobs j\n   WHERE j.category = $2 AND j.status IN ('settled', 'released') AND j.agreed_price IS NOT NULL\n  UNION ALL\n  SELECT x.price\n    FROM bids x JOIN jobs j ON j.id = x.job_id\n   WHERE j.category = $2 AND x.job_id <> $1::uuid\n     AND x.status IN ('live', 'shortlisted', 'accepted')\n) r\nLIMIT 200;",
+        "query": "-- Paper III.i reference: (1) settled AGORA jobs, (2) live bids on comparable jobs,\n-- (3) the seller's own history in this category. (4) Agent Market prices: not wired yet.\nSELECT price FROM (\n  SELECT j.agreed_price AS price\n    FROM jobs j\n   WHERE j.category = $2 AND j.status IN ('settled', 'released') AND j.agreed_price IS NOT NULL\n  UNION ALL\n  SELECT x.price\n    FROM bids x JOIN jobs j ON j.id = x.job_id\n   WHERE j.category = $2 AND x.job_id <> $1::uuid\n     AND x.status IN ('live', 'shortlisted', 'accepted')\n  UNION ALL\n  SELECT j.agreed_price\n    FROM jobs j\n   WHERE j.category = $2 AND j.seller_id = $3::uuid AND j.id <> $1::uuid\n     AND j.status IN ('settled', 'released') AND j.agreed_price IS NOT NULL\n) r\nLIMIT 200;",
         "options": {
-          "queryReplacement": "={{ [ $json.job_id, $json.category ] }}"
+          "queryReplacement": "={{ [ $json.job_id, $json.category, $json.seller_id ] }}"
         }
       },
       "id": "4f564194-580b-4c4f-9f8d-ea6d821190ff",

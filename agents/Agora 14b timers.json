@@ -48,11 +48,11 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT m.job_id, m.idx, m.amount, j.buyer_id\nFROM milestones m\nJOIN jobs j ON j.id = m.job_id\nWHERE m.status = 'in_review' AND m.review_deadline < now()\n  AND NOT EXISTS (SELECT 1 FROM disputes d\n                   WHERE d.milestone_id = m.id AND d.status <> 'resolved')\n  AND NOT EXISTS (SELECT 1 FROM chain_txs c\n                   WHERE c.job_id = m.job_id AND c.method = 'release_expired'\n                     AND c.args->>'milestone_idx' = m.idx::text AND c.status <> 'rejected');",
+        "query": "-- Paper v4.3: a timeout never pays the seller.\n-- (a) review stuck 12h -> rerun_review, (b) deadline passed with no delivery -> refund_expired,\n-- (c) dispute re-check stands after 24h without escalation, or DAO silent 72h -> finalize_default\nSELECT 'rerun_review' AS method, j.id AS job_id, coalesce(j.onchain_id::text, j.ref) AS chain_job_id,\n       j.buyer_id, NULL::numeric AS amount\nFROM milestones m JOIN jobs j ON j.id = m.job_id\nWHERE m.status IN ('delivered', 'in_review')\n  AND coalesce(m.review_deadline,\n        (SELECT max(d.created_at) FROM deliveries d WHERE d.milestone_id = m.id) + interval '12 hours') < now()\n  AND NOT EXISTS (SELECT 1 FROM disputes d WHERE d.milestone_id = m.id AND d.status <> 'resolved')\n  AND NOT EXISTS (SELECT 1 FROM chain_txs c WHERE c.job_id = j.id AND c.method = 'rerun_review'\n                   AND c.status <> 'rejected' AND c.created_at > now() - interval '12 hours')\nUNION ALL\nSELECT 'refund_expired', j.id, coalesce(j.onchain_id::text, j.ref), j.buyer_id, m.amount\nFROM milestones m JOIN jobs j ON j.id = m.job_id LEFT JOIN bids b ON b.id = j.accepted_bid_id\nWHERE m.status = 'funded' AND m.funded_at IS NOT NULL\n  AND m.funded_at + make_interval(days => coalesce(b.delivery_days, 14) + 3) < now()\n  AND NOT EXISTS (SELECT 1 FROM deliveries d WHERE d.milestone_id = m.id)\n  AND NOT EXISTS (SELECT 1 FROM chain_txs c WHERE c.job_id = j.id AND c.method = 'refund_expired'\n                   AND c.status <> 'rejected')\nUNION ALL\nSELECT 'finalize_default', j.id, coalesce(j.onchain_id::text, j.ref), j.buyer_id, NULL::numeric\nFROM disputes d JOIN milestones m ON m.id = d.milestone_id JOIN jobs j ON j.id = m.job_id\nWHERE ((d.status = 'recheck' AND d.escalated_at IS NULL AND d.recheck_at < now() - interval '24 hours')\n    OR (d.status = 'escalated' AND d.escalated_at < now() - interval '72 hours'))\n  AND NOT EXISTS (SELECT 1 FROM chain_txs c WHERE c.job_id = j.id AND c.method = 'finalize_default'\n                   AND c.status <> 'rejected' AND c.created_at > now() - interval '1 hour');",
         "options": {}
       },
       "id": "5c5e71df-a35e-4b2e-934a-ff1a8ceec88f",
-      "name": "Expired reviews",
+      "name": "Timed-out items",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
       "position": [
@@ -96,10 +96,10 @@
     },
     {
       "parameters": {
-        "jsCode": "return $input.all().map(({ json: r }) => ({ json: {\n  runId: 'timer-' + Date.now(), ownerId: r.ownerId, agentId: null, jobId: r.jobId,\n  actorLabel: 'Auto-release',\n  message: r.ok\n    ? `Released ${r.amount} USDC: no dispute before the review window ended (tx ${r.txHash})`\n    : `Auto-release refused: ${r.error}`,\n  severity: r.ok ? 'ok' : 'block',\n  data: { txHash: r.txHash, ok: r.ok },\n  notify: { runId: 'timer-' + Date.now(), role: 'auto_release', ok: r.ok, jobId: r.jobId,\n            result: { txHash: r.txHash }, error: r.error || null },\n} }));"
+        "jsCode": "const TEXT = {\n  rerun_review: ['Review timer', 'No review result after 12 hours, so the review was cleared for a rerun'],\n  refund_expired: ['Deadline timer', 'Deadline passed with no delivery, so the buyer was refunded'],\n  finalize_default: ['Dispute timer', 'No escalation or DAO ruling in time, so the re-check result stands'],\n};\nconst ROLE = { rerun_review: 'review_timeout', refund_expired: 'deadline_refund', finalize_default: 'dispute_default' };\nconst args = $('Timer args').all().map((i) => i.json);\nreturn $input.all().map(({ json: r }, i) => {\n  const a = args[i] || {};\n  const method = a.method || r.method;\n  const [label, text] = TEXT[method] || ['Timer', method];\n  const runId = 'timer-' + Date.now() + '-' + i;\n  return { json: {\n    runId, ownerId: a.buyerId || null, agentId: null, jobId: a.jobId || r.jobId,\n    actorLabel: label,\n    message: r.ok ? `${text} (tx ${r.txHash})` : `${label} call ${method} refused: ${r.error}`,\n    severity: r.ok ? 'ok' : 'warn',\n    data: { method, txHash: r.txHash, ok: r.ok },\n    notify: { runId, role: ROLE[method] || 'timer', ok: r.ok, jobId: a.jobId || r.jobId,\n              result: { method, txHash: r.txHash, ownerId: a.buyerId || null }, error: r.error || null },\n  } };\n});"
       },
       "id": "7c78b237-c684-4b98-ad9e-908cb6882f1b",
-      "name": "Release events",
+      "name": "Timer events",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -127,7 +127,7 @@
         "options": {}
       },
       "id": "aea79e14-52a0-42b3-8473-c5aae6869fbe",
-      "name": "Log release",
+      "name": "Log timer",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.4,
       "position": [
@@ -155,7 +155,7 @@
         "options": {}
       },
       "id": "2cffb593-3b78-4e14-a323-a66a741d7f0d",
-      "name": "Notify release",
+      "name": "Notify timer",
       "type": "n8n-nodes-base.executeWorkflow",
       "typeVersion": 1.4,
       "position": [
@@ -166,10 +166,10 @@
     },
     {
       "parameters": {
-        "jsCode": "return $input.all().map(({ json: m }) => ({ json: {\n  signer: 'platform', method: 'release_expired',\n  args: { job_id: m.job_id, milestone_idx: m.idx },\n  ownerId: m.buyer_id, jobId: m.job_id, amount: Number(m.amount),\n} }));"
+        "jsCode": "// The platform signer makes the call. ownerId stays null so a refusal\n// does not count toward the guardian's rejected-call rule for the buyer.\nreturn $input.all().map(({ json: m }) => ({ json: {\n  signer: 'platform', method: m.method,\n  args: { job_id: m.chain_job_id },\n  ownerId: null, jobId: m.job_id, buyerId: m.buyer_id,\n  amount: m.amount == null ? null : Number(m.amount),\n} }));"
       },
       "id": "2cff490d-16e5-4faa-958b-6d8f678667ba",
-      "name": "Release args",
+      "name": "Timer args",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
@@ -259,7 +259,7 @@
       "main": [
         [
           {
-            "node": "Expired reviews",
+            "node": "Timed-out items",
             "type": "main",
             "index": 0
           },
@@ -271,11 +271,11 @@
         ]
       ]
     },
-    "Expired reviews": {
+    "Timed-out items": {
       "main": [
         [
           {
-            "node": "Release args",
+            "node": "Timer args",
             "type": "main",
             "index": 0
           }
@@ -286,36 +286,36 @@
       "main": [
         [
           {
-            "node": "Release events",
+            "node": "Timer events",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Release events": {
+    "Timer events": {
       "main": [
         [
           {
-            "node": "Log release",
+            "node": "Log timer",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Log release": {
+    "Log timer": {
       "main": [
         [
           {
-            "node": "Notify release",
+            "node": "Notify timer",
             "type": "main",
             "index": 0
           }
         ]
       ]
     },
-    "Release args": {
+    "Timer args": {
       "main": [
         [
           {

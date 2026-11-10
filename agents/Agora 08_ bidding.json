@@ -40,7 +40,7 @@
     {
       "parameters": {
         "operation": "executeQuery",
-        "query": "SELECT j.id AS job_id, j.title, j.description, j.category, j.budget_label, j.budget_max_public,\n       s.id AS seller_id, s.display_name, s.headline, s.skills, s.categories,\n       s.price_floor, s.max_concurrent_jobs, s.delivery_terms,\n       (SELECT count(*) FROM jobs x\n         WHERE x.seller_id = s.id AND x.status IN ('agreed', 'funded', 'in_progress', 'delivered', 'reviewed'))::int AS active_jobs,\n       b.id AS bid_id, b.price AS bid_price, b.status::text AS bid_status,\n       (SELECT coalesce(max(n.round), 0) FROM negotiation_messages n WHERE n.bid_id = b.id) AS last_round,\n       (SELECT n.offered_price FROM negotiation_messages n\n         WHERE n.bid_id = b.id AND n.sender = 'buyer_agent'\n         ORDER BY n.created_at DESC LIMIT 1) AS buyer_offer,\n       (SELECT n.body FROM negotiation_messages n\n         WHERE n.bid_id = b.id AND n.sender = 'buyer_agent'\n         ORDER BY n.created_at DESC LIMIT 1) AS buyer_message\nFROM jobs j\nJOIN sellers s ON s.id = $2::uuid\nLEFT JOIN bids b ON b.job_id = j.id AND b.seller_id = s.id\nWHERE j.id = $1::uuid;",
+        "query": "SELECT j.id AS job_id, j.title, j.description, j.category, j.budget_label, j.budget_max_public,\n       s.id AS seller_id, s.display_name, s.headline, s.skills, s.categories,\n       s.price_floor, s.max_concurrent_jobs, s.delivery_terms,\n       (SELECT count(*) FROM jobs x\n         WHERE x.seller_id = s.id AND x.status IN ('agreed', 'funded', 'in_progress', 'delivered', 'reviewed'))::int AS active_jobs,\n       b.id AS bid_id, b.price AS bid_price, b.status::text AS bid_status,\n       (SELECT coalesce(max(n.round), 0) FROM negotiation_messages n WHERE n.bid_id = b.id) AS last_round,\n       (SELECT n.offered_price FROM negotiation_messages n\n         WHERE n.bid_id = b.id AND n.sender = 'buyer_agent'\n         ORDER BY n.created_at DESC LIMIT 1) AS buyer_offer,\n       (SELECT n.body FROM negotiation_messages n\n         WHERE n.bid_id = b.id AND n.sender = 'buyer_agent'\n         ORDER BY n.created_at DESC LIMIT 1) AS buyer_message,\n       (SELECT row_to_json(h) FROM (\n          SELECT id, price, status::text AS status FROM hire_offers\n           WHERE job_id = j.id AND seller_id = s.id AND status = 'sent'\n           ORDER BY created_at DESC LIMIT 1) h) AS hire_offer\nFROM jobs j\nJOIN sellers s ON s.id = $2::uuid\nLEFT JOIN bids b ON b.job_id = j.id AND b.seller_id = s.id\nWHERE j.id = $1::uuid;",
         "options": {
           "queryReplacement": "={{ [ $json.jobId, $json.sellerId ] }}"
         }
@@ -63,7 +63,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const env = $('Read envelope').first().json;\nconst r = $input.first().json;\nconst action = env.action === 'negotiate' ? 'negotiate' : 'bid';\nlet skip = null;\nif (!r.job_id) skip = 'Job or seller not found';\nelse if (action === 'bid' && r.bid_id) skip = 'Already bid on this job';\nelse if (action === 'bid' && r.active_jobs >= r.max_concurrent_jobs) skip = 'At capacity';\nelse if (action === 'bid' && !(r.categories || []).includes(r.category)) skip = 'Category not offered';\nelse if (action === 'negotiate' && !r.bid_id) skip = 'No bid to negotiate';\nelse if (action === 'negotiate' && r.last_round >= 3) skip = 'Negotiation already at 3 rounds';\nreturn [{ json: { ...r, action, skip } }];"
+        "jsCode": "const env = $('Read envelope').first().json;\nconst r = $input.first().json;\nconst action = ['negotiate', 'hire_offer'].includes(env.action) ? env.action : 'bid';\nlet skip = null;\nif (!r.job_id) skip = 'Job or seller not found';\nelse if (action === 'bid' && r.bid_id) skip = 'Already bid on this job';\nelse if (action === 'bid' && r.active_jobs >= r.max_concurrent_jobs) skip = 'At capacity';\nelse if (action === 'bid' && !(r.categories || []).includes(r.category)) skip = 'Category not offered';\nelse if (action === 'negotiate' && !r.bid_id) skip = 'No bid to negotiate';\nelse if (action === 'negotiate' && r.last_round >= 3) skip = 'Negotiation already at 3 rounds';\nelse if (action === 'hire_offer' && !r.hire_offer) skip = 'No open hire offer';\n// Paper IV.c: the seller (or its bidding agent) accepts or declines the buyer's hire offer.\n// Deterministic: accept at or above the price floor while there is capacity.\nlet hire = null;\nif (!skip && action === 'hire_offer') {\n  const price = Number(r.hire_offer.price);\n  const ok = price >= Number(r.price_floor || 0) && r.active_jobs < r.max_concurrent_jobs;\n  hire = { id: r.hire_offer.id, price, decision: ok ? 'accepted' : 'declined',\n           why: ok ? 'price and capacity ok' : (price < Number(r.price_floor || 0) ? `below the ${r.price_floor} USDC floor` : 'at capacity') };\n}\nreturn [{ json: { ...r, action, skip, hire } }];"
       },
       "id": "89f2f16a-6ca5-44cb-a51b-c4e7668ab9cb",
       "name": "Can act?",
@@ -292,7 +292,7 @@
     },
     {
       "parameters": {
-        "jsCode": "const env = $('Read envelope').first().json;\nconst act = $('Can act?').first().json;\nlet e;\ntry { e = $('Enforce rules').first().json; } catch { e = null; }\nconst row = $input.first().json || {};\nlet message, severity = 'info', result = {};\nif (act.skip) {\n  message = `${act.display_name || 'Seller'} skipped this job: ${act.skip}`;\n} else if (e.kind === 'none') {\n  message = `${act.display_name} chose not to bid`;\n} else if (e.kind === 'reply') {\n  message = e.accept\n    ? `${act.display_name} accepted the counter of ${e.price} USDC`\n    : `${act.display_name} answered with ${e.price} USDC (round ${e.round})`;\n  result = { bidId: e.bidId, messageId: row.message_id ?? null, accept: e.accept, price: e.price };\n} else {\n  message = `${act.display_name} bid ${e.price} USDC, ${e.etaDays} day(s), ${e.milestones.length} milestone(s)`;\n  severity = 'ok';\n  result = { bidId: row.id ?? null, price: e.price };\n}\nreturn [{ json: {\n  runId: env.runId, ownerId: env.ownerId, agentId: env.agentId, jobId: env.jobId,\n  actorLabel: act.display_name ? `${act.display_name} (bidding)` : 'Bidding agent',\n  message, severity, data: result,\n  notify: { runId: env.runId, role: 'bidding', ok: true, jobId: env.jobId,\n            result: { action: act.action, skip: act.skip, ...result }, error: null },\n} }];"
+        "jsCode": "const env = $('Read envelope').first().json;\nconst act = $('Can act?').first().json;\nlet e;\ntry { e = $('Enforce rules').first().json; } catch { e = null; }\nconst row = $input.first().json || {};\nlet message, severity = 'info', result = {};\nif (act.hire) {\n  const answered = Boolean(row.id);\n  message = answered\n    ? `${act.display_name} ${act.hire.decision} the hire offer at ${act.hire.price} USDC (${act.hire.why})`\n    : `${act.display_name}: the hire offer was already answered`;\n  severity = act.hire.decision === 'accepted' && answered ? 'ok' : 'info';\n  result = { hireOfferId: act.hire.id, decision: answered ? act.hire.decision : null };\n} else if (act.skip) {\n  message = `${act.display_name || 'Seller'} skipped this job: ${act.skip}`;\n} else if (e.kind === 'none') {\n  message = `${act.display_name} chose not to bid`;\n} else if (e.kind === 'reply') {\n  message = e.accept\n    ? `${act.display_name} accepted the counter of ${e.price} USDC`\n    : `${act.display_name} answered with ${e.price} USDC (round ${e.round})`;\n  result = { bidId: e.bidId, messageId: row.message_id ?? null, accept: e.accept, price: e.price };\n} else {\n  message = `${act.display_name} bid ${e.price} USDC, ${e.etaDays} day(s), ${e.milestones.length} milestone(s)`;\n  severity = 'ok';\n  result = { bidId: row.id ?? null, price: e.price };\n}\nreturn [{ json: {\n  runId: env.runId, ownerId: env.ownerId, agentId: env.agentId, jobId: env.jobId,\n  actorLabel: act.display_name ? `${act.display_name} (bidding)` : 'Bidding agent',\n  message, severity, data: result,\n  notify: { runId: env.runId, role: 'bidding', ok: true, jobId: env.jobId,\n            result: { action: act.action, skip: act.skip, ...result }, error: null },\n} }];"
       },
       "id": "f35140fc-d51d-4a16-855b-9610d11a2f33",
       "name": "Finish",
@@ -359,6 +359,64 @@
         -128
       ],
       "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "44f6dad7-4738-4c31-a2e9-c8b1ce717e82",
+              "leftValue": "={{ Boolean($json.hire) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        -224
+      ],
+      "id": "3d2b43b2-6aa8-4147-86ad-18ace0472550",
+      "name": "Hire offer?"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE hire_offers SET status = $2::hire_offer_status, updated_at = now()\n WHERE id = $1::uuid AND status = 'sent'\nRETURNING id, status::text AS status;",
+        "options": {
+          "queryReplacement": "={{ [ $json.hire.id, $json.hire.decision ] }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1120,
+        -224
+      ],
+      "id": "4435ff10-de93-4c41-81c7-19c291866e84",
+      "name": "Answer hire offer",
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      },
+      "alwaysOutputData": true
     }
   ],
   "pinData": {},
@@ -400,7 +458,7 @@
       "main": [
         [
           {
-            "node": "Skip?",
+            "node": "Hire offer?",
             "type": "main",
             "index": 0
           }
@@ -514,6 +572,35 @@
         [
           {
             "node": "Notify Nest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hire offer?": {
+      "main": [
+        [
+          {
+            "node": "Answer hire offer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer hire offer": {
+      "main": [
+        [
+          {
+            "node": "Finish",
             "type": "main",
             "index": 0
           }
