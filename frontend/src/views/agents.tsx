@@ -1,4 +1,4 @@
-import { agentPick, ATTACK, CATS, ME, usd } from '../data/data';
+import { agentPick, ATTACK, CATS, HELD, JOB, ME, usd } from '../data/data';
 import { act } from '../store/actions';
 import { escrow, free, hb, hPrice, paused, setState, useApp } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
@@ -10,12 +10,21 @@ export function Agents() {
   const s = useApp();
   if (s.stage < 1) return <Shell cur="agents"><Head title="Agent team" /><Gate msg="Sign in to see your agent team"><SignInButton /></Gate></Shell>;
   const isPaused = paused(s);
+  /* live: statuses from the account's own state, never the demo story */
+  const lj = s.liveJob?.ref;
+  const live = s.live ? {
+    spec: lj ? `Working on ${lj}` : 'Waiting for a request',
+    pick: agentPick() ? `Picked ${agentPick()!.name} at ${usd(agentPick()!.final)}` : 'Waiting for offers',
+    funded: s.money?.escrowed ? `Protecting ${usd(s.money.escrowed)} USDC` : 'Nothing funded yet',
+    review: s.votes ? `${s.votes.filter((v) => v === 2).length} of 3 approved` : 'No delivery to review',
+    held: HELD.length ? `Held ${HELD.length} offer${HELD.length > 1 ? 's' : ''}` : 'Nothing held',
+  } : null;
   const A: [string, string, string, string, boolean][] = [
-    ['Spec writer', 'Turns your job post into failing tests and an acceptance spec.', 'No key, advises', 'Wrote spec for J-1042', false],
+    ['Spec writer', 'Turns your job post into failing tests and an acceptance spec.', 'No key, advises', live ? live.spec : `Wrote spec for ${JOB.id}`, false],
     ['Buyer agent', 'Shortlists up to 5 bids, waits for 3 offers, negotiates in a TEE, opens the chat.', 'No key, advises', agentPick() ? `Picked ${agentPick()!.name} at ${usd(agentPick()!.final)}` : 'Waiting for offers', false],
-    ['Transaction agent', 'The only agent that signs calls that move money.', 'Function-call key, 6 methods, cannot withdraw', 'Funded J-1042', true],
-    ['Reviewers, 3', 'Run the locked tests on each delivery and vote.', 'Vote only, shared', '2 of 3 approved e5f1d07', false],
-    ['Fraud and lure', 'Scores every counterparty 0 to 100 and holds lures and outlier prices.', 'Can hold, not pay, shared', 'Held 2 bids', false],
+    ['Transaction agent', 'The only agent that signs calls that move money.', 'Function-call key, 6 methods, cannot withdraw', live ? live.funded : `Funded ${JOB.id}`, true],
+    ['Reviewers, 3', 'Run the locked tests on each delivery and vote.', 'Vote only, shared', live ? live.review : '2 of 3 approved e5f1d07', false],
+    ['Fraud and lure', 'Scores every counterparty 0 to 100 and holds lures and outlier prices.', 'Can hold, not pay, shared', live ? live.held : 'Held 2 bids', false],
     ['Guardian', 'Watches your on-chain activity and pauses on unusual patterns.', 'Function-call key, pause only', 'Watching, 0 alerts', false],
     ['Bidding agent', 'Seller side. Bids on jobs that match your skills.', s.seller ? 'Function-call key, bid and deliver' : 'Off while you only buy', s.seller ? 'Watching matching jobs' : 'Off', false],
   ];
@@ -124,9 +133,12 @@ export function Wallet() {
   const total = free(s) + escrow(s);
   const [d, c] = usd(total).split('.');
   const hist: [IconName, string, string, string, string, string][] = [];
-  if (s.stage >= 7) hist.push(['up', 'Released to ' + hb(s).name, 'J-1042, from Protected payment', '−' + usd(hPrice(s)), '16:31', '9xQe…f2A']);
-  if (s.stage >= 5) hist.push(['lock', 'Moved to Protected payment', 'J-1042', usd(hPrice(s)), '16:12', '4Lmc…a71']);
-  hist.push(['down', 'Deposit', 'ft_transfer_call from your NEAR wallet', '+120.00', '15:58', 'H2ty…0pe']);
+  /* the sample history belongs to the demo account; a real wallet has no history endpoint yet */
+  if (!s.live) {
+    if (s.stage >= 7) hist.push(['up', 'Released to ' + hb(s).name, `${JOB.id}, from Protected payment`, '−' + usd(hPrice(s)), '16:31', '9xQe…f2A']);
+    if (s.stage >= 5) hist.push(['lock', 'Moved to Protected payment', JOB.id, usd(hPrice(s)), '16:12', '4Lmc…a71']);
+    hist.push(['down', 'Deposit', 'ft_transfer_call from your NEAR wallet', '+120.00', '15:58', 'H2ty…0pe']);
+  }
   return (
     <Shell cur="wallet">
       <div className="wal">
@@ -149,11 +161,12 @@ export function Wallet() {
         {s.walTab === 'assets' ? (
           <div className="panel">
             <div className="asset"><span className="tok">USDC</span><div><b style={{ fontWeight: 500 }}>USD Coin</b><div className="muted xsmall">Available to fund jobs</div></div><div className="v"><b>{usd(free(s))}</b><span className="muted xsmall">${usd(free(s))}</span></div></div>
-            <div className="asset"><span className="tok lock"><Icon name="lock" /></span><div><b style={{ fontWeight: 500 }}>Protected payment</b><div className="muted xsmall">{escrow(s) ? 'Held by the contract for J-1042' : 'Nothing locked'}</div></div><div className="v"><b>{usd(escrow(s))}</b><span className="muted xsmall">${usd(escrow(s))}</span></div></div>
+            <div className="asset"><span className="tok lock"><Icon name="lock" /></span><div><b style={{ fontWeight: 500 }}>Protected payment</b><div className="muted xsmall">{escrow(s) ? `Held by the contract${s.live ? '' : ` for ${JOB.id}`}` : 'Nothing locked'}</div></div><div className="v"><b>{usd(escrow(s))}</b><span className="muted xsmall">${usd(escrow(s))}</span></div></div>
             <div className="asset"><span className="tok near">N</span><div><b style={{ fontWeight: 500 }}>NEAR</b><div className="muted xsmall">Gas, paid for you by the AGORA relayer</div></div><div className="v"><b>0.00</b><span className="muted xsmall">0.0041 covered</span></div></div>
           </div>
         ) : (
           <div className="panel">
+            {!hist.length && <div className="panel-b"><div className="empty"><Icon name="wallet" /><b>No transactions to show yet</b><span>Deposits, protected payments and releases on this account appear here.</span></div></div>}
             {hist.map((h) => <div key={h[1]} className="asset"><span className="tok lock"><Icon name={h[0]} /></span><div><b style={{ fontWeight: 500 }}>{h[1]}</b><div className="muted xsmall">{h[2]}, {h[4]}, tx <span className="mono">{h[5]}</span></div></div><div className="v"><b>{h[3]}</b><span className="muted xsmall">USDC</span></div></div>)}
           </div>
         )}

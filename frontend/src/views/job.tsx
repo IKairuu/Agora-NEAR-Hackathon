@@ -64,6 +64,9 @@ function NegView({ neg, canNegotiate }: { neg: boolean; canNegotiate: boolean })
   if (!neg) return (
     <div className="empty"><Icon name="bolt" /><b>No negotiation yet</b><span>Once 3 valid offers are in, your agent shortlists and negotiates. Every message and reason shows up here.</span>{canNegotiate && <button className="btn primary" onClick={act.negotiate}>Let my agent negotiate</button>}</div>
   );
+  if (!NEG_LOG.length) return (
+    <div className="empty"><Icon name="bolt" /><b>The negotiation log is not available yet</b><span>Your agent's messages with sellers on this job show up in its chat once offers are in.</span><RLink r="ask" className="btn sm" onClick={openRequest}>Back to the offers</RLink></div>
+  );
   return (
     <div className="panel">
       <div className="panel-h"><h2>Negotiation log</h2><div className="r"><T name="NEAR AI Cloud" tip="Runs in a TEE; log is attested" /><span className="pill ok">2 rounds, agreed</span></div></div>
@@ -84,7 +87,7 @@ function NegView({ neg, canNegotiate }: { neg: boolean; canNegotiate: boolean })
 
 export function Job() {
   const s = useApp();
-  if (s.stage < 2) return <Shell cur="job"><Head title="Job J-1042" /><Gate msg="This job has not been posted yet"><RLink r="ask" className="btn primary">Start a request</RLink></Gate></Shell>;
+  if (s.stage < 2) return <Shell cur="job"><Head title={JOB.id ? `Job ${JOB.id}` : 'Job'} /><Gate msg="This job has not been posted yet"><RLink r="ask" className="btn primary">Start a request</RLink></Gate></Shell>;
   const bidsIn = s.stage >= 3, neg = s.stage >= 4, accepted = s.stage >= 5;
   const tab = (id: typeof s.jobTab, label: string) => <button role="tab" aria-selected={s.jobTab === id} className={s.jobTab === id ? 'on' : ''} onClick={() => setState({ jobTab: id })}>{label}</button>;
   return (
@@ -293,6 +296,19 @@ export function Chat() {
 /* ---------------- Protected payment ---------------- */
 function DeliveriesPanel({ s }: { s: State }) {
   const H = hb(s);
+  if (s.live) {
+    const reviewing = s.voting || !!s.votes;
+    return (
+      <div className="panel">
+        <div className="panel-h">{reviewing && <span className="pill info">In review</span>}<h2>Delivery</h2></div>
+        <div className="panel-b">
+          {reviewing
+            ? <p className="small">The seller delivered a commit. Three reviewers are running the locked tests on it; the result shows under Proof of delivery.</p>
+            : <div className="empty"><Icon name="job" /><b>Waiting for the seller's commit</b><span>{H.name} delivers here. The reviewers start as soon as a commit arrives.</span></div>}
+        </div>
+      </div>
+    );
+  }
   const rejected = s.stage >= 6, released = s.stage >= 7;
   const waiting = s.stage < 6 && !s.voting;
   const v = s.votes || [2, 2, 2], ok = v.filter((x) => x === 2).length;
@@ -362,17 +378,17 @@ function ProofPanel({ s }: { s: State }) {
     <div className="panel proof">
       <div className="panel-h"><h2>Proof of delivery</h2><div className="r"><span className={`pill ${ok >= 2 ? 'ok' : 'info'}`}>{ok >= 2 ? 'Verified' : 'Checking'}</span></div></div>
       <div className="panel-b">
-        <ProofRow title="Tests" sum={ok >= 2 ? '31 of 31 visible tests and 12 of 12 hidden checks pass' : 'Running the locked tests…'} state={ok >= 2 ? 'ok' : 'hold'}>
+        {!s.live && <ProofRow title="Tests" sum={ok >= 2 ? '31 of 31 visible tests and 12 of 12 hidden checks pass' : 'Running the locked tests…'} state={ok >= 2 ? 'ok' : 'hold'}>
           <div className="pv-ba">
             <div><span className="lbl">Before</span><b className="num" style={{ color: 'var(--color-block)' }}>29 of 31 pass</b><span className="muted xsmall">test_split_rounding, test_split_dust failing</span></div>
             <div><span className="lbl">After commit e5f1d07</span><b className="num" style={{ color: 'var(--color-ok)' }}>31 of 31 pass</b><span className="muted xsmall">same tests, hash unchanged</span></div>
           </div>
           <p className="small">Hidden checks: 12 extra tests the seller never sees, so code can't be written just to fool the visible ones. Only the attested test runner opens them.</p>
           <span className="mono muted xsmall">spec {JOB.specHash} · hidden set 0x4be0…19c3 · both hashes locked at hire</span>
-        </ProofRow>
-        <ProofRow title="Code" sum={<>Commit <span className="mono">e5f1d07</span> · +4 −1 · 1 file · inside scope</>} state="ok">
+        </ProofRow>}
+        {!s.live && <ProofRow title="Code" sum={<>Commit <span className="mono">e5f1d07</span> · +4 −1 · 1 file · inside scope</>} state="ok">
           <p className="small">Changed <span className="mono">src/split.rs</span> only. The locked test files were not touched, and the scope check passed.</p>
-        </ProofRow>
+        </ProofRow>}
         <ProofRow title="Reviewers" sum={`${ok} of 3 approved · 3 different AI models`} open={live} state={ok >= 2 ? 'ok' : 'hold'}>
           <div className="grid g-3">
             {REVIEWERS.map((r, i) => {
@@ -382,18 +398,18 @@ function ProofPanel({ s }: { s: State }) {
                   <div className="row" style={{ gap: 8 }}><b style={{ fontWeight: 500 }}>Reviewer {r.id}</b>{st === 2 ? <span className="pill ok">Approve</span> : st === 1 ? <span className="spin" /> : <span className="pill">Queued</span>}</div>
                   <span className="muted xsmall">{r.model}</span>
                   {SPEC.slice(0, 5).map((sp, j) => <div key={sp[0]} className="check">{st === 2 || (st === 1 && j < 2) ? <Mk k="ok" /> : <span className="m" />}{sp[0]}</div>)}
-                  {st === 2 && <span className="mono muted" style={{ fontSize: 11 }}>log 0x{['e3a1', '92cf', '5b07'][i]}…  {r.att}</span>}
+                  {st === 2 && <span className="mono muted" style={{ fontSize: 11 }}>{s.live ? r.att : <>log 0x{['e3a1', '92cf', '5b07'][i]}…  {r.att}</>}</span>}
                 </div>
               );
             })}
           </div>
         </ProofRow>
-        <ProofRow title="On-chain" sum={released ? 'Protected and released on NEAR testnet' : 'Protected on NEAR testnet'} state="ok">
+        {!s.live && <ProofRow title="On-chain" sum={released ? 'Protected and released on NEAR testnet' : 'Protected on NEAR testnet'} state="ok">
           <dl className="kv"><dt>Protect</dt><dd className="mono">fund_job · 8vQk…2Lr9</dd>{released && <><dt>Release</dt><dd className="mono">release · 3Hd7…Wq1x</dd><dt>Record</dt><dd className="mono">NEP-171 #412 · non-transferable</dd></>}</dl>
           <span className="muted xsmall">Sample transaction ids. In the real build each one links to the NEAR testnet explorer.</span>
-        </ProofRow>
+        </ProofRow>}
         <div className="pv-ft"><button className="btn sm" onClick={act.bundle}><Icon name="down" />Download evidence bundle</button><span className="muted xsmall">Spec, commits, test logs and votes in one file. The same file goes to the DAO if a dispute gets that far.</span></div>
-        {ok >= 2 && released && <div className="banner ok"><Icon name="check" /><div className="grow"><b style={{ fontWeight: 500 }}>{usd(amt)} USDC released to {hb(s).acct}</b><span className="muted">Released 1.6 s after the second approval. 2% ({(amt * 0.02).toFixed(2)} USDC) went to the DAO treasury.</span></div></div>}
+        {ok >= 2 && released && <div className="banner ok"><Icon name="check" /><div className="grow"><b style={{ fontWeight: 500 }}>{usd(amt)} USDC released to {hb(s).acct}</b><span className="muted">{s.live ? '' : 'Released 1.6 s after the second approval. '}2% ({(amt * 0.02).toFixed(2)} USDC) went to the DAO treasury.</span></div></div>}
       </div>
     </div>
   );
@@ -416,8 +432,8 @@ export function Room() {
       <div className="tally">
         <div><span className="lbl">Agreed price</span><b className="num">{A}<span className="u">USDC</span></b><span className="sub">1 milestone</span></div>
         <div><span className="lbl">Protected</span><b className="num">{released ? '0.00' : A}<span className="u">USDC</span></b><span className="sub">{released ? 'released' : 'locked by contract'}</span></div>
-        <div><span className="lbl">Released to seller</span><b className="num">{released ? A : '0.00'}<span className="u">USDC</span></b><span className="sub">{released ? '1.6 s after the 2nd vote' : 'needs 2 of 3 approvals'}</span></div>
-        <div><span className="lbl">Deadline</span><b className="num">{released ? 'met' : '1 d 22 h'}</b><span className="sub">{released ? 'delivered in time' : 'then you can take a refund'}</span></div>
+        <div><span className="lbl">Released to seller</span><b className="num">{released ? A : '0.00'}<span className="u">USDC</span></b><span className="sub">{released ? (s.live ? 'after 2 of 3 approvals' : '1.6 s after the 2nd vote') : 'needs 2 of 3 approvals'}</span></div>
+        <div><span className="lbl">Deadline</span><b className="num">{released ? 'met' : s.live ? '—' : '1 d 22 h'}</b><span className="sub">{released ? 'delivered in time' : 'then you can take a refund'}</span></div>
       </div>
       <div className="grid g-main">
         <div className="stack">
@@ -428,9 +444,9 @@ export function Room() {
           <div className="panel"><div className="panel-h"><h3>Contract record</h3><div className="r"><T name="NEP-141" tip="Native USDC held by the marketplace contract" /></div></div><div className="panel-b">
             <div className="tl">
               <Tl k="ok" h={`Protected ${A} USDC`} p={`fund_job by your transaction agent when ${H.name} accepted; 9 limit checks passed`} />
-              {rejected && <Tl k="block" h="Attempt 1 rejected" p="0 of 3 approvals, test edited" />}
+              {rejected && !s.live && <Tl k="block" h="Attempt 1 rejected" p="0 of 3 approvals, test edited" />}
               {released ? (
-                <><Tl k="ok" h={`Released ${A} USDC`} p="2 of 3 approvals; 2% fee to the DAO treasury" /><Tl k="ok" h="Settled" p="Completion record #412 minted (NEP-171, non-transferable)" /></>
+                <><Tl k="ok" h={`Released ${A} USDC`} p="2 of 3 approvals; 2% fee to the DAO treasury" /><Tl k="ok" h="Settled" p={`Completion record${s.live ? '' : ' #412'} minted (NEP-171, non-transferable)`} /></>
               ) : <Tl k="now" h="Waiting for review" p="Pays at 2 of 3 approvals. If reviewers stall, a fresh re-check runs; money never moves without approvals" />}
             </div>
             <span className="mono muted xsmall">market.agora-demo.testnet</span>

@@ -170,8 +170,8 @@ export function tourGo(i: number) {
  * The tour drives `stage` itself, up to 8, which the app treats as signed in to the sample account.
  * Remember who the visitor was when it started, and put that back when it ends, so a guest leaves as a guest.
  */
-type TourSnap = Pick<State, 'stage' | 'role' | 'signVia' | 'user' | 'mode' | 'seller'>;
-let beforeTour: TourSnap | null = null;
+/* The whole app state when the tour started: everything done inside the demo is thrown away at the end. */
+let beforeTour: State | null = null;
 function startTour() {
   const s = getState();
   /* the tour's story is demo data from the backend */
@@ -180,19 +180,29 @@ function startTour() {
     if (!s.dataReady) { toast('Loading the demo…', 'hold'); void appDataLoaded().then(() => { if (demoLoaded() && getState().tour < 0) startTour(); else if (!demoLoaded()) toast('The demo could not be loaded. Check that the AGORA server is running, then try again.', 'block'); }); return; }
     toast('The demo could not be loaded. Check that the AGORA server is running, then try again.', 'block'); return;
   }
-  if (s.tour < 0) beforeTour = { stage: s.stage, role: s.role, signVia: s.signVia, user: s.user, mode: s.mode, seller: s.seller };
+  if (s.tour < 0) beforeTour = { ...s };
   tourGo(0);
 }
 function endTour(finished: boolean) {
   const s = getState();
-  /* no snapshot after a reload mid-tour (a real Google or GitHub sign-in): signed in only with a real account */
-  const snap: TourSnap = beforeTour ?? { stage: s.user ? 1 : 0, role: s.user ? s.role : null, signVia: s.user ? s.signVia : '', user: s.user, mode: s.mode, seller: s.seller };
+  /* no snapshot after a reload mid-tour (a real Google or GitHub sign-in): signed in only with a real
+     account, and nothing the demo did is kept */
+  const snap: Partial<State> = beforeTour ?? {
+    stage: s.user ? 1 : 0, role: s.user ? s.role : null, signVia: s.user ? s.signVia : '', user: s.user,
+    liked: [], newJobs: [], chatLog: {}, tLog: {}, seenThreads: [], thread: '', hire: '', who: '', votes: null,
+    dTab: 'open', stars: 0, dReason: '', jobTab: 'bids',
+  };
   beforeTour = null;
-  const guest = snap.stage < 1;
-  setState({ ...snap, tour: -1, tourMin: false, attack: null, voting: false, modal: null });
+  const guest = (snap.stage ?? 0) < 1;
+  setState({
+    ...snap, tour: -1, tourMin: false, attack: null, voting: false, modal: null,
+    /* settings and loading state belong to now, not to the snapshot; live data reloads below */
+    dataReady: s.dataReady, fold: s.fold, live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
+  });
   resetRequest();
   if (guest) { go('home'); toast(finished ? 'Demo finished. Sign in to post your own job.' : 'Demo closed. You are not signed in.'); return; }
   if (snap.user && authConfigured) void goLive();
+
   if (finished) toast('Demo finished. Everything stays clickable.');
 }
 /* ---------------- New request: which conversation the page shows ---------------- */
@@ -358,8 +368,9 @@ export const act = {
   intents: () => toast('Quote refreshed: 100.00 USDC on Base becomes 99.71 USDC on NEAR.'),
   intentspay: () => { closeModal(); toast(<><b>Sent through NEAR Intents.</b> In the demo this is the real 1 USDC mainnet payment, with its explorer link in the README.</>, 'ok', 5200); },
   refundexp: () => toast("After the deadline, refund_expired returns the protected money to you. Anyone can call it, so it can't be blocked.", 'hold', 5200),
-  baddeliver: () => { setState((s) => ({ stage: Math.max(s.stage, 6) })); toast(<><b>Delivery rejected.</b> Commit 3b9c2aa edited a locked test. 0 of 3 approved.</>, 'block', 5200); },
+  baddeliver: () => { if (isLive()) { toast('Deliveries come from your seller. Reviewers run as soon as they submit a commit.', 'hold'); return; } setState((s) => ({ stage: Math.max(s.stage, 6) })); toast(<><b>Delivery rejected.</b> Commit 3b9c2aa edited a locked test. 0 of 3 approved.</>, 'block', 5200); },
   gooddeliver: () => {
+    if (isLive()) { toast('Deliveries come from your seller. Reviewers run as soon as they submit a commit.', 'hold'); return; }
     setState((s) => ({ stage: s.stage < 6 ? 6 : s.stage, voting: true, votes: [1, 0, 0] }));
     const steps: [number, number[]][] = [[700, [1, 1, 0]], [1400, [2, 1, 1]], [2100, [2, 2, 1]]];
     steps.forEach(([ms, v]) => setTimeout(() => {

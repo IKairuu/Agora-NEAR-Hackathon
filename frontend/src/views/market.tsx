@@ -1,7 +1,7 @@
-import { useRef, type ChangeEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { CATS, COUNTRIES, DAO_COUNCIL, gigBy, GIGS, ME, PAYOUTS, SELL_STEPS, sellerDir, SETTLED, SKILLS, usd } from '../data/data';
 import { act, newRequest } from '../store/actions';
-import { isLive, liveSaveSellStep } from '../lib/live';
+import { isLive, liveDisputeNext, liveLoadDispute, liveSaveSellStep, type DisputeView } from '../lib/live';
 import { getState, hb, hPrice, setState, toast, useApp, type State } from '../store/store';
 import { Icon, Tile, type IconName } from '../ui/icons';
 import { Gate, Head, levelClass, Review, RLink, SellerReviews, SignInButton, T, Thumb, useReputation } from '../ui/parts';
@@ -385,8 +385,44 @@ function Step({ n, state, title, line, children }: { n: number; state: 'done' | 
     </li>
   );
 }
+/* live: the account's own dispute on the followed job, never the demo's example */
+function LiveDispute() {
+  const s = useApp();
+  const [d, setD] = useState<DisputeView | null | undefined>(undefined);
+  const ref = s.liveJob?.ref;
+  useEffect(() => { let on = true; setD(undefined); void liveLoadDispute().then((x) => { if (on) setD(x); }); return () => { on = false; }; }, [ref, s.stage]);
+  const head = <Head title="Disputes" sub="Most disputes end at a free re-check. Only if that doesn't settle it does the DAO vote." actions={<T name="Sputnik DAO" tip="The arbiter DAO's proposal is the only way resolve_dispute can be called" />} />;
+  if (d === undefined && ref) return <Shell cur="dispute">{head}<p className="muted small">Loading…</p></Shell>;
+  if (!d || !d.id) return (
+    <Shell cur="dispute">{head}
+      <div className="empty"><Icon name="dao" /><b>No disputes on your jobs</b><span>If a delivery is judged unfairly, open a dispute from that job's Protected payment page. The payment freezes and a free re-check starts.</span><RLink r="jobs" className="btn">Job requests</RLink></div>
+    </Shell>
+  );
+  const res = d.resolution;
+  const recheck = d.recheck?.outcome ? `Re-check result: ${d.recheck.outcome === 'release' ? 'pay the seller' : 'refund you'}.` : 'Three fresh reviewers are re-running every test.';
+  return (
+    <Shell cur="dispute">{head}
+      <div className="dsp">
+        <div className="dsp-head">
+          <span className={`pill ${res ? 'ok' : 'hold'}`}>{res ? 'Decided' : d.escalation ? 'DAO voting' : 'Re-check running'}</span>
+          <h2>{d.job}</h2>
+          <span className="muted small">You are the {d.role} · {usd(d.price)} USDC frozen</span>
+        </div>
+        {d.escalation?.claim && <div className="dsp-claim"><span className="pill">Claim</span><p>{d.escalation.claim}</p></div>}
+        <ol className="ds-list">
+          <Step n={1} state={d.recheck?.outcome ? 'done' : 'now'} title="Free re-check" line={recheck} />
+          <Step n={2} state={res ? 'done' : d.escalation ? 'now' : 'next'} title="DAO vote" line={d.escalation ? `Escalated with a ${usd(d.escalation.bond ?? d.bondNeeded)} USDC bond. 2 of 3 votes decide.` : `Either side can ask the DAO with a ${usd(d.bondNeeded)} USDC bond, returned if the claim holds.`} />
+          <Step n={3} state={res ? 'done' : 'next'} title="Result" line={res ? `${usd(res.sellerAmount)} USDC to the seller, ${usd(res.buyerAmount)} USDC back to you.` : 'The contract pays out exactly what the vote says. Nobody at AGORA can move the money.'} />
+        </ol>
+        {!res && (d.canEscalate || d.canFinalize) && <button className="btn primary" style={{ alignSelf: 'flex-start' }} onClick={() => { void liveDisputeNext().then(() => liveLoadDispute().then(setD)); }}>{d.canFinalize ? 'Close with the re-check result' : 'Ask the DAO'}</button>}
+      </div>
+    </Shell>
+  );
+}
+
 export function Dispute() {
   const s = useApp();
+  if (s.live) return <LiveDispute />;
   const ruled = s.dTab === 'ruled', votes = ruled ? 2 : 1;
   const voters = DAO_COUNCIL.filter((m) => !m.recused), out = DAO_COUNCIL.find((m) => m.recused);
   return (

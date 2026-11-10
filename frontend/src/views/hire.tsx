@@ -7,7 +7,9 @@ import { Feed, feedItems, Gate, GigCard, Head, levelClass, Lifecycle, Mk, Nodes,
 import { Shell } from '../ui/Shell';
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; };
+/* the demo's suggestions name its sample repo; a real account gets the same ideas in general terms */
 const SUGG = ['Fix the failing test in payroll-vault', 'Add pagination to get_jobs', 'Write tests for the refund callback', 'Fix the Safari wallet modal'];
+const SUGG_LIVE = ['Fix a failing test in my repo', 'Add pagination to a view method', 'Write tests for a callback', 'Fix a wallet modal on Safari'];
 
 /* ---------------- New request: a chat with your agent team ---------------- */
 interface OfferRow { key: string; name: string; kind: 'agent' | 'human'; held: boolean; price: number; fraud: number; why?: string; settled?: number; pass?: string; days?: string; newSeller?: boolean; negotiated?: boolean; listed?: number; attempts?: number }
@@ -145,10 +147,10 @@ export function Ask() {
             <MeMsg text={s.askText || JOB.plain} />
             {s.pendingAsk
               ? <AgentMsg who="Spec writer"><p className="muted">Reading your request and creating the job…</p></AgentMsg>
-              : <AgentMsg who="Spec writer" t="16:02"><p>I read <span className="mono">{JOB.repo.split('/').pop()}</span> at <span className="mono">{JOB.base}</span>. Here are the tests a seller must make pass. Nothing is sent to anyone until you lock them.</p><SpecCard locked={s.stage >= 2} /></AgentMsg>}
-            {s.stage >= 2 && <AgentMsg who="Buyer agent" t="16:03"><p>Tests locked. I sent the job privately to 9 sellers and bidding agents whose skills match. Their offers appear below as they arrive, lowest price first.</p><OffersCard /></AgentMsg>}
-            {s.stage >= 4 && <AgentMsg who="Buyer agent" t="16:11"><p>{s.preNeg ? 'You chose before I negotiated, so the listed price stands.' : <>Three valid offers were in, so I negotiated within your private limit. {agentPick()?.name} came down from {usd(agentPick()?.price ?? 0)} to <b>{usd(agentPick()?.final ?? 0)} USDC</b>, under the 35.50 median, and has the best track record.</>} Choose any offer above. I'll send the hire offer in your chat room and wait for the seller to accept.</p></AgentMsg>}
-            {s.stage >= 5 && <AgentMsg who="Transaction agent" t="16:12"><p>{H.name} accepted. {usd(hPrice(s))} USDC is in <b>Protected payment</b>, held by the contract until 2 of 3 reviewers pass the tests.</p><div className="cc-acts"><RLink r="chat" className="btn"><Icon name="chat" />Open chat room</RLink><RLink r="room" className="btn"><Icon name="lock" />Protected payment</RLink></div></AgentMsg>}
+              : <AgentMsg who="Spec writer" t={s.live ? undefined : '16:02'}><p>I read <span className="mono">{JOB.repo.split('/').pop()}</span> at <span className="mono">{JOB.base}</span>. Here are the tests a seller must make pass. Nothing is sent to anyone until you lock them.</p><SpecCard locked={s.stage >= 2} /></AgentMsg>}
+            {s.stage >= 2 && <AgentMsg who="Buyer agent" t={s.live ? undefined : '16:03'}><p>Tests locked. I sent the job privately to 9 sellers and bidding agents whose skills match. Their offers appear below as they arrive, lowest price first.</p><OffersCard /></AgentMsg>}
+            {s.stage >= 4 && <AgentMsg who="Buyer agent" t={s.live ? undefined : '16:11'}><p>{s.preNeg ? 'You chose before I negotiated, so the listed price stands.' : <>Three valid offers were in, so I negotiated within your private limit. {agentPick()?.name} came down from {usd(agentPick()?.price ?? 0)} to <b>{usd(agentPick()?.final ?? 0)} USDC</b>, under the 35.50 median, and has the best track record.</>} Choose any offer above. I'll send the hire offer in your chat room and wait for the seller to accept.</p></AgentMsg>}
+            {s.stage >= 5 && <AgentMsg who="Transaction agent" t={s.live ? undefined : '16:12'}><p>{H.name} accepted. {usd(hPrice(s))} USDC is in <b>Protected payment</b>, held by the contract until 2 of 3 reviewers pass the tests.</p><div className="cc-acts"><RLink r="chat" className="btn"><Icon name="chat" />Open chat room</RLink><RLink r="room" className="btn"><Icon name="lock" />Protected payment</RLink></div></AgentMsg>}
             {s.followUps.map((f) => (
               <Fragment key={f.id}>
                 <MeMsg text={f.text} />
@@ -174,7 +176,7 @@ export function Ask() {
           </div>
         )}
         <Composer big={!started} />
-        {!started && <div className="sugg">{SUGG.map((t) => <button key={t} className="chip" onClick={() => pick(t)}>{t}</button>)}</div>}
+        {!started && <div className="sugg">{(s.live ? SUGG_LIVE : SUGG).map((t) => <button key={t} className="chip" onClick={() => pick(t)}>{t}</button>)}</div>}
         <div className="services">
           <div className="services-h">
             <h2>Popular services</h2><span className="muted small">Each one ends with a test the reviewers can run</span>
@@ -207,7 +209,7 @@ function demoJob(s: State): JobView | null {
 function allJobs(s: State) {
   const d = demoJob(s);
   const nj = s.newJobs.map((j): JobView => ({ at: j.posted ? 1 : 0, grp: j.posted ? 'offers' : 'waiting', due: 'Due in 3 days', ev: [['Now', 'Buyer agent', j.note || '']], ...j }));
-  const on = [...(d && d.grp !== 'done' ? [d] : []), ...nj, ...(s.stage >= 1 ? OTHER_JOBS : [])];
+  const on = [...(d && d.grp !== 'done' ? [d] : []), ...nj, ...(s.stage >= 1 ? OTHER_JOBS.filter((j) => j.id !== d?.id) : [])];
   const done = [...(d && d.grp === 'done' ? [d] : []), ...DONE_JOBS];
   return { on, done };
 }
@@ -295,7 +297,7 @@ export function Dash() {
                 <Lifecycle />
               </RLink>
             )}
-            {[...s.newJobs, ...OTHER_JOBS].map((j) => <OtherJobCard key={j.id} j={j} />)}
+            {[...s.newJobs, ...OTHER_JOBS.filter((j) => j.id !== d?.id)].map((j) => <OtherJobCard key={j.id} j={j} />)}
             {DONE_JOBS.some((j) => j.grp === 'done') && <>
               <div className="panel-h sub-h"><h3>History</h3><span className="muted xsmall">Settled before this demo</span></div>
               {DONE_JOBS.filter((j) => j.grp === 'done').map((j) => <PastJob key={j.id} id={j.id} t={j.title} who={j.who} amt={j.budget} />)}

@@ -79,7 +79,10 @@ export function Review({ who, txt, when, stars = 5 }: { who: string; txt: string
 
 interface FeedItem { t: string; who: string; txt: string; k: string }
 /** Agent activity, newest first. Also feeds the demo job's activity log. */
+const NOTE_WHO: Record<string, string> = { held: 'Fraud and lure agent', message: 'Messages', offer: 'Buyer agent', payment: 'Transaction agent', review: 'Reviewers', job: 'Spec writer' };
 export function feedItems(s: State): FeedItem[] {
+  /* live: the account's own events, never the demo story */
+  if (s.live) return s.notes.items.map((n) => ({ t: n.time, who: NOTE_WHO[n.kind] ?? 'AGORA', txt: n.text, k: n.kind === 'held' ? 'hold' : '' }));
   const { stage } = s;
   const items: FeedItem[] = [];
   const add = (t: string, who: string, txt: string, k = '') => items.push({ t, who, txt, k });
