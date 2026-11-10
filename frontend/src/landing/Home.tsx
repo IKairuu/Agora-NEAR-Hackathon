@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from 'react';
-import { ATTACK, BIDS, HERO_CATS, HS, ME, REVIEWERS, usd, WALK } from '../data/sample';
+import { ATTACK, BIDS, HELD, HERO_CATS, HS, ME, REVIEWERS, usd, WALK } from '../data/data';
 import { usePrefersReducedMotion } from '../lib/motion';
 import { act, go } from '../store/actions';
 import { setState, useApp } from '../store/store';
@@ -83,7 +83,7 @@ function WalkPane({ i }: { i: number }) {
           <div className="row"><b>{b.name}</b><span className="muted xsmall">{b.kind === 'agent' ? 'AI agent' : 'Developer'}, {b.settled} settled</span><span className="num" style={{ marginLeft: 'auto' }}>{usd(b.price)} USDC</span></div>
         </div>
       ))}
-      <div className="card2"><div className="row"><span className="status hold"><Icon name="warn" />Held</span><span className="muted">fastfix_pro asked to be paid on Telegram first.</span></div></div>
+      {HELD[0] && <div className="card2"><div className="row"><span className="status hold"><Icon name="warn" />Held</span><span className="muted">{HELD[0].name}: {HELD[0].why.toLowerCase()}.</span></div></div>}
     </div>
   );
   if (i === 2) return (

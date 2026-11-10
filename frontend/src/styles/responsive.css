@@ -34,3 +34,47 @@
   .shell.folded .side.nopeek .mode button:not(.on) { opacity: 0; }
   .shell.folded .side.nopeek .mode button.on { justify-content: flex-start; padding-left: var(--space-xs); background: transparent; order: -1; }
 }
+
+/* New request: the welcome and the conversation share one page (.ask.is-chat once a request is sent).
+   The heading turns into the chat header, the conversation appears under it, and the same composer docks. */
+.ask.is-chat { gap: var(--space-lg); padding-top: var(--space-xs); }
+.ask.is-chat .ask-head { width: min(880px, 100%); display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: var(--space-md); row-gap: var(--space-3xs); align-items: end; text-align: left; padding-bottom: var(--space-sm); border-bottom: 1px solid var(--color-rule); }
+.ask.is-chat .ask-head > :not(.ask-acts) { grid-column: 1; }
+.ask.is-chat .ask-head > .ask-acts { grid-column: 2; grid-row: 1 / span 3; display: flex; gap: var(--space-xs); flex-wrap: wrap; justify-content: flex-end; }
+.ask.is-chat .ask-head h1 { font-size: var(--text-2xl); max-width: none; }
+.ask.is-chat .ask-head p { font-size: var(--text-sm); }
+.ask.is-chat .ac-log { width: min(880px, 100%); animation: fade var(--dur-long) var(--ease-out); }
+.ask.is-chat .composer { width: min(880px, 100%); }
+.ask.is-chat .services { margin-top: var(--space-xl); padding-top: var(--space-xl); border-top: 1px solid var(--color-rule); }
+body:has(.ask.is-chat) #toasts { bottom: 104px; }
+@media (max-width: 36rem) { .ask.is-chat .ask-head { grid-template-columns: minmax(0, 1fr); } .ask.is-chat .ask-head > .ask-acts { grid-column: 1; grid-row: auto; justify-content: flex-start; margin-top: var(--space-2xs); } }
+
+/* ---------------- spacing tokens ----------------
+   --space-page: the content area's padding; --space-card: padding inside a card and its rows;
+   --gap-section: the one gap between stacked sections and between side-by-side cards. */
+:root { --space-page: var(--space-lg); --space-card: var(--space-md); --gap-section: var(--space-lg); }
+@media (max-width: 60rem) { :root { --space-page: var(--space-md); } }
+.content { padding: var(--space-page) var(--space-page) var(--space-3xl); }
+
+/* ---------------- Overview (boxed): one left edge, one right edge, one gap ---------------- */
+.dash { display: flex; flex-direction: column; gap: var(--gap-section); }
+.dash .page-head .grow { gap: var(--space-xs); }
+.dash .grid.g-main { gap: var(--gap-section); align-items: start; }
+.dash .panel-h, .dash .panel-b, .dash .job-card { padding: var(--space-card); }
+/* the stat strip is a card too, and every tile has the same inner padding */
+.dash .tally { background: var(--color-card); border: 1px solid var(--color-rule); border-radius: var(--radius-card); box-shadow: var(--shadow-card); overflow: hidden; }
+/* dividers are inset shadows, so every tile's text starts exactly --space-card from its edge */
+.dash .tally > div, .dash .tally > div + div { padding: var(--space-card); border: 0; box-shadow: inset 1px 0 0 var(--color-rule); }
+.dash .tally > div:first-child { box-shadow: none; }
+@media (max-width: 1100px) {
+  .dash .tally > div:nth-child(odd) { box-shadow: none; }
+  .dash .tally > div:nth-child(3) { box-shadow: inset 0 1px 0 var(--color-rule); }
+  .dash .tally > div:nth-child(4) { box-shadow: inset 1px 0 0 var(--color-rule), inset 0 1px 0 var(--color-rule); }
+}
+@media (max-width: 40rem) {
+  .dash .tally > div + div, .dash .tally > div:nth-child(4) { box-shadow: inset 0 1px 0 var(--color-rule); }
+}
+/* job rows: every row, button or not, ends with the same rule; History starts on that rule */
+.job-card.as-btn { border-bottom: 1px solid var(--color-rule); }
+.job-card.as-btn:last-child { border-bottom: 0; }
+.dash .panel-h.sub-h { border-bottom: 1px solid var(--color-rule); }
