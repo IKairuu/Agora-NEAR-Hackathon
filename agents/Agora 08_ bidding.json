@@ -385,14 +385,14 @@
         },
         "options": {}
       },
+      "id": "3d2b43b2-6aa8-4147-86ad-18ace0472550",
+      "name": "Hire offer?",
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
         896,
         -224
-      ],
-      "id": "3d2b43b2-6aa8-4147-86ad-18ace0472550",
-      "name": "Hire offer?"
+      ]
     },
     {
       "parameters": {
@@ -402,21 +402,21 @@
           "queryReplacement": "={{ [ $json.hire.id, $json.hire.decision ] }}"
         }
       },
+      "id": "4435ff10-de93-4c41-81c7-19c291866e84",
+      "name": "Answer hire offer",
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.7,
+      "alwaysOutputData": true,
       "position": [
         1120,
         -224
       ],
-      "id": "4435ff10-de93-4c41-81c7-19c291866e84",
-      "name": "Answer hire offer",
       "credentials": {
         "postgres": {
           "id": "POG2JEry8B8qAyP2",
           "name": "Agora Supabase"
         }
-      },
-      "alwaysOutputData": true
+      }
     }
   ],
   "pinData": {},
@@ -613,7 +613,7 @@
     "executionOrder": "v1",
     "binaryMode": "separate"
   },
-  "versionId": "148ac04e-718e-49b7-97c7-3da144ee8bd2",
+  "versionId": "dd8dd9db-1c6a-463a-bb0b-c2368f05bf14",
   "meta": {
     "instanceId": "5bc1f41ff2889bec057c4b16904248e981cf8fde880ea6ae71e5a4721ead5080"
   },
