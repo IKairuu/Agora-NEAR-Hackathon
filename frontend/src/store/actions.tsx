@@ -26,7 +26,7 @@ export function scrollMsgs() {
 }
 /** Bring the newest New request message into view. */
 export function acScroll() {
-  requestAnimationFrame(() => document.getElementById('aclog')?.lastElementChild?.scrollIntoView({ block: 'end', behavior: 'auto' }));
+  requestAnimationFrame(() => document.getElementById('aclog')?.lastElementChild?.scrollIntoView({ block: 'end', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
 }
 
 /* ---------------- chat with the hired seller ---------------- */
@@ -261,6 +261,7 @@ export const act = {
     acScroll(); toast(`${x.id} posted on Open jobs.`);
   },
   newask: () => {
+    window.scrollTo({ top: 0 });
     if (isLive()) { liveLeaveAsk(); toast('Started a new request. The last one is still in Job requests.'); return; }
     if (getState().stage < 2) { setState({ asked: false, askText: '', draft: '' }); return; }
     toast('The demo job keeps running. Type a new request below and your agent starts it separately.');
@@ -454,8 +455,9 @@ export const act = {
     const s = getState();
     if (s.stage < 1) { setState({ draft: v, after: 'ask' }); act.signin(); return; }
     setState({ draft: '' });
-    if (s.live) { void liveSubmitAsk(v).then(() => acScroll()); return; }
-    if (!s.asked && s.stage < 2) { setState({ asked: true, askText: v }); acScroll(); tourStep(1, 2); return; }
+    const first = !s.asked && s.stage < 2;
+    if (s.live) { if (first) window.scrollTo({ top: 0 }); void liveSubmitAsk(v).then((ok) => { if (ok && !first) acScroll(); }); return; }
+    if (first) { window.scrollTo({ top: 0 }); setState({ asked: true, askText: v }); tourStep(1, 2); return; }
     if (s.stage < 2) { toast('The spec writer will fold that into the tests before you lock them.'); return; }
     setState({ nextJob: s.nextJob + 1, extra: [...s.extra, { id: 'J-' + s.nextJob, text: v, t: clock(), posted: false }] });
     acScroll();

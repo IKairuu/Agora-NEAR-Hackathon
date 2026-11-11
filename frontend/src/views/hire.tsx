@@ -116,7 +116,7 @@ function Composer({ big }: { big: boolean }) {
 export function Ask() {
   const s = useApp();
   const started = s.asked || s.stage >= 2;
-  useEffect(() => { if (started) acScroll(); }, [started]);
+  useEffect(() => { if (s.stage >= 2) acScroll(); }, [s.stage]);
   if (!started) {
     const pick = (t: string) => { setState({ draft: t }); requestAnimationFrame(() => document.getElementById('ask-in')?.focus()); };
     return (
