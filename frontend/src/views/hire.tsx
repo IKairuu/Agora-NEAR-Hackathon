@@ -1,24 +1,26 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
-import { ARRIVE, BIDS, DONE_JOBS, FILTERS, GIGS, gigBy, HELD, JF, JOB, ME, openJobs, OTHER_JOBS, SELLERS_DIR, usd, type FilterKey, type Gig, type OpenJob, type OtherJob } from '../data/sample';
-import { act, acScroll, hire } from '../store/actions';
+import { agentPick, ARRIVE, ATT, BIDS, DONE_JOBS, FILTERS, gigBy, GIGS, HELD, JF, JOB, ME, openJobs, OTHER_JOBS, SELLERS_DIR, usd, type FilterKey, type Gig, type OpenJob, type OtherJob } from '../data/data';
+import { acScroll, act, hire, newRequest, openRequest } from '../store/actions';
 import { escrow, free, getState, hb, hPrice, paused, priceOf, setState, toast, useApp, type State } from '../store/store';
 import { Icon } from '../ui/icons';
-import { Feed, feedItems, Gate, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, Review, RLink, SignInButton, SName, Thumb } from '../ui/parts';
+import { Feed, feedItems, Gate, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, RLink, SellerReviews, SignInButton, SName, Thumb, useReputation } from '../ui/parts';
 import { Shell } from '../ui/Shell';
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; };
+/* the demo's suggestions name its sample repo; a real account gets the same ideas in general terms */
 const SUGG = ['Fix the failing test in payroll-vault', 'Add pagination to get_jobs', 'Write tests for the refund callback', 'Fix the Safari wallet modal'];
+const SUGG_LIVE = ['Fix a failing test in my repo', 'Add pagination to a view method', 'Write tests for a callback', 'Fix a wallet modal on Safari'];
 
 /* ---------------- New request: a chat with your agent team ---------------- */
-interface OfferRow { key: string; name: string; kind: 'agent' | 'human'; held: boolean; price: number; fraud: number; why?: string; settled?: number; pass?: string; days?: string; newSeller?: boolean }
+interface OfferRow { key: string; name: string; kind: 'agent' | 'human'; held: boolean; price: number; fraud: number; why?: string; settled?: number; pass?: string; days?: string; newSeller?: boolean; negotiated?: boolean; listed?: number; attempts?: number }
 /** Offers that have arrived so far, lowest price first. */
 function offerPool(s: State): OfferRow[] {
   const n = s.stage >= 3 ? ARRIVE.length : Math.min(s.bidsShown, ARRIVE.length);
-  return ARRIVE.slice(0, n).map((k): OfferRow => {
+  return ARRIVE.slice(0, n).flatMap((k): OfferRow[] => {
     const b = BIDS.find((x) => x.key === k);
-    if (b) return { key: b.key, name: b.name, kind: b.kind, held: false, price: priceOf(s, b), fraud: b.fraud, settled: b.settled, pass: b.pass, days: b.days, newSeller: b.newSeller };
-    const h = HELD.find((x) => x.name === k)!;
-    return { key: h.name, name: h.name, kind: h.kind, held: true, price: h.price, fraud: h.fraud, why: h.why };
+    if (b) return [{ key: b.key, name: b.name, kind: b.kind, held: false, price: priceOf(s, b), fraud: b.fraud, settled: b.settled, pass: b.pass, days: b.days, newSeller: b.newSeller, negotiated: b.final < b.price && s.stage >= 4 && !s.preNeg, listed: b.price, attempts: b.attempts }];
+    const h = HELD.find((x) => x.name === k);
+    return h ? [{ key: h.name, name: h.name, kind: h.kind, held: true, price: h.price, fraud: h.fraud, why: h.why }] : [];
   }).sort((a, b) => a.price - b.price);
 }
 
@@ -47,7 +49,7 @@ function OffersCard() {
   const s = useApp();
   const rows = offerPool(s), valid = rows.filter((r) => !r.held), held = rows.filter((r) => r.held);
   const ready = valid.length >= 3, live = s.stage < 3;
-  const best = s.stage >= 3 ? 'patchsmith' : '';
+  const best = s.stage >= 3 ? agentPick()?.key ?? '' : '';
   const row = (r: OfferRow) => {
     if (r.held) return (
       <li key={r.key} className="orow2 held">
@@ -59,7 +61,7 @@ function OffersCard() {
         <div className="or-p"><b className="num">{usd(r.price)}</b><span className="muted xsmall">USDC</span><button className="btn sm" disabled aria-label={`${r.name} is held and cannot be chosen`}>Held</button></div>
       </li>
     );
-    const isBest = r.key === best, dec = s.declined.includes(r.key), neg = r.key === 'patchsmith' && s.stage >= 4 && !s.preNeg;
+    const isBest = r.key === best, dec = s.declined.includes(r.key), neg = !!r.negotiated;
     return (
       <li key={r.key} className={`orow2 ${isBest ? 'best' : ''}`}>
         <span className={`avatar ${r.kind === 'agent' ? 'ag' : ''}`}>{r.name.slice(0, 2).toUpperCase()}</span>
@@ -72,10 +74,10 @@ function OffersCard() {
             {dec && <span className="pill">Declined</span>}
             {s.stage >= 5 && r.key === s.hire && <span className="pill ok"><Icon name="check" />Hired</span>}
           </div>
-          <span className="muted xsmall">{r.settled} settled jobs · {r.pass} pass first try · risk {r.fraud} of 100 · {r.days} · {r.key === 'rustwright' ? 2 : 3} attempts</span>
+          <span className="muted xsmall">{r.settled} settled jobs · {r.pass} pass first try · risk {r.fraud} of 100 · {r.days} · {r.attempts ?? ATT} attempts</span>
         </div>
         <div className="or-p">
-          {neg && <s className="muted num">{usd(36)}</s>}
+          {neg && <s className="muted num">{usd(r.listed ?? r.price)}</s>}
           <b className="num">{usd(r.price)}</b><span className="muted xsmall">USDC</span>
           <button className={`btn sm ${isBest ? 'primary' : ''}`} onClick={() => hire(r.key)} disabled={!ready || dec || s.stage >= 5}>Choose</button>
         </div>
@@ -115,54 +117,77 @@ function Composer({ big }: { big: boolean }) {
 
 export function Ask() {
   const s = useApp();
-  const started = s.asked || s.stage >= 2;
-  useEffect(() => { if (s.stage >= 2) acScroll(); }, [s.stage]);
-  if (!started) {
-    const pick = (t: string) => { setState({ draft: t }); requestAnimationFrame(() => document.getElementById('ask-in')?.focus()); };
-    return (
-      <Shell cur="ask">
-        <div className="ask">
-          <div className="ask-head"><span className="muted">{s.stage >= 1 ? `${greeting()}, ${ME.name}` : 'No account needed to look around'}</span><h1>What should we get built?</h1><p className="muted">Tell your agent in plain words. It writes the tests, collects offers and shows you the lowest first.</p></div>
-          <Composer big />
-          <div className="sugg">{SUGG.map((t) => <button key={t} className="chip" onClick={() => pick(t)}>{t}</button>)}</div>
-          <div className="services">
-            <div className="services-h">
-              <h2>Popular services</h2><span className="muted small">Each one ends with a test the reviewers can run</span>
-              <RLink r="explore" className="see-all" onClick={() => setState({ exTab: 'services' })}>See all <Icon name="ext" /></RLink>
-            </div>
-            <div className="gig-grid">{GIGS.slice(0, 8).map((g) => <GigCard key={g.id} g={g} />)}</div>
-            <p className="muted xsmall">Sellers, prices and ratings are sample data for this prototype.</p>
-          </div>
-        </div>
-      </Shell>
-    );
-  }
+  /* The job's conversation shows once the user sent or reopened a request, never just because a job exists.
+     Live, it is the account's own job (liveJob), so the demo job never appears here after a real sign-in.
+     In the demo, `extra` holds requests sent after New request while the demo job is still running. */
+  const thread = s.live ? s.asked && (!!s.liveJob || s.pendingAsk) : s.asked;
+  const started = thread || (!s.live && s.extra.length > 0);
+  useEffect(() => { if (started) acScroll(); }, [started]);
+  const pick = (t: string) => { setState({ draft: t }); requestAnimationFrame(() => document.getElementById('ask-in')?.focus()); };
   const H = hb(s);
+  /* One page: the welcome, the conversation and the services stay on the same screen. Submitting a request
+     adds the conversation under the heading and docks the same composer, instead of swapping in a new layout. */
   return (
     <Shell cur="ask">
-      <div className="achat">
-        <div className="ac-head"><div><h1>New request</h1><p className="muted small">Spec writer, buyer agent and fraud and lure agent are working on this job.</p></div><div className="ac-acts">{s.stage < 4 && (s.live ? !!s.liveJob : s.stage < 2) && <button className="btn sm ghost" onClick={act.discardask}><Icon name="x" />Discard</button>}<button className="btn sm ghost" onClick={act.newask}><Icon name="spark" />New request</button><RLink r="jobs" className="btn sm ghost"><Icon name="job" />Job requests</RLink></div></div>
-        <div className="ac-log" id="aclog" aria-live="polite">
-          <MeMsg text={s.askText || JOB.plain} />
-          <AgentMsg who="Spec writer" t="16:02"><p>I read <span className="mono">payroll-vault</span> at <span className="mono">{JOB.base}</span>. Here are the tests a seller must make pass. Nothing is sent to anyone until you lock them.</p><SpecCard locked={s.stage >= 2} /></AgentMsg>
-          {s.stage >= 2 && <AgentMsg who="Buyer agent" t="16:03"><p>Tests locked. I sent the job privately to 9 sellers and bidding agents whose skills match. Their offers appear below as they arrive, lowest price first.</p><OffersCard /></AgentMsg>}
-          {s.stage >= 4 && <AgentMsg who="Buyer agent" t="16:11"><p>{s.preNeg ? 'You chose before I negotiated, so the listed price stands.' : <>Three valid offers were in, so I negotiated within your private limit. patchsmith came down from 36.00 to <b>32.00 USDC</b>, under the 35.50 median, and has the best track record.</>} Choose any offer above. I'll send the hire offer in your chat room and wait for the seller to accept.</p></AgentMsg>}
-          {s.stage >= 5 && <AgentMsg who="Transaction agent" t="16:12"><p>{H.name} accepted. {usd(hPrice(s))} USDC is in <b>Protected payment</b>, held by the contract until 2 of 3 reviewers pass the tests.</p><div className="cc-acts"><RLink r="chat" className="btn"><Icon name="chat" />Open chat room</RLink><RLink r="room" className="btn"><Icon name="lock" />Protected payment</RLink></div></AgentMsg>}
-          {s.extra.map((x) => (
-            <Fragment key={x.id}>
-              <MeMsg text={x.text} />
-              <AgentMsg who="Buyer agent" t={x.t}>
-                {x.posted
-                  ? <p>Posted publicly as <b>{x.id}</b> on Open jobs. Any seller can now offer, and the same checks apply. Track it in <RLink r="jobs">Job requests</RLink>.</p>
-                  : <>
-                    <p>I sent "{x.text.length > 60 ? x.text.slice(0, 58) + '…' : x.text}" privately to matching sellers. <b>No offers came back</b> within 30 minutes.</p>
-                    <div className="ccard"><div className="cc-h"><Icon name="globe" /><b>Last option: post it publicly</b></div><p className="muted small">Your job goes on Open jobs, where every seller and bidding agent can offer. The tests are locked first, as always.</p><div className="cc-acts"><button className="btn primary" onClick={() => act.postpublic2(x.id)}>Post publicly</button><button className="btn ghost" onClick={act.keepwait}>Keep waiting</button></div></div>
-                  </>}
-              </AgentMsg>
-            </Fragment>
-          ))}
+      <div className={`ask ${started ? 'is-chat' : ''}`}>
+        <div className="ask-head">
+          <span className="muted">{s.stage >= 1 ? `${greeting()}, ${ME.name}` : 'No account needed to look around'}</span>
+          <h1>{started ? 'New request' : 'What should we get built?'}</h1>
+          <p className="muted">{started ? 'Spec writer, buyer agent and fraud and lure agent are working on this job.' : 'Tell your agent in plain words. It writes the tests, collects offers and shows you the lowest first.'}</p>
+          {started && (
+            <div className="ask-acts">
+              <RLink r="jobs" className="btn sm ghost"><Icon name="job" />Job requests</RLink>
+              {s.stage < 4 && (s.live ? !!s.liveJob : s.stage < 2) && <button type="button" className="btn sm ghost" onClick={act.discardask}><Icon name="x" />Discard</button>}
+              <button type="button" className="btn sm" onClick={newRequest}><Icon name="spark" />New request</button>
+            </div>
+          )}
         </div>
-        <Composer big={false} />
+        {started && (
+          <div className="ac-log" id="aclog" aria-live="polite">
+            {thread && <>
+            <MeMsg text={s.askText || JOB.plain} />
+            {s.pendingAsk
+              ? <AgentMsg who="Spec writer"><p className="muted">Reading your request and creating the job…</p></AgentMsg>
+              : <AgentMsg who="Spec writer" t={s.live ? undefined : '16:02'}><p>I read <span className="mono">{JOB.repo.split('/').pop()}</span> at <span className="mono">{JOB.base}</span>. Here are the tests a seller must make pass. Nothing is sent to anyone until you lock them.</p><SpecCard locked={s.stage >= 2} /></AgentMsg>}
+            {s.stage >= 2 && <AgentMsg who="Buyer agent" t={s.live ? undefined : '16:03'}><p>Tests locked. I sent the job privately to 9 sellers and bidding agents whose skills match. Their offers appear below as they arrive, lowest price first.</p><OffersCard /></AgentMsg>}
+            {s.stage >= 4 && <AgentMsg who="Buyer agent" t={s.live ? undefined : '16:11'}><p>{s.preNeg ? 'You chose before I negotiated, so the listed price stands.' : <>Three valid offers were in, so I negotiated within your private limit. {agentPick()?.name} came down from {usd(agentPick()?.price ?? 0)} to <b>{usd(agentPick()?.final ?? 0)} USDC</b>, under the 35.50 median, and has the best track record.</>} Choose any offer above. I'll send the hire offer in your chat room and wait for the seller to accept.</p></AgentMsg>}
+            {s.stage >= 5 && <AgentMsg who="Transaction agent" t={s.live ? undefined : '16:12'}><p>{H.name} accepted. {usd(hPrice(s))} USDC is in <b>Protected payment</b>, held by the contract until 2 of 3 reviewers pass the tests.</p><div className="cc-acts"><RLink r="chat" className="btn"><Icon name="chat" />Open chat room</RLink><RLink r="room" className="btn"><Icon name="lock" />Protected payment</RLink></div></AgentMsg>}
+            {s.followUps.map((f) => (
+              <Fragment key={f.id}>
+                <MeMsg text={f.text} />
+                {f.sending
+                  ? <AgentMsg who="Buyer agent"><p className="muted">Sending…</p></AgentMsg>
+                  : <AgentMsg who="Buyer agent" t={f.t}><p>{f.reply}{f.link && <> Track it in <RLink r="jobs">Job requests</RLink>.</>}</p></AgentMsg>}
+              </Fragment>
+            ))}
+            </>}
+            {s.extra.map((x) => (
+              <Fragment key={x.id}>
+                <MeMsg text={x.text} />
+                <AgentMsg who="Buyer agent" t={x.t}>
+                  {x.posted
+                    ? <p>Posted publicly as <b>{x.id}</b> on Open jobs. Any seller can now offer, and the same checks apply. Track it in <RLink r="jobs">Job requests</RLink>.</p>
+                    : <>
+                      <p>I sent "{x.text.length > 60 ? x.text.slice(0, 58) + '…' : x.text}" privately to matching sellers. <b>No offers came back</b> within 30 minutes.</p>
+                      <div className="ccard"><div className="cc-h"><Icon name="globe" /><b>Last option: post it publicly</b></div><p className="muted small">Your job goes on Open jobs, where every seller and bidding agent can offer. The tests are locked first, as always.</p><div className="cc-acts"><button className="btn primary" onClick={() => act.postpublic2(x.id)}>Post publicly</button><button className="btn ghost" onClick={act.keepwait}>Keep waiting</button></div></div>
+                    </>}
+                </AgentMsg>
+              </Fragment>
+            ))}
+          </div>
+        )}
+        <Composer big={!started} />
+        {!started && <div className="sugg">{(s.live ? SUGG_LIVE : SUGG).map((t) => <button key={t} className="chip" onClick={() => pick(t)}>{t}</button>)}</div>}
+        <div className="services">
+          <div className="services-h">
+            <h2>Popular services</h2><span className="muted small">Each one ends with a test the reviewers can run</span>
+            <RLink r="explore" className="see-all" onClick={() => setState({ exTab: 'services' })}>See all <Icon name="ext" /></RLink>
+          </div>
+          {GIGS.length
+            ? <div className="gig-grid">{GIGS.slice(0, 8).map((g) => <GigCard key={g.id} g={g} />)}</div>
+            : <div className="empty"><Icon name="store" /><b>{s.dataReady ? 'No services yet' : 'Loading services…'}</b>{s.dataReady && <span>Sellers' services appear here once they publish them. You can still describe the job above.</span>}</div>}
+          <p className="muted xsmall">Sellers, prices and ratings are sample data for this prototype.</p>
+        </div>
       </div>
     </Shell>
   );
@@ -185,7 +210,7 @@ function demoJob(s: State): JobView | null {
 function allJobs(s: State) {
   const d = demoJob(s);
   const nj = s.newJobs.map((j): JobView => ({ at: j.posted ? 1 : 0, grp: j.posted ? 'offers' : 'waiting', due: 'Due in 3 days', ev: [['Now', 'Buyer agent', j.note || '']], ...j }));
-  const on = [...(d && d.grp !== 'done' ? [d] : []), ...nj, ...(s.stage >= 1 ? OTHER_JOBS : [])];
+  const on = [...(d && d.grp !== 'done' ? [d] : []), ...nj, ...(s.stage >= 1 ? OTHER_JOBS.filter((j) => j.id !== d?.id) : [])];
   const done = [...(d && d.grp === 'done' ? [d] : []), ...DONE_JOBS];
   return { on, done };
 }
@@ -195,7 +220,7 @@ function JobBig({ j }: { j: JobView }) {
     <article className="jbig">
       <div className="jb-l">
         <div className="jb-top">
-          <h3>{j.href ? <RLink r={j.href}>{j.title}</RLink> : <button className="as-link" onClick={() => setState({ modal: { kind: 'ojob', props: { id: j.id } } })}>{j.title}</button>}</h3>
+          <h3>{j.href ? <RLink r={j.href} onClick={j.href === 'ask' ? openRequest : undefined}>{j.title}</RLink> : <button className="as-link" onClick={() => setState({ modal: { kind: 'ojob', props: { id: j.id } } })}>{j.title}</button>}</h3>
           <span className={`pill ${j.status[0]}`}>{j.status[1]}</span>
         </div>
         <div className="jb-meta"><span>{j.cat}</span><span className="num">Budget {j.budget} USDC</span><span>{j.due}</span>{j.who && <span>Seller: {j.who}</span>}<span className="mono">{j.id}</span></div>
@@ -213,7 +238,7 @@ function JobSmall({ j }: { j: JobView }) {
   return (
     <li className="jfin">
       <div className="jf-top"><span className={`pill ${j.status[0]}`}>{j.status[1]}</span><span className="mono muted xsmall">{j.id}</span></div>
-      <b className="js-title">{j.href ? <RLink r={j.href}>{j.title}</RLink> : j.title}</b>
+      <b className="js-title">{j.href ? <RLink r={j.href} onClick={j.href === 'ask' ? openRequest : undefined}>{j.title}</RLink> : j.title}</b>
       <span className="muted small">{j.cat}</span>
       <div className={`jf-bar ${j.status[0] === 'block' ? 'split' : ''}`} aria-hidden="true"><i /></div>
       <div className="jf-ft"><span className="num">{j.budget} USDC</span><span className="muted small">{j.due}</span></div>
@@ -229,7 +254,7 @@ export function Jobs() {
   const onF = on.filter(pass), doneF = done.filter(pass);
   return (
     <Shell cur="jobs">
-      <Head title="Job requests" sub="Every job you asked for, with each step and its time. Ongoing jobs come first." actions={<RLink r="ask" className="btn primary"><Icon name="spark" />New request</RLink>} />
+      <Head title="Job requests" sub="Every job you asked for, with each step and its time. Ongoing jobs come first." actions={<RLink r="ask" className="btn primary" onClick={newRequest}><Icon name="spark" />New request</RLink>} />
       <div className="pills" role="group" aria-label="Filter job requests">
         {JF.map(([k, label]) => {
           const n = k === 'all' ? all.length : all.filter((j) => j.grp === k).length;
@@ -252,14 +277,10 @@ export function Dash() {
   const spent = s.stage >= 5 ? hPrice(s) : 0;
   return (
     <Shell cur="dash">
-      <div className={s.flat ? 'flat' : ''}>
-        <Head title="Overview" sub={<>{ME.acct}. Agents live under <span className="mono">{ME.agents}</span></>} actions={<>
-          <div className="seg cmp" role="group" aria-label="Layout sample">
-            <button className={s.flat ? 'on' : ''} onClick={() => act.flatcmp(true)} aria-pressed={s.flat}>Preview: fewer boxes</button>
-            <button className={s.flat ? '' : 'on'} onClick={() => act.flatcmp(false)} aria-pressed={!s.flat}>Current</button>
-          </div>
-          <RLink r="ask" className="btn primary"><Icon name="spark" />New request</RLink>
-        </>} />
+      <div className="dash">
+        <Head title="Overview" sub={<>{ME.acct}. Agents live under <span className="mono">{ME.agents}</span></>} actions={
+          <RLink r="ask" className="btn primary" onClick={newRequest}><Icon name="spark" />New request</RLink>
+        } />
         <div className="tally">
           <div><span className="lbl">Available</span><b className="num">{usd(free(s))}<span className="u">USDC</span></b><span className="sub">ready to fund jobs</span></div>
           <div><span className="lbl">Protected payment</span><b className="num">{usd(escrow(s))}<span className="u">USDC</span></b><span className="sub">{escrow(s) ? '1 milestone, held in escrow' : 'nothing locked'}</span></div>
@@ -270,19 +291,20 @@ export function Dash() {
           <div className="panel">
             <div className="panel-h"><h2>Job requests</h2><div className="r"><RLink r="jobs" className="btn sm">All job requests</RLink></div></div>
             {d && (
-              <RLink r={d.href!} className="job-card">
+              <RLink r={d.href!} className="job-card" onClick={d.href === 'ask' ? openRequest : undefined}>
                 <div className="row"><span className={`pill ${d.status[0]}`}>{d.status[1]}</span><span className="mono muted xsmall">{JOB.id}</span><span className="pill">Demo job</span></div>
                 <h3>{JOB.title}</h3>
                 <div className="meta"><span>{JOB.cat}</span><span>Budget under 40 USDC</span><span>6 checks locked</span></div>
                 <Lifecycle />
               </RLink>
             )}
-            {[...s.newJobs, ...OTHER_JOBS].map((j) => <OtherJobCard key={j.id} j={j} />)}
-            <div className="panel-h" style={{ borderTop: '1px solid var(--color-rule)' }}><h3>History</h3><span className="muted xsmall">Settled before this demo</span></div>
-            <PastJob id="J-0981" t="Add missing storage_deposit check" who="dana-ok.testnet" amt="24.00" />
-            <PastJob id="J-0954" t="Typed client for get_balance view call" who="patchsmith.agents.testnet" amt="18.00" />
+            {[...s.newJobs, ...OTHER_JOBS.filter((j) => j.id !== d?.id)].map((j) => <OtherJobCard key={j.id} j={j} />)}
+            {DONE_JOBS.some((j) => j.grp === 'done') && <>
+              <div className="panel-h sub-h"><h3>History</h3><span className="muted xsmall">Settled before this demo</span></div>
+              {DONE_JOBS.filter((j) => j.grp === 'done').map((j) => <PastJob key={j.id} id={j.id} t={j.title} who={j.who} amt={j.budget} />)}
+            </>}
           </div>
-          <div className="panel"><div className="panel-h"><h2>Agent activity</h2><div className="r"><RLink r="agents" className="btn sm ghost">All</RLink></div></div><div className="panel-b" style={{ paddingBlock: 4 }}><Feed short /></div></div>
+          <div className="panel"><div className="panel-h"><h2>Agent activity</h2><div className="r"><RLink r="agents" className="btn sm ghost">All</RLink></div></div><div className="panel-b"><Feed short /></div></div>
         </div>
       </div>
     </Shell>
@@ -422,7 +444,7 @@ export function Explore({ sell = false }: { sell?: boolean }) {
   }
   return (
     <Shell cur="explore">
-      <Head title="Find services" sub="Every service ends with tests the reviewers run. Every rating comes from a settled payment." actions={<RLink r="ask" className="btn primary"><Icon name="spark" />Let my agent find one</RLink>} />
+      <Head title="Find services" sub="Every service ends with tests the reviewers run. Every rating comes from a settled payment." actions={<RLink r="ask" className="btn primary" onClick={newRequest}><Icon name="spark" />Let my agent find one</RLink>} />
       <div className="tabs" role="tablist">
         <button role="tab" aria-selected={tab === 'services'} className={tab === 'services' ? 'on' : ''} onClick={() => setState({ exTab: 'services' })}>Services <span className="tcount">{GIGS.length}</span></button>
         <button role="tab" aria-selected={tab === 'sellers'} className={tab === 'sellers' ? 'on' : ''} onClick={() => setState({ exTab: 'sellers' })}>Sellers <span className="tcount">{SELLERS_DIR.length}</span></button>
@@ -442,7 +464,7 @@ export function Explore({ sell = false }: { sell?: boolean }) {
             <label className="sort small">Sort by <select value={s.sort} onChange={(e) => setState({ sort: e.target.value as State['sort'] })}><option value="best">Best match</option><option value="rating">Top rated</option><option value="price">Lowest price</option></select></label>
           </div>
           {list.length ? <div className="gig-grid">{list.map((g) => <GigCard key={g.id} g={g} />)}</div> : (
-            <div className="empty"><Icon name="explore" /><b>No services match</b><span>Clear a filter, or describe the job and let your agent find sellers.</span><RLink r="ask" className="btn primary">Describe the job</RLink></div>
+            <div className="empty"><Icon name="explore" /><b>No services match</b><span>Clear a filter, or describe the job and let your agent find sellers.</span><RLink r="ask" className="btn primary" onClick={newRequest}>Describe the job</RLink></div>
           )}
         </>
       )}
@@ -455,7 +477,7 @@ function SaveJob({ buyer, label }: { buyer: string; label?: boolean }) {
   const toggle = () => { setSaved(!saved); toast(!saved ? 'Job saved. Your bidding agent will watch it.' : 'Removed from saved jobs.'); };
   return label
     ? <button className={`btn ${saved ? 'on' : ''}`} onClick={toggle} aria-pressed={saved}><Icon name="heart" />Save</button>
-    : <button className={`heart flat ${saved ? 'on' : ''}`} onClick={toggle} aria-pressed={saved} aria-label={`Save job from ${buyer}`}><Icon name="heart" /></button>;
+    : <button className={`heart plain ${saved ? 'on' : ''}`} onClick={toggle} aria-pressed={saved} aria-label={`Save job from ${buyer}`}><Icon name="heart" /></button>;
 }
 
 function OpenJobCard({ j, i }: { j: OpenJob; i: number }) {
@@ -471,7 +493,7 @@ function OpenJobCard({ j, i }: { j: OpenJob; i: number }) {
       <div className="chips">{j[1].split(', ').map((t) => <span key={t} className="chip">{t}</span>)}<span className="chip"><Icon name="lock" />{j[3]}</span></div>
       <div className="jc-ft">
         <span className="amt num">{j[2]}<span className="u">USDC</span></span><span className="muted xsmall">{j[4]} bids</span>
-        {j[5] === 'Lumen Labs' ? <RLink r="job" className="btn sm primary">See details</RLink> : <RLink r="ojob" className="btn sm primary" onClick={() => setState({ oj: i })}>See details</RLink>}
+        {j[5] === ME.name && j[0] === JOB.title ? <RLink r="job" className="btn sm primary">See details</RLink> : <RLink r="ojob" className="btn sm primary" onClick={() => setState({ oj: i })}>See details</RLink>}
       </div>
     </article>
   );
@@ -481,7 +503,13 @@ function OpenJobCard({ j, i }: { j: OpenJob; i: number }) {
 export function Ojob() {
   const s = useApp();
   useEffect(() => { setState({ mode: 'sell' }); }, []);
-  const J = openJobs(s.stage); const j = J[s.oj] || J[1] || J[0];
+  const J = openJobs(s.stage); const j = J[s.oj] || J[0];
+  if (!j) return (
+    <Shell cur="openjobs">
+      <Head crumbs={<RLink r="openjobs">Open jobs</RLink>} title="Open job" />
+      <div className="empty"><Icon name="explore" /><b>{s.dataReady ? 'No open jobs right now' : 'Loading open jobs…'}</b><RLink r="openjobs" className="btn">Open jobs</RLink></div>
+    </Shell>
+  );
   const ntests = parseInt(j[3]) || 3;
   const tests: [string, string][] = j[3].includes('Coverage') ? [['Coverage of the target module', j[3].replace('Coverage target ', 'at least ')]]
     : j[3].includes('Playwright') ? [['Playwright check at 390 px', 'must pass'], ['Playwright check at 768 px', 'must pass'], ['Playwright check at 1280 px', 'must pass']]
@@ -527,6 +555,13 @@ const INC_TEST: Record<Gig['thumb'], string> = {
 export function Svc() {
   const s = useApp();
   const g = gigBy(s.svc) || GIGS[0];
+  const rep = useReputation(g?.sellerKey);
+  if (!g) return (
+    <Shell cur="explore">
+      <Head crumbs={<RLink r="explore">Find services</RLink>} title="Service" />
+      <div className="empty"><Icon name="explore" /><b>{s.dataReady ? 'This service is not available' : 'Loading services…'}</b><RLink r="explore" className="btn">Find services</RLink></div>
+    </Shell>
+  );
   const liked = s.liked.includes(g.id);
   const inc: [string, string][] = [['Fix or feature in one repo', 'Scoped to the files named in the spec'], ['Tests the reviewers run', INC_TEST[g.thumb]], ['One revision', 'If reviewers reject a delivery, the seller gets one more try'], ['Paid from escrow', 'USDC releases after 2 of 3 reviewers approve']];
   const more = GIGS.filter((x) => x.seller === g.seller && x.id !== g.id);
@@ -539,8 +574,7 @@ export function Svc() {
           <div className="svc-hero"><Thumb g={g} /></div>
           <div className="panel"><div className="panel-h"><h2>What's included</h2></div><div className="panel-b"><div className="inc">{inc.map(([b, t]) => <div key={b}><Icon name="check" className="ok" /><span><b>{b}</b><span className="muted small">{t}</span></span></div>)}</div></div></div>
           <div className="panel"><div className="panel-h"><h3>Reviews</h3><span className="muted xsmall">Only from settled jobs</span></div><div className="panel-b">
-            <Review who="Pollen Grants" txt="Delivered in under a day and explained the edge case." when="3 days ago" />
-            <Review who="Tidewater" txt="Clean diff, and the extra test caught a second bug." when="1 week ago" />
+            <SellerReviews rep={rep} />
           </div></div>
         </div>
         <aside className="svc-buy panel"><div className="panel-b">

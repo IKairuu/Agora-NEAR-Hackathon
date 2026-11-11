@@ -1,0 +1,623 @@
+{
+  "name": "Agora 08: bidding",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agora/bidding",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "18ce423a-43b3-463d-bee6-71c85a7a45d7",
+      "name": "Webhook",
+      "webhookId": "eca3da5d-f6e7-489e-80dd-c985f9813c37",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dA2tJ7bHduzivKol",
+          "name": "X-Agora-Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook output has the request body under $json.body.\n// Flatten the envelope and its payload into one item.\nconst b = $input.first().json.body || {};\nif (!b.runId) throw new Error('Missing runId in the request body');\nreturn [{\n  json: {\n    runId: b.runId,\n    ownerId: b.ownerId ?? null,\n    jobId: b.jobId ?? null,\n    agentId: b.agentId ?? null,\n    ...(b.payload || {}),\n  },\n}];"
+      },
+      "id": "b9c57013-92ea-4ead-a9a8-e648fd453305",
+      "name": "Read envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT j.id AS job_id, j.title, j.description, j.category, j.budget_label, j.budget_max_public,\n       s.id AS seller_id, s.display_name, s.headline, s.skills, s.categories,\n       s.price_floor, s.max_concurrent_jobs, s.delivery_terms,\n       (SELECT count(*) FROM jobs x\n         WHERE x.seller_id = s.id AND x.status IN ('agreed', 'funded', 'in_progress', 'delivered', 'reviewed'))::int AS active_jobs,\n       b.id AS bid_id, b.price AS bid_price, b.status::text AS bid_status,\n       (SELECT coalesce(max(n.round), 0) FROM negotiation_messages n WHERE n.bid_id = b.id) AS last_round,\n       (SELECT n.offered_price FROM negotiation_messages n\n         WHERE n.bid_id = b.id AND n.sender = 'buyer_agent'\n         ORDER BY n.created_at DESC LIMIT 1) AS buyer_offer,\n       (SELECT n.body FROM negotiation_messages n\n         WHERE n.bid_id = b.id AND n.sender = 'buyer_agent'\n         ORDER BY n.created_at DESC LIMIT 1) AS buyer_message,\n       (SELECT row_to_json(h) FROM (\n          SELECT id, price, status::text AS status FROM hire_offers\n           WHERE job_id = j.id AND seller_id = s.id AND status = 'sent'\n           ORDER BY created_at DESC LIMIT 1) h) AS hire_offer\nFROM jobs j\nJOIN sellers s ON s.id = $2::uuid\nLEFT JOIN bids b ON b.job_id = j.id AND b.seller_id = s.id\nWHERE j.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $json.jobId, $json.sellerId ] }}"
+        }
+      },
+      "id": "50819e7e-8ce3-49fd-86b2-d9c57ce87831",
+      "name": "Load job and seller",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "alwaysOutputData": true,
+      "position": [
+        448,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const env = $('Read envelope').first().json;\nconst r = $input.first().json;\nconst action = ['negotiate', 'hire_offer'].includes(env.action) ? env.action : 'bid';\nlet skip = null;\nif (!r.job_id) skip = 'Job or seller not found';\nelse if (action === 'bid' && r.bid_id) skip = 'Already bid on this job';\nelse if (action === 'bid' && r.active_jobs >= r.max_concurrent_jobs) skip = 'At capacity';\nelse if (action === 'bid' && !(r.categories || []).includes(r.category)) skip = 'Category not offered';\nelse if (action === 'negotiate' && !r.bid_id) skip = 'No bid to negotiate';\nelse if (action === 'negotiate' && r.last_round >= 3) skip = 'Negotiation already at 3 rounds';\nelse if (action === 'hire_offer' && !r.hire_offer) skip = 'No open hire offer';\n// Paper IV.c: the seller (or its bidding agent) accepts or declines the buyer's hire offer.\n// Deterministic: accept at or above the price floor while there is capacity.\nlet hire = null;\nif (!skip && action === 'hire_offer') {\n  const price = Number(r.hire_offer.price);\n  const ok = price >= Number(r.price_floor || 0) && r.active_jobs < r.max_concurrent_jobs;\n  hire = { id: r.hire_offer.id, price, decision: ok ? 'accepted' : 'declined',\n           why: ok ? 'price and capacity ok' : (price < Number(r.price_floor || 0) ? `below the ${r.price_floor} USDC floor` : 'at capacity') };\n}\nreturn [{ json: { ...r, action, skip, hire } }];"
+      },
+      "id": "89f2f16a-6ca5-44cb-a51b-c4e7668ab9cb",
+      "name": "Can act?",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d7b03434-03aa-408a-8063-fa7ea6c3a191",
+              "leftValue": "={{ Boolean($json.skip) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "ef9f6b3b-e835-49f8-8d41-8b297bce7397",
+      "name": "Skip?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json;\nconst persona = `You are the bidding agent for seller \"${r.display_name}\" (${r.headline || ''}).\nSkills: ${(r.skills || []).join(', ')}. Price floor: ${r.price_floor} USDC. Terms: ${r.delivery_terms || ''}.\nNever go below the price floor. Prices are in USDC.`;\nif (r.action === 'negotiate') {\n  return [{ json: { provider: 'general', required: ['accept', 'price', 'message'],\n    system: persona + `\nThe buyer's agent sent a counter-offer. Decide: accept it, or answer with a price between\nthe counter and your current price. Return JSON {\"accept\": boolean, \"price\": number, \"message\": string}.`,\n    user: `Job: ${r.title}\nYour current price: ${r.bid_price} USDC. Buyer counter: ${r.buyer_offer} USDC. Round ${r.last_round} of 3.\nBuyer message:\n<untrusted>${r.buyer_message || ''}</untrusted>` } }];\n}\nreturn [{ json: { provider: 'general', required: ['bid', 'price', 'etaDays', 'note', 'milestones'],\n  system: persona + `\nDecide whether to bid on this job. If yes, give a price, delivery time and 1 to 3 milestones\nwhose amounts add up to the price. Return JSON\n{\"bid\": boolean, \"price\": number, \"etaDays\": integer, \"note\": string,\n \"milestones\": [{\"description\": string, \"amount\": number}]}.`,\n  user: `Job: ${r.title} (category ${r.category}, budget ${r.budget_label || 'not stated'})\n<untrusted>\n${r.description}\n</untrusted>` } }];"
+      },
+      "id": "bd42691a-6f0e-4e83-881e-512c8ee2b1d4",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "GgJgGRBgpwaXrfGx",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/GgJgGRBgpwaXrfGx",
+          "cachedResultName": "Agora lib: llm-json"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "provider": "={{ $json.provider }}",
+            "system": "={{ $json.system }}",
+            "user": "={{ $json.user }}",
+            "required": "={{ $json.required }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "provider",
+              "displayName": "provider",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "system",
+              "displayName": "system",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "user",
+              "displayName": "user",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "required",
+              "displayName": "required",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "69a35408-7b82-4667-951d-69456acb4ab7",
+      "name": "Ask LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1328,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// The model proposes; this code decides what is allowed.\nconst r = $('Can act?').first().json;\nconst d = $input.first().json.data;\nconst floor = Number(r.price_floor || 0);\nconst round6 = (x) => Math.round(Number(x) * 1e6) / 1e6;\n\nif (r.action === 'negotiate') {\n  const counter = Number(r.buyer_offer);\n  let price = d.accept ? counter : Math.max(round6(d.price), floor);\n  let accept = Boolean(d.accept) && counter >= floor;\n  let message = String(d.message || '').slice(0, 1000);\n  if (counter < floor && price <= floor) {\n    price = floor;\n    message = `I can't go below ${floor} USDC for this job.`;\n  }\n  return [{ json: { kind: 'reply', bidId: r.bid_id, jobId: r.job_id,\n    round: Number(r.last_round) + 1, price, accept, message } }];\n}\n\nif (!d.bid) return [{ json: { kind: 'none', jobId: r.job_id, reason: 'Model chose not to bid' } }];\nconst price = Math.max(round6(d.price), floor);\nlet ms = Array.isArray(d.milestones) ? d.milestones.slice(0, 3) : [];\nif (ms.length === 0) ms = [{ description: 'Whole job', amount: price }];\n// Make milestone amounts add up to the price exactly\nconst sum = ms.reduce((a, m) => a + Number(m.amount || 0), 0) || 1;\nms = ms.map((m) => ({ description: String(m.description || ''),\n  amount: round6(Number(m.amount || 0) * price / sum) }));\nconst drift = round6(price - ms.reduce((a, m) => a + m.amount, 0));\nms[ms.length - 1].amount = round6(ms[ms.length - 1].amount + drift);\nconst eta = Math.min(Math.max(parseInt(d.etaDays, 10) || 2, 1), 30);\nreturn [{ json: { kind: 'bid', jobId: r.job_id, sellerId: r.seller_id, price, etaDays: eta,\n  note: String(d.note || '').slice(0, 1000), milestones: ms } }];"
+      },
+      "id": "925e9f0c-fb08-4c48-b7e0-103dc3474467",
+      "name": "Enforce rules",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "a50a449a-f4a0-4111-b606-5ededb3e7966",
+              "leftValue": "={{ $json.kind === 'reply' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "7c18b151-4ac8-457d-a299-209c5a8fab3a",
+      "name": "Is reply?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1776,
+        112
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO bids (job_id, seller_id, placed_by_agent_id, price, delivery_eta, note,\n                  proposed_milestones, status)\nSELECT $1::uuid, $2::uuid, $3::uuid, $4::numeric, ($5 || ' days')::interval, $6, $7::jsonb,\n       'pending_check'\nWHERE $8 = 'bid'\nON CONFLICT (job_id, seller_id) DO NOTHING\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.jobId, $json.sellerId || null, $('Read envelope').first().json.agentId, $json.price ?? 0, String($json.etaDays ?? 1), $json.note || '', JSON.stringify($json.milestones || []), $json.kind ] }}"
+        }
+      },
+      "id": "6c37fa12-fd4d-4e77-8a53-2b8fdd69d34b",
+      "name": "Save bid",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "alwaysOutputData": true,
+      "position": [
+        2000,
+        208
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH msg AS (\n  INSERT INTO negotiation_messages\n    (job_id, bid_id, round, sender, sender_agent_id, body, offered_price)\n  VALUES ($1::uuid, $2::uuid, $3::smallint, 'seller_agent', $4::uuid, $5, $6::numeric)\n  RETURNING id\n)\nUPDATE bids SET price = $6::numeric WHERE id = $2::uuid\nRETURNING (SELECT id FROM msg) AS message_id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.jobId, $json.bidId, $json.round, $('Read envelope').first().json.agentId, $json.message, $json.price ] }}"
+        }
+      },
+      "id": "69165b0a-8646-4031-94fe-a9da90960d0d",
+      "name": "Save reply",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "alwaysOutputData": true,
+      "position": [
+        2000,
+        16
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const env = $('Read envelope').first().json;\nconst act = $('Can act?').first().json;\nlet e;\ntry { e = $('Enforce rules').first().json; } catch { e = null; }\nconst row = $input.first().json || {};\nlet message, severity = 'info', result = {};\nif (act.hire) {\n  const answered = Boolean(row.id);\n  message = answered\n    ? `${act.display_name} ${act.hire.decision} the hire offer at ${act.hire.price} USDC (${act.hire.why})`\n    : `${act.display_name}: the hire offer was already answered`;\n  severity = act.hire.decision === 'accepted' && answered ? 'ok' : 'info';\n  result = { hireOfferId: act.hire.id, decision: answered ? act.hire.decision : null };\n} else if (act.skip) {\n  message = `${act.display_name || 'Seller'} skipped this job: ${act.skip}`;\n} else if (e.kind === 'none') {\n  message = `${act.display_name} chose not to bid`;\n} else if (e.kind === 'reply') {\n  message = e.accept\n    ? `${act.display_name} accepted the counter of ${e.price} USDC`\n    : `${act.display_name} answered with ${e.price} USDC (round ${e.round})`;\n  result = { bidId: e.bidId, messageId: row.message_id ?? null, accept: e.accept, price: e.price };\n} else {\n  message = `${act.display_name} bid ${e.price} USDC, ${e.etaDays} day(s), ${e.milestones.length} milestone(s)`;\n  severity = 'ok';\n  result = { bidId: row.id ?? null, price: e.price };\n}\nreturn [{ json: {\n  runId: env.runId, ownerId: env.ownerId, agentId: env.agentId, jobId: env.jobId,\n  actorLabel: act.display_name ? `${act.display_name} (bidding)` : 'Bidding agent',\n  message, severity, data: result,\n  notify: { runId: env.runId, role: 'bidding', ok: true, jobId: env.jobId,\n            result: { action: act.action, skip: act.skip, ...result }, error: null },\n} }];"
+      },
+      "id": "f35140fc-d51d-4a16-855b-9610d11a2f33",
+      "name": "Finish",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2176,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "koU3lJvPFjQvlFkl",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/koU3lJvPFjQvlFkl",
+          "cachedResultName": "Agora lib: log-event"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "06291ada-ce78-4b97-b7d4-09397a90e283",
+      "name": "Log event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        2400,
+        -128
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "r3JfXTsdFLB8aMM0",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/r3JfXTsdFLB8aMM0",
+          "cachedResultName": "Agora lib: notify-nest"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "0c67acdd-936c-4947-b1d5-846e5569284b",
+      "name": "Notify Nest",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        2624,
+        -128
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "44f6dad7-4738-4c31-a2e9-c8b1ce717e82",
+              "leftValue": "={{ Boolean($json.hire) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "3d2b43b2-6aa8-4147-86ad-18ace0472550",
+      "name": "Hire offer?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        896,
+        -224
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "UPDATE hire_offers SET status = $2::hire_offer_status, updated_at = now()\n WHERE id = $1::uuid AND status = 'sent'\nRETURNING id, status::text AS status;",
+        "options": {
+          "queryReplacement": "={{ [ $json.hire.id, $json.hire.decision ] }}"
+        }
+      },
+      "id": "4435ff10-de93-4c41-81c7-19c291866e84",
+      "name": "Answer hire offer",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "alwaysOutputData": true,
+      "position": [
+        1120,
+        -224
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read envelope": {
+      "main": [
+        [
+          {
+            "node": "Load job and seller",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load job and seller": {
+      "main": [
+        [
+          {
+            "node": "Can act?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Can act?": {
+      "main": [
+        [
+          {
+            "node": "Hire offer?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Skip?": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "Ask LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask LLM": {
+      "main": [
+        [
+          {
+            "node": "Enforce rules",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enforce rules": {
+      "main": [
+        [
+          {
+            "node": "Is reply?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Is reply?": {
+      "main": [
+        [
+          {
+            "node": "Save reply",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Save bid",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save bid": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save reply": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish": {
+      "main": [
+        [
+          {
+            "node": "Log event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log event": {
+      "main": [
+        [
+          {
+            "node": "Notify Nest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Hire offer?": {
+      "main": [
+        [
+          {
+            "node": "Answer hire offer",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Skip?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Answer hire offer": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "dd8dd9db-1c6a-463a-bb0b-c2368f05bf14",
+  "meta": {
+    "instanceId": "5bc1f41ff2889bec057c4b16904248e981cf8fde880ea6ae71e5a4721ead5080"
+  },
+  "nodeGroups": [],
+  "id": "m8MZREOxbWw4Igid",
+  "tags": []
+}

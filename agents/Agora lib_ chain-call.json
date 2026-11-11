@@ -1,0 +1,359 @@
+{
+  "name": "Agora lib: chain-call",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "6b3179ef-1181-4650-a320-1db2eede649c",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "3b4ba52a-5f2f-4c4e-b24a-295ccdf762fb",
+              "name": "cfg",
+              "value": "={{ { mode: $env.AGORA_CHAIN_MODE || 'testnet', contractId: $env.AGORA_CONTRACT_ID || 'agora-market.agora-testnet.testnet', signerUrl: $env.AGORA_SIGNER_URL || 'https://agora-signer-production.up.railway.app', accounts: { 'tx-buyer': $env.AGORA_ACCT_TX_BUYER || 'tx-buyer', 'tx-seller': $env.AGORA_ACCT_TX_SELLER || 'tx-seller', 'guardian-buyer': $env.AGORA_ACCT_GUARDIAN || 'guardian-buyer', 'reviewer-1': $env.AGORA_ACCT_REVIEWER_1 || 'reviewer-1', 'reviewer-2': $env.AGORA_ACCT_REVIEWER_2 || 'reviewer-2', 'reviewer-3': $env.AGORA_ACCT_REVIEWER_3 || 'reviewer-3', platform: $env.AGORA_PLATFORM_ACCOUNT || 'platform' } } }}",
+              "type": "object"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "3369e4c6-91fc-47ab-b177-9bbf14473860",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        208,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Input: signer, method, args, ownerId, jobId, amount (USDC, decimal)\nconst i = $input.first().json;\nconst SIGNERS = ['tx-buyer', 'tx-seller', 'guardian-buyer',\n                 'reviewer-1', 'reviewer-2', 'reviewer-3', 'platform'];\nif (!SIGNERS.includes(i.signer)) throw new Error('Unknown signer: ' + i.signer);\nif (!/^[a-z_]+$/.test(i.method || '')) throw new Error('Bad method name: ' + i.method);\nreturn [{\n  json: {\n    signer: i.signer,\n    signerIndex: SIGNERS.indexOf(i.signer),\n    signerAccount: i.cfg.accounts[i.signer] || i.signer,\n    method: i.method,\n    args: i.args || {},\n    ownerId: i.ownerId || null,\n    jobId: i.jobId || null,\n    amount: i.amount ?? null,\n    mode: i.cfg.mode === 'testnet' ? 'testnet' : 'mock',\n    contractId: i.cfg.contractId,\n  },\n}];"
+      },
+      "id": "4a985bd1-5d2b-435d-bd05-e2b651552684",
+      "name": "Validate input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO chain_txs (owner_id, signer_account, method, args, amount, job_id, status)\nVALUES ($1::uuid, $2, $3, $4::jsonb, $5::numeric, $6::uuid, 'pending')\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.ownerId, $json.signerAccount, $json.method, JSON.stringify($json.args), $json.amount, $json.jobId ] }}"
+        }
+      },
+      "id": "d6e247dc-21e6-4017-ad49-6ee845210f59",
+      "name": "Insert pending tx",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        656,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "1a7efa17-ad66-452a-b739-c94a45b57a64",
+              "leftValue": "={{ $('Validate input').first().json.mode === 'mock' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "37c6ab18-ca96-4842-8ac4-5d2da1d1e6c1",
+      "name": "Mock mode?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        880,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT m.per_job_cap, m.daily_cap, m.new_seller_cap, m.paused, m.allowed_categories,\n       b.available, b.spent_today,\n       j.category, j.agreed_price,\n       bd.price_check::text AS price_check, bd.fraud_score, bd.owner_approved_risk,\n       coalesce(r.settled_jobs, 0) AS settled_jobs\nFROM profiles p\nLEFT JOIN mandates m   ON m.owner_id = p.id\nLEFT JOIN balances b   ON b.account_id = p.near_account_id\nLEFT JOIN jobs j       ON j.id = $2::uuid\nLEFT JOIN bids bd      ON bd.id = j.accepted_bid_id\nLEFT JOIN sellers s    ON s.id = j.seller_id\nLEFT JOIN reputation r ON r.account_id = s.near_account_id\nWHERE p.id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $('Validate input').first().json.ownerId, $('Validate input').first().json.jobId ] }}"
+        }
+      },
+      "id": "e651cf4a-93f9-47f3-b30a-74f2a4766222",
+      "name": "Load mandate (mock)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "alwaysOutputData": true,
+      "position": [
+        1104,
+        -96
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pretends to be the contract: same checks, same refusals (paper Table 5).\nconst v = $('Validate input').first().json;\nconst m = $input.first().json || {};\n// Key permissions of the team contract (contract/INTERFACE.md section 2)\nconst BUYER = ['post_job', 'accept_offer', 'fund_job', 'refund_milestone', 'grant_attempt', 'rate'];\nconst SELLER = ['place_bid', 'submit_delivery'];\nconst ANYONE = ['refund_expired', 'rerun_review', 'finalize_default'];\nconst KEYS = {\n  'tx-buyer': BUYER.concat(ANYONE), 'tx-seller': SELLER.concat(ANYONE), 'guardian-buyer': ['pause'],\n  'reviewer-1': ['vote'], 'reviewer-2': ['vote'], 'reviewer-3': ['vote'],\n  platform: ANYONE,\n};\nconst fail = (rejectedBy, error) => [{ json: { ok: false, rejectedBy, error } }];\nconst n = (x) => Number(x ?? 0);\n\n// 1) What the function-call key itself allows (protocol level)\nif (!KEYS[v.signer].includes(v.method)) {\n  return fail('protocol:MethodNameMismatch', `Key ${v.signer} may not call ${v.method}`);\n}\n// 2) Pause stops every money-moving call\nconst moving = ['post_job', 'place_bid', 'accept_offer', 'fund_job'];\nif (moving.includes(v.method) && m.paused === true) {\n  return fail('contract:paused', 'Agents are paused by the owner or the guardian');\n}\n// 3) Mandate checks on funding\nif (v.method === 'fund_job') {\n  const price = n(m.agreed_price ?? v.amount);\n  const amount = n(v.amount ?? price);\n  if (m.per_job_cap != null && price > n(m.per_job_cap)) {\n    return fail('contract:per_job_cap',\n      `Job price ${price} USDC is over the per-job cap of ${n(m.per_job_cap)}`);\n  }\n  if (m.daily_cap != null && n(m.spent_today) + amount > n(m.daily_cap)) {\n    return fail('contract:daily_cap',\n      `Would reach ${n(m.spent_today) + amount} USDC today; daily cap is ${n(m.daily_cap)}`);\n  }\n  const cats = m.allowed_categories || [];\n  if (cats.length && m.category && !cats.includes(m.category)) {\n    return fail('contract:category', `Category ${m.category} is not allowed`);\n  }\n  if (m.price_check === 'held') {\n    return fail('contract:price_hold', 'The bid is held by the price check');\n  }\n  if (n(m.fraud_score) >= 70 && !m.owner_approved_risk) {\n    return fail('contract:fraud_flag',\n      `Seller is flagged (score ${m.fraud_score}) and not approved by the owner`);\n  }\n  if (n(m.settled_jobs) < 3 && m.new_seller_cap != null && price > n(m.new_seller_cap)) {\n    return fail('contract:new_seller_cap',\n      `New seller: ${price} USDC is over the starter cap of ${n(m.new_seller_cap)}`);\n  }\n  if (n(m.available) < amount) {\n    return fail('contract:balance', `Free balance ${n(m.available)} USDC is below ${amount}`);\n  }\n}\nconst txHash = 'mock-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);\nreturn [{ json: { ok: true, txHash } }];"
+      },
+      "id": "cd641a4b-8dd6-4b72-bdd3-494f3eff480d",
+      "name": "Mock contract checks",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1328,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const v = $('Validate input').first().json;\nconst txId = $('Insert pending tx').first().json.id;\nconst r = $input.first().json;\nlet ok, error = null, rejectedBy = null, explorer = null;\nlet txHash = r.txHash || null;\n\nif (v.mode === 'mock') {\n  ok = r.ok === true;\n  error = r.error || null;\n  rejectedBy = r.rejectedBy || null;\n} else {\n  const e = r.error ? (typeof r.error === 'string' ? r.error : (r.error.message || JSON.stringify(r.error))) : null;\n  ok = r.ok === true;\n  error = e;\n  txHash = r.txHash || null;\n  explorer = r.explorer || null;\n  const p = String(e || '').match(/MethodNameMismatch|ReceiverMismatch|NotEnoughAllowance|NotEnoughBalance|DepositWithFunctionCall|InvalidNonce/i);\n  const c = String(e || '').match(/contract:[a-z_]+/);\n  rejectedBy = ok ? null : (p ? 'protocol:' + p[0] : (c ? c[0] : 'contract'));\n}\n\nlet effect = 'none';\nif (ok && v.mode === 'mock' && v.method === 'fund_job') effect = 'mock-fund';\nif (ok && v.mode === 'mock' && v.method === 'pause') effect = 'mock-pause';\n\nreturn [{\n  json: {\n    ok, txHash, explorer, error, rejectedBy, txId, effect,\n    method: v.method, signer: v.signer, amount: v.amount, ownerId: v.ownerId, jobId: v.jobId,\n  },\n}];"
+      },
+      "id": "696c3662-07ca-4c5c-883e-5d190bf1f824",
+      "name": "Normalize result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1552,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH upd AS (\n  UPDATE chain_txs\n     SET status = $2::tx_status, tx_hash = $3, error = $4, rejected_by = $5\n   WHERE id = $1::uuid\n  RETURNING id\n), bal AS (\n  -- mock mode only: move the amount from available to escrow\n  UPDATE balances b\n     SET available = b.available - $7::numeric,\n         escrowed = b.escrowed + $7::numeric,\n         spent_today = b.spent_today + $7::numeric\n    FROM profiles p\n   WHERE $6 = 'mock-fund' AND p.id = $8::uuid AND b.account_id = p.near_account_id\n  RETURNING b.account_id\n), pz AS (\n  -- mock mode only: the guardian's pause\n  UPDATE mandates SET paused = true, paused_by = 'guardian', paused_at = now()\n   WHERE $6 = 'mock-pause' AND owner_id = $8::uuid\n  RETURNING owner_id\n)\nSELECT (SELECT id FROM upd) AS id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.txId, $json.ok ? 'success' : 'rejected', $json.txHash, $json.error, $json.rejectedBy, $json.effect, $json.amount ?? 0, $json.ownerId ] }}"
+        }
+      },
+      "id": "6b39c785-5fb7-465e-907d-c2d81e484fc8",
+      "name": "Record result",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1776,
+        -96
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "return [{ json: $('Normalize result').first().json }];"
+      },
+      "id": "fa5a3ccd-352e-439c-a272-b295083a825d",
+      "name": "Return",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2000,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Config').first().json.cfg.signerUrl }}/call",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { signer: $('Validate input').first().json.signer, method: $('Validate input').first().json.method, args: $('Validate input').first().json.args, gasTgas: ['vote','pause','rerun_review','refund_expired','refund_milestone','grant_attempt'].includes($('Validate input').first().json.method) ? 50 : 100 } }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "97bb3675-8a17-4fa5-9fa9-c76441843c71",
+      "name": "NEAR signer",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1104,
+        208
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "6Ao2rSZpSxJgotHi",
+          "name": "AGORA signer secret"
+        }
+      },
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Validate input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate input": {
+      "main": [
+        [
+          {
+            "node": "Insert pending tx",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert pending tx": {
+      "main": [
+        [
+          {
+            "node": "Mock mode?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock mode?": {
+      "main": [
+        [
+          {
+            "node": "Load mandate (mock)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "NEAR signer",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load mandate (mock)": {
+      "main": [
+        [
+          {
+            "node": "Mock contract checks",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mock contract checks": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize result": {
+      "main": [
+        [
+          {
+            "node": "Record result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record result": {
+      "main": [
+        [
+          {
+            "node": "Return",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "NEAR signer": {
+      "main": [
+        [
+          {
+            "node": "Normalize result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "186d18ec-6f11-41de-ba51-515717c366c4",
+  "meta": {
+    "instanceId": "5bc1f41ff2889bec057c4b16904248e981cf8fde880ea6ae71e5a4721ead5080"
+  },
+  "nodeGroups": [],
+  "id": "kWwau45O3BaWYc1t",
+  "tags": []
+}
