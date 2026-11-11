@@ -201,9 +201,6 @@ export class BidsService {
     }
 
     private async checkBid(buyerId: string, jobId: string, bidId: string) {
-        await Promise.all([
-            this.agentsService.dispatch('fraud_lure', { ownerId: buyerId, jobId, payload: { subjectType: 'bid', subjectId: bidId } }),
-            this.agentsService.dispatch('price_check', { ownerId: buyerId, jobId, payload: { bidId } }),
-        ]);
+        await this.agentsService.dispatch('fraud_lure', { ownerId: buyerId, jobId, payload: { subjectType: 'bid', subjectId: bidId } });
     }
 }

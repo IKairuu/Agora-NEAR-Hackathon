@@ -17,6 +17,7 @@ import { MessagesModule } from './messages/messages.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { SpecsModule } from './specs/specs.module.js';
 import { DeliveriesModule } from './deliveries/deliveries.module.js';
+import { PaymentsModule } from './payments/payments.module.js';
 import { ReviewsModule } from './reviews/reviews.module.js';
 import { DisputesModule } from './disputes/disputes.module.js';
 import { SellersModule } from './sellers/sellers.module.js';
@@ -45,6 +46,7 @@ import { DemoModule } from './demo/demo.module.js';
         NotificationsModule,
         SpecsModule,
         DeliveriesModule,
+        PaymentsModule,
         ReviewsModule,
         DisputesModule,
         SellersModule,

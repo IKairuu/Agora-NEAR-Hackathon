@@ -55,7 +55,6 @@ describe('BidsService', () => {
             expect(repo.setOnchainBid.mock.calls[0]).toEqual([SELLER_USER, 'b1', 1790000009n, 'mock-place_bid-9']);
             expect(agents.dispatch.mock.calls).toEqual([
                 ['fraud_lure', { ownerId: BUYER, jobId: JOB, payload: { subjectType: 'bid', subjectId: 'b1' } }],
-                ['price_check', { ownerId: BUYER, jobId: JOB, payload: { bidId: 'b1' } }],
             ]);
         });
 
@@ -78,7 +77,7 @@ describe('BidsService', () => {
                 id: 'b1', placed: false, onchainBidId: null, bidError: 'Contract refused place_bid: Not a registered seller',
             });
             expect(repo.setOnchainBid.mock.calls).toHaveLength(0);
-            expect(agents.dispatch.mock.calls).toHaveLength(2);
+            expect(agents.dispatch.mock.calls).toHaveLength(1);
         });
 
         it('does not place a re-opened offer twice', async () => {

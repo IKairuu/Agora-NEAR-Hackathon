@@ -5,12 +5,11 @@ import { AuthService } from '../auth/auth.service.js';
 import { openLimit } from '../limits.js';
 import { AgentsRepository, JobKey } from './agents.repository.js';
 
-export type AgentFlow = 'spec_writer' | 'fraud_lure' | 'price_check' | 'reviewer' | 'buyer' | 'bidding';
+export type AgentFlow = 'spec_writer' | 'fraud_lure' | 'reviewer' | 'buyer' | 'bidding';
 
 const PATHS: Record<AgentFlow, string> = {
     spec_writer: 'spec-writer',
     fraud_lure: 'fraud-lure',
-    price_check: 'price-check',
     reviewer: 'review',
     buyer: 'buyer',
     bidding: 'bidding',

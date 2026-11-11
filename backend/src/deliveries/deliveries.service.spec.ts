@@ -31,7 +31,7 @@ describe('DeliveriesService', () => {
     beforeEach(() => {
         repo = {
             getJobForDelivery: jest.fn().mockResolvedValue(job()), createDelivery: jest.fn().mockResolvedValue({ id: DELIVERY, attempt: 1 }),
-            setRunStatus: jest.fn(), listDeliveries: jest.fn(), isParty: jest.fn(), getProof: jest.fn(),
+            setRunStatus: jest.fn(), extraAttempts: jest.fn().mockResolvedValue(0), listDeliveries: jest.fn(), isParty: jest.fn(), getProof: jest.fn(),
         } as unknown as jest.Mocked<DeliveriesRepository>;
         chain = {
             callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-submit_delivery-1', explorer_url: 'https://testnet.nearblocks.io/txns/mock-submit_delivery-1', result: null }),

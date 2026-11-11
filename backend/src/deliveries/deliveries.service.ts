@@ -88,7 +88,7 @@ export class DeliveriesService {
         const last = milestone.deliveries[0];
         if (last && ['submitted', 'reviewing'].includes(last.status)) throw new ConflictException('Wait for the reviewers to finish the last attempt');
         const attempt = (last?.attempt ?? 0) + 1;
-        if (attempt > MAX_ATTEMPTS) throw new BadRequestException('No attempts left. The buyer can refund or grant one more attempt');
+        if (attempt > MAX_ATTEMPTS + (await this.deliveriesRepository.extraAttempts(job.id))) throw new BadRequestException('No attempts left. The buyer can refund or grant one more attempt');
         const spec = job.acceptanceSpecs[0];
         if (!spec) throw new BadRequestException('This job has no locked spec');
         const repoUrl = body.repo_url ?? job.repoUrl;

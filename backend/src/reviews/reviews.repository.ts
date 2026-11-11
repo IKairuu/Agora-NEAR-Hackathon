@@ -154,6 +154,14 @@ export class ReviewsRepository {
         return prisma.delivery.findFirst({ where: { id: deliveryId, milestone: { job: twoSided(userId) } }, select: rerunSelect });
     }
 
+    async getOpenDeliveryOfJob(jobId: string) {
+        return prisma.delivery.findFirst({
+            where: { status: { in: ['submitted', 'reviewing'] }, milestone: { jobId } },
+            orderBy: { attempt: 'desc' },
+            select: rerunSelect,
+        });
+    }
+
     async createRerun(r: NewRerun) {
         return prisma.$transaction(async (tx) => {
             const run = await tx.reviewRun.create({ data: { deliveryId: r.deliveryId, round: r.round, runId: r.runId }, select: { id: true, round: true } });

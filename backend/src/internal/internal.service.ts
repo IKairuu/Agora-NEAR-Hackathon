@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { AgentsService } from '../agents/agents.service.js';
 import { chainBidId, chainJobId, ChainService } from '../chain/chain.service.js';
 import { IndexerService } from '../indexer/indexer.service.js';
+import { ReviewsService } from '../reviews/reviews.service.js';
 import { InternalRepository, NotificationInput } from './internal.repository.js';
 
 export const agentNotifySchema = z.object({
@@ -105,6 +106,7 @@ export class InternalService {
         private readonly indexer: IndexerService,
         private readonly chainService: ChainService,
         private readonly agentsService: AgentsService,
+        private readonly reviewsService: ReviewsService,
     ) {}
 
     async agentNotify(raw: unknown) {
@@ -186,8 +188,12 @@ export class InternalService {
             actions.push('bidding failed');
         } else if (body.role === 'guardian') {
             await this.onGuardian(body.ok, body.error ?? null, result, actions, notes);
-        } else if (body.role === 'auto_release' && body.ok && job) {
-            await this.onAutoRelease(job, result, actions, notes);
+        } else if (body.role === 'review_timeout' && job) {
+            await this.onReviewTimeout(job, body.ok, actions);
+        } else if (body.role === 'deadline_refund' && job) {
+            await this.onTimerCall(job, body.ok, 'refund_expired', actions, notes);
+        } else if (body.role === 'dispute_default' && job) {
+            await this.onTimerCall(job, body.ok, 'finalize_default', actions, notes);
         } else if (body.role === 'buyer_window' && job) {
             actions.push(`buyer ${(await this.agentsService.dispatchBuyer(job.id)).status}`);
         } else if (!body.ok && job) {
@@ -264,10 +270,7 @@ export class InternalService {
             actions.push(`buyer ${(await this.agentsService.dispatchBuyer(job.id)).status}`);
             return;
         }
-        await Promise.all([
-            this.agentsService.dispatch('fraud_lure', { ownerId: job.buyerId, jobId: job.id, payload: { subjectType: 'bid', subjectId: bid.id } }),
-            this.agentsService.dispatch('price_check', { ownerId: job.buyerId, jobId: job.id, payload: { bidId: bid.id } }),
-        ]);
+        await this.agentsService.dispatch('fraud_lure', { ownerId: job.buyerId, jobId: job.id, payload: { subjectType: 'bid', subjectId: bid.id } });
         actions.push('bid checks started');
         notes.push({ userId: bid.seller.ownerId, kind: 'offer', title: `Your agent bid on ${job.ref}`, body: `${usdc(price)}. The fraud and price checks run before the buyer sees it.`, link: '/orders' });
     }
@@ -290,19 +293,38 @@ export class InternalService {
         notes.push({ userId: ownerId, kind: 'guardian', title: 'Your guardian tried to pause your agents', body: `${why}. The pause call failed${error ? `: ${error.slice(0, 300)}` : ''}. Check your limits.`, link: '/mandate' });
     }
 
-    private async onAutoRelease(job: NotifyJob, result: Record<string, unknown>, actions: string[], notes: NotificationInput[]) {
+    private async onReviewTimeout(job: NotifyJob, ok: boolean, actions: string[]) {
+        if (!ok) {
+            actions.push('review timer refused');
+            return;
+        }
+        try {
+            const rerun = await this.reviewsService.rerunStalled(job.id);
+            actions.push(rerun ? `review round ${rerun.round} started` : 'nothing to rerun');
+        } catch (e) {
+            actions.push(`rerun skipped: ${e instanceof Error ? e.message : 'unknown error'}`);
+        }
+    }
+
+    private async onTimerCall(job: NotifyJob, ok: boolean, method: 'refund_expired' | 'finalize_default', actions: string[], notes: NotificationInput[]) {
+        if (!ok) {
+            actions.push(`${method} refused`);
+            return;
+        }
         if ((process.env['AGORA_CHAIN_MODE'] ?? 'mock') === 'mock') {
-            const released = await this.indexer.onMockRelease(job.id, text(result['txHash']) ?? `mock-release-expired-${Date.now()}`);
-            if (!released) {
-                actions.push('nothing to release');
+            try {
+                const platform = process.env['AGORA_PLATFORM_ACCOUNT'] ?? 'agora-testnet.testnet';
+                await this.chainService.callAs('platform', platform, method, { job_id: chainJobId(job) });
+            } catch (e) {
+                actions.push(`${method} refused: ${e instanceof Error ? e.message : 'unknown error'}`);
                 return;
             }
-            actions.push('released');
         }
-        const title = `Payment released on ${job.ref}`;
-        const body = 'No dispute before the review window ended.';
-        notes.push({ userId: job.buyerId, kind: 'review', title, body, link: `/job?id=${job.ref}` });
-        if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title, body, link: '/orders' });
+        actions.push(method === 'refund_expired' ? 'expired and refunded' : 'dispute finalized');
+        const title = method === 'refund_expired' ? `Deadline passed on ${job.ref}, payment refunded` : `Dispute on ${job.ref} finalized`;
+        const body = method === 'refund_expired' ? 'The seller did not deliver in time, so the protected money went back to the buyer.' : 'Nobody escalated in time, so the re-check result stands.';
+        notes.push({ userId: job.buyerId, kind: method === 'refund_expired' ? 'review' : 'dispute', title, body, link: `/job?id=${job.ref}` });
+        if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: method === 'refund_expired' ? 'review' : 'dispute', title, body, link: '/orders' });
     }
 
     private async flagBid(bid: { id: string; onchainId: bigint | null; priceCheck: string | null; fraudScore: number | null; job: { ref: string; onchainId: bigint | null } }): Promise<string> {

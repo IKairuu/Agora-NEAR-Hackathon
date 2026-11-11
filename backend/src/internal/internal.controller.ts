@@ -2,6 +2,18 @@ import { Body, Controller, HttpCode, Post, UseGuards } from '@nestjs/common';
 import { InternalKeyGuard } from './internal-key.guard.js';
 import { InternalService } from './internal.service.js';
 
+@Controller('agents')
+export class AgentNotifyAliasController {
+    constructor(private readonly internalService: InternalService) {}
+
+    @Post('notify')
+    @HttpCode(200)
+    @UseGuards(InternalKeyGuard)
+    agentNotify(@Body() body: unknown) {
+        return this.internalService.agentNotify(body);
+    }
+}
+
 @Controller('internal')
 export class InternalController {
     constructor(private readonly internalService: InternalService) {}

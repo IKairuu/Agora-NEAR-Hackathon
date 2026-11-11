@@ -32,11 +32,11 @@ describe('AgentsService', () => {
     afterEach(() => { process.env = { ...env }; });
 
     it('posts the n8n envelope to the flow webhook with the header key', async () => {
-        await expect(service.dispatch('price_check', { ownerId: USER, jobId: 'j1', payload: { bidId: 'b1' } })).resolves.toMatchObject({ flow: 'price_check', status: 'sent' });
+        await expect(service.dispatch('fraud_lure', { ownerId: USER, jobId: 'j1', payload: { subjectType: 'bid', subjectId: 'b1' } })).resolves.toMatchObject({ flow: 'fraud_lure', status: 'sent' });
         const [url, init] = fetchMock.mock.calls[0] as [string, { headers: Record<string, string>; body: string }];
-        expect(url).toBe('http://n8n:5678/webhook/agora/price-check');
+        expect(url).toBe('http://n8n:5678/webhook/agora/fraud-lure');
         expect(init.headers['x-agora-key']).toBe('hook-key');
-        expect(JSON.parse(init.body)).toMatchObject({ ownerId: USER, jobId: 'j1', agentId: 'agent-1', payload: { bidId: 'b1' } });
+        expect(JSON.parse(init.body)).toMatchObject({ ownerId: USER, jobId: 'j1', agentId: 'agent-1', payload: { subjectType: 'bid', subjectId: 'b1' } });
         expect(JSON.parse(init.body).runId).toMatch(/^[0-9a-f-]{36}$/);
     });
 

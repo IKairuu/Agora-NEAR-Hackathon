@@ -87,6 +87,10 @@ export class DeliveriesRepository {
         });
     }
 
+    async extraAttempts(jobId: string) {
+        return prisma.chainTx.count({ where: { jobId, method: 'grant_attempt', status: 'success' } });
+    }
+
     async createDelivery(d: NewDelivery) {
         return prisma.$transaction(async (tx) => {
             const delivery = await tx.delivery.create({

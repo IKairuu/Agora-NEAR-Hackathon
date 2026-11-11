@@ -168,7 +168,7 @@ export class IndexerRepository {
         }, MONEY_TX);
     }
 
-    async refundJob(key: JobRef, txHash: string) {
+    async refundJob(key: JobRef, txHash: string, finalStatus: 'refunded' | 'expired' = 'refunded') {
         return prisma.$transaction(async (tx) => {
             const job = await tx.job.findFirst({
                 where: key,
@@ -179,7 +179,7 @@ export class IndexerRepository {
             });
             const milestone = job?.milestones[0];
             if (!job || !milestone || ['released', 'refunded'].includes(milestone.status)) return null;
-            await tx.job.update({ where: { id: job.id }, data: { status: 'refunded' }, select: { id: true } });
+            await tx.job.update({ where: { id: job.id }, data: { status: finalStatus }, select: { id: true } });
             await tx.milestone.update({ where: { id: milestone.id }, data: { status: 'refunded', releasedTx: txHash, releasedAt: new Date() }, select: { id: true } });
             if (job.buyer.nearAccountId) {
                 await tx.balance.updateMany({
@@ -190,6 +190,39 @@ export class IndexerRepository {
             if (job.seller) await this.syncReputation(tx, job.seller.id, job.seller.nearAccountId);
             return { jobId: job.id, amount: Number(milestone.amount) };
         }, MONEY_TX);
+    }
+
+    async getRefundContext(key: JobRef) {
+        const job = await prisma.job.findFirst({
+            where: key,
+            select: {
+                id: true, status: true,
+                buyer: { select: { nearAccountId: true } },
+                acceptedBid: { select: { deliveryDays: true } },
+                milestones: {
+                    where: { idx: 0 },
+                    select: { status: true, fundedAt: true, deliveries: { select: { attempt: true, status: true }, orderBy: { attempt: 'desc' }, take: 1 } },
+                },
+            },
+        });
+        if (!job) return null;
+        const extraAttempts = await prisma.chainTx.count({ where: { jobId: job.id, method: 'grant_attempt', status: 'success' } });
+        const milestone = job.milestones[0] ?? null;
+        return {
+            id: job.id,
+            status: job.status,
+            buyerAccount: job.buyer.nearAccountId,
+            milestoneStatus: milestone?.status ?? null,
+            fundedAt: milestone?.fundedAt ?? null,
+            deliveryDays: job.acceptedBid?.deliveryDays ?? null,
+            lastAttempt: milestone?.deliveries[0]?.attempt ?? 0,
+            lastDeliveryStatus: milestone?.deliveries[0]?.status ?? null,
+            extraAttempts,
+        };
+    }
+
+    async countExtraAttempts(jobId: string) {
+        return prisma.chainTx.count({ where: { jobId, method: 'grant_attempt', status: 'success' } });
     }
 
     async getDisputeContext(key: JobRef): Promise<DisputeContext | null> {

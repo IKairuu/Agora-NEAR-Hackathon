@@ -36,7 +36,7 @@ export class InternalRepository {
     async getJob(id: string) {
         return prisma.job.findFirst({
             where: { id },
-            select: { id: true, ref: true, title: true, buyerId: true, seller: { select: { ownerId: true } } },
+            select: { id: true, ref: true, onchainId: true, title: true, buyerId: true, seller: { select: { ownerId: true } } },
         });
     }
 
@@ -163,7 +163,7 @@ export class InternalRepository {
                 data: { status: approved ? 'approved' : 'rejected' },
             });
             if (updated.count === 0) return 0;
-            await tx.milestone.update({ where: { id: milestoneId }, data: { status: approved ? 'in_review' : 'funded' }, select: { id: true } });
+            if (!approved) await tx.milestone.update({ where: { id: milestoneId }, data: { status: 'funded' }, select: { id: true } });
             await tx.job.updateMany({ where: { id: jobId, status: 'delivered' }, data: { status: approved ? 'reviewed' : 'in_progress' } });
             return updated.count;
         });

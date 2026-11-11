@@ -3,6 +3,7 @@ jest.mock('../prisma', () => ({ prisma: {} }));
 import { AgentsService } from '../agents/agents.service';
 import { ChainService } from '../chain/chain.service';
 import { IndexerService } from '../indexer/indexer.service';
+import { ReviewsService } from '../reviews/reviews.service';
 import { InternalRepository } from './internal.repository';
 import { bidFlagsOf, decideBid, HIDDEN_FAILED, InternalService, judgeRun } from './internal.service';
 
@@ -17,6 +18,7 @@ describe('InternalService', () => {
     let indexer: jest.Mocked<IndexerService>;
     let chain: jest.Mocked<ChainService>;
     let agents: jest.Mocked<AgentsService>;
+    let reviews: jest.Mocked<ReviewsService>;
 
     beforeEach(() => {
         repo = {
@@ -30,7 +32,8 @@ describe('InternalService', () => {
             dispatchBuyer: jest.fn().mockResolvedValue({ flow: 'buyer', runId: 'r', status: 'sent' }),
             dispatchBidding: jest.fn().mockResolvedValue({ flow: 'bidding', runId: 'r', status: 'sent' }),
         } as unknown as jest.Mocked<AgentsService>;
-        service = new InternalService(repo, indexer, chain, agents);
+        reviews = { rerunStalled: jest.fn().mockResolvedValue({ round: 2 }) } as unknown as jest.Mocked<ReviewsService>;
+        service = new InternalService(repo, indexer, chain, agents, reviews);
     });
 
     const bid = (extra: object) => ({ id: BID, onchainId: null, status: 'pending_check', price: 36, priceCheck: 'cleared', fraudScore: 6, holdReason: null, job: { id: JOB, ref: 'J-1042', onchainId: null, buyerId: 'buyer' }, seller: { displayName: 'patchsmith', ownerId: 'seller' }, ...extra });
@@ -221,7 +224,6 @@ describe('InternalService', () => {
         const res = await service.agentNotify({ role: 'bidding', ok: true, jobId: JOB, result: { action: 'bid', skip: null, bidId: BID, price: 36 } });
         expect(agents.dispatch.mock.calls).toEqual([
             ['fraud_lure', { ownerId: 'buyer', jobId: JOB, payload: { subjectType: 'bid', subjectId: BID } }],
-            ['price_check', { ownerId: 'buyer', jobId: JOB, payload: { bidId: BID } }],
         ]);
         expect(res.actions).toEqual(['bid checks started', 'notified 1']);
         expect(repo.createNotifications.mock.calls[0]![0][0]).toMatchObject({ userId: 'seller', title: 'Your agent bid on J-1042' });
@@ -256,18 +258,37 @@ describe('InternalService', () => {
         expect((await service.agentNotify({ role: 'guardian', ok: true, jobId: null, result: { ownerId: 'nope' } })).actions).toEqual(['owner not found']);
     });
 
-    it('releases in mock mode after the review window and tells both sides', async () => {
-        const res = await service.agentNotify({ role: 'auto_release', ok: true, jobId: JOB, result: { txHash: 'mock-rel-1' } });
-        expect(indexer.onMockRelease.mock.calls[0]).toEqual([JOB, 'mock-rel-1']);
-        expect(res.actions).toEqual(['released', 'notified 2']);
-        indexer.onMockRelease.mockResolvedValue(null as never);
-        expect((await service.agentNotify({ role: 'auto_release', ok: true, jobId: JOB, result: { txHash: 'mock-rel-1' } })).actions).toEqual(['nothing to release']);
+    it('refunds an expired job through the mock chain and tells both sides', async () => {
+        const res = await service.agentNotify({ role: 'deadline_refund', ok: true, jobId: JOB, result: { method: 'refund_expired', txHash: 'mock-1' } });
+        expect(chain.callAs.mock.calls[0]).toEqual(['platform', 'agora-testnet.testnet', 'refund_expired', { job_id: 'J-1042' }]);
+        expect(res.actions).toEqual(['expired and refunded', 'notified 2']);
     });
 
-    it('reports a refused auto-release to the buyer', async () => {
-        await service.agentNotify({ role: 'auto_release', ok: false, jobId: JOB, result: { txHash: null }, error: 'Contract refused' });
+    it('reports a refused deadline refund instead of failing', async () => {
+        chain.callAs.mockRejectedValue(new Error('Contract refused refund_expired: Deadline has not passed'));
+        const res = await service.agentNotify({ role: 'deadline_refund', ok: true, jobId: JOB, result: {} });
+        expect(res.actions).toEqual(['refund_expired refused: Contract refused refund_expired: Deadline has not passed']);
+    });
+
+    it('does not move money when the timer call itself was refused', async () => {
+        const res = await service.agentNotify({ role: 'deadline_refund', ok: false, jobId: JOB, result: {}, error: 'Contract refused' });
+        expect(chain.callAs.mock.calls).toHaveLength(0);
+        expect(res.actions).toEqual(['refund_expired refused']);
+    });
+
+    it('finalizes a dispute through the mock chain', async () => {
+        const res = await service.agentNotify({ role: 'dispute_default', ok: true, jobId: JOB, result: {} });
+        expect(chain.callAs.mock.calls[0]![2]).toBe('finalize_default');
+        expect(res.actions).toEqual(['dispute finalized', 'notified 2']);
+    });
+
+    it('starts a fresh review round when the 12 hour timer fires and never releases', async () => {
+        const res = await service.agentNotify({ role: 'review_timeout', ok: true, jobId: JOB, result: {} });
+        expect(reviews.rerunStalled.mock.calls[0]).toEqual([JOB]);
         expect(indexer.onMockRelease.mock.calls).toHaveLength(0);
-        expect(repo.createNotifications.mock.calls[0]![0][0]).toMatchObject({ userId: 'buyer', body: 'Contract refused' });
+        expect(res.actions).toEqual(['review round 2 started']);
+        reviews.rerunStalled.mockResolvedValue(null as never);
+        expect((await service.agentNotify({ role: 'review_timeout', ok: true, jobId: JOB, result: {} })).actions).toEqual(['nothing to rerun']);
     });
 
     it('runs the buyer agent when the bid window ends', async () => {
