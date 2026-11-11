@@ -6,6 +6,11 @@ import { IndexerService } from '../indexer/indexer.service.js';
 import { ReviewsService } from '../reviews/reviews.service.js';
 import { InternalRepository, NotificationInput } from './internal.repository.js';
 
+export const chainTxSchema = z.object({
+    txHash: z.string().min(20).max(100).regex(/^[1-9A-HJ-NP-Za-km-z]+$/),
+    signer: z.string().min(2).max(64),
+});
+
 export const agentNotifySchema = z.object({
     runId: z.string().max(100).nullish(),
     role: z.string().min(1).max(40),
@@ -191,9 +196,9 @@ export class InternalService {
         } else if (body.role === 'review_timeout' && job) {
             await this.onReviewTimeout(job, body.ok, actions);
         } else if (body.role === 'deadline_refund' && job) {
-            await this.onTimerCall(job, body.ok, 'refund_expired', actions, notes);
+            await this.onTimerCall(job, body.ok, 'refund_expired', result, actions, notes);
         } else if (body.role === 'dispute_default' && job) {
-            await this.onTimerCall(job, body.ok, 'finalize_default', actions, notes);
+            await this.onTimerCall(job, body.ok, 'finalize_default', result, actions, notes);
         } else if (body.role === 'buyer_window' && job) {
             actions.push(`buyer ${(await this.agentsService.dispatchBuyer(job.id)).status}`);
         } else if (!body.ok && job) {
@@ -306,7 +311,7 @@ export class InternalService {
         }
     }
 
-    private async onTimerCall(job: NotifyJob, ok: boolean, method: 'refund_expired' | 'finalize_default', actions: string[], notes: NotificationInput[]) {
+    private async onTimerCall(job: NotifyJob, ok: boolean, method: 'refund_expired' | 'finalize_default', result: Record<string, unknown>, actions: string[], notes: NotificationInput[]) {
         if (!ok) {
             actions.push(`${method} refused`);
             return;
@@ -319,6 +324,12 @@ export class InternalService {
                 actions.push(`${method} refused: ${e instanceof Error ? e.message : 'unknown error'}`);
                 return;
             }
+        }
+        const txHash = text(result['txHash']);
+        if (!this.chainService.isMock() && txHash) {
+            const platform = process.env['AGORA_PLATFORM_ACCOUNT'] ?? 'agora-testnet.testnet';
+            const indexed = await this.chainService.indexTx(txHash, platform).catch((e: unknown) => ({ indexed: false, reason: e instanceof Error ? e.message : 'unknown error' }));
+            actions.push(indexed.indexed ? 'indexed' : `not indexed: ${indexed.reason}`);
         }
         actions.push(method === 'refund_expired' ? 'expired and refunded' : 'dispute finalized');
         const title = method === 'refund_expired' ? `Deadline passed on ${job.ref}, payment refunded` : `Dispute on ${job.ref} finalized`;
@@ -335,6 +346,12 @@ export class InternalService {
         } catch {
             return 'bid flags not on chain';
         }
+    }
+
+    async indexChainTx(raw: unknown) {
+        const parsed = chainTxSchema.safeParse(raw);
+        if (!parsed.success) throw new BadRequestException(`Invalid chain tx: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
+        return this.chainService.indexTx(parsed.data.txHash, parsed.data.signer);
     }
 
     async runnerResult(raw: unknown) {

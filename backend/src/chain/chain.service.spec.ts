@@ -2,6 +2,7 @@ jest.mock('../prisma', () => ({ prisma: {} }));
 
 const signAndSendTransaction = jest.fn();
 const callFunction = jest.fn();
+const viewTransactionStatus = jest.fn();
 const accountCtor = jest.fn();
 const providerCtor = jest.fn();
 const fromSecretKey = jest.fn((key: string) => ({ key }));
@@ -14,7 +15,7 @@ jest.mock('near-api-js', () => ({
     }),
     JsonRpcProvider: jest.fn().mockImplementation((...a: unknown[]) => {
         providerCtor(...a);
-        return { callFunction };
+        return { callFunction, viewTransactionStatus };
     }),
     KeyPairSigner: { fromSecretKey: (key: string) => fromSecretKey(key) },
     actions: { functionCall: (m: string, a: object, g: bigint, d: bigint) => functionCall(m, a, g, d) },
@@ -24,7 +25,7 @@ jest.mock('near-api-js', () => ({
 import { Test, TestingModule } from '@nestjs/testing';
 import { IndexerService } from '../indexer/indexer.service';
 import { ChainRepository } from './chain.repository';
-import { ChainService, deadlineIn, decodeSuccessValue, panicMessage, parseOutcome } from './chain.service';
+import { ChainService, deadlineIn, decodeSuccessValue, functionCallOf, panicMessage, parseOutcome } from './chain.service';
 
 const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64');
 const KEY = 'ed25519:3D4YudUahN1nawWogh8pAKSj92sUNMdbZGjn7kERKzYoTy8tnFQuwoGUC51DowKqorvkr2pytJSnwuSbsNVfqygr';
@@ -32,14 +33,18 @@ const KEY = 'ed25519:3D4YudUahN1nawWogh8pAKSj92sUNMdbZGjn7kERKzYoTy8tnFQuwoGUC51
 const build = async (getVaultSecret: jest.Mock = jest.fn().mockResolvedValue(null)) => {
     const onMockCall = jest.fn().mockResolvedValue(null);
     const recordRealCall = jest.fn().mockResolvedValue({ id: 't' });
+    const applyCall = jest.fn().mockResolvedValue(null);
+    const hasTx = jest.fn().mockResolvedValue(false);
+    const partiesOf = jest.fn().mockResolvedValue(['lumen.testnet', 'patchsmith.testnet']);
+    const syncBalance = jest.fn().mockResolvedValue({ accountId: 'x' });
     const module: TestingModule = await Test.createTestingModule({
         providers: [
             ChainService,
-            { provide: IndexerService, useValue: { onMockCall, recordRealCall } },
+            { provide: IndexerService, useValue: { onMockCall, recordRealCall, applyCall, hasTx, partiesOf, syncBalance } },
             { provide: ChainRepository, useValue: { getVaultSecret } },
         ],
     }).compile();
-    return { service: module.get<ChainService>(ChainService), onMockCall, recordRealCall, getVaultSecret };
+    return { service: module.get<ChainService>(ChainService), onMockCall, recordRealCall, getVaultSecret, applyCall, hasTx, partiesOf, syncBalance };
 };
 
 describe('ChainService (mock mode)', () => {
@@ -98,6 +103,13 @@ describe('ChainService (mock mode)', () => {
         const decoded = JSON.parse(Buffer.from(tx.unsigned_tx_base64, 'base64').toString());
         expect(decoded.method).toBe('withdraw');
         expect(decoded.receiver_id).toBe('agora-market.agora-testnet.testnet');
+    });
+
+    it('does not index by hash in mock mode, because the mock already applied the call', async () => {
+        const { service, applyCall } = await build();
+        await expect(service.indexTx('ANY1', 'x.testnet')).resolves.toMatchObject({ indexed: false });
+        expect(viewTransactionStatus.mock.calls).toHaveLength(0);
+        expect(applyCall.mock.calls).toHaveLength(0);
     });
 
     it('never touches near-api-js in mock mode', async () => {
@@ -204,6 +216,52 @@ describe('ChainService (real mode)', () => {
         await expect(service.callAs('owner', 'lumen.testnet', 'pause', {})).rejects.toThrow('Could not send pause: Access key not found');
     });
 
+    it('applies a confirmed call to the database and syncs every party balance from the chain', async () => {
+        const { service, applyCall, syncBalance } = await build(jest.fn().mockResolvedValue(KEY));
+        signAndSendTransaction.mockResolvedValue(ok(null, 'FUND1'));
+        callFunction.mockResolvedValue({ free: '88000000', escrowed: '32000000' });
+        await service.callAs('transaction_agent', 'agents.lumen.testnet', 'fund_job', { job_id: '17' });
+        expect(applyCall.mock.calls[0]).toEqual([{ signer: 'agents.lumen.testnet', method: 'fund_job', args: { job_id: '17' }, txHash: 'FUND1' }]);
+        expect(syncBalance.mock.calls).toEqual([['lumen.testnet', 88, 32], ['patchsmith.testnet', 88, 32]]);
+    });
+
+    it('does not apply a refused call', async () => {
+        const { service, applyCall } = await build(jest.fn().mockResolvedValue(KEY));
+        signAndSendTransaction.mockResolvedValue({ status: { Failure: { ActionError: { kind: { FunctionCallError: { ExecutionError: 'Smart contract panicked: Paused' } } } } }, transaction: { hash: 'BAD1' } });
+        await expect(service.callAs('transaction_agent', 'agents.lumen.testnet', 'fund_job', { job_id: '17' })).rejects.toThrow('Contract refused fund_job: Paused');
+        expect(applyCall.mock.calls).toHaveLength(0);
+    });
+
+    it('keeps the tx when indexing fails, so the chain result is never lost', async () => {
+        const { service, applyCall } = await build(jest.fn().mockResolvedValue(KEY));
+        signAndSendTransaction.mockResolvedValue(ok(null, 'FUND2'));
+        applyCall.mockRejectedValue(new Error('db down'));
+        callFunction.mockResolvedValue({ free: '0', escrowed: '0' });
+        await expect(service.callAs('transaction_agent', 'agents.lumen.testnet', 'fund_job', { job_id: '17' })).resolves.toMatchObject({ tx_hash: 'FUND2' });
+    });
+
+    it('indexes a transaction signed elsewhere by its hash', async () => {
+        const { service, applyCall, recordRealCall } = await build();
+        viewTransactionStatus.mockResolvedValue({
+            ...ok(null, 'TIMER1'),
+            transaction: { hash: 'TIMER1', signer_id: 'agora-testnet.testnet', receiver_id: 'agora-market.agora-testnet.testnet', actions: [{ FunctionCall: { method_name: 'refund_expired', args: b64({ job_id: '17' }) } }] },
+        });
+        callFunction.mockResolvedValue({ free: '32000000', escrowed: '0' });
+        await expect(service.indexTx('TIMER1', 'agora-testnet.testnet')).resolves.toEqual({ indexed: true, ok: true, method: 'refund_expired', reason: null });
+        expect(viewTransactionStatus.mock.calls[0]).toEqual([{ txHash: 'TIMER1', accountId: 'agora-testnet.testnet', waitUntil: 'FINAL' }]);
+        expect(recordRealCall.mock.calls[0]![0]).toMatchObject({ txHash: 'TIMER1', method: 'refund_expired', ok: true, jobKey: { onchainId: 17n } });
+        expect(applyCall.mock.calls[0]).toEqual([{ signer: 'agora-testnet.testnet', method: 'refund_expired', args: { job_id: '17' }, txHash: 'TIMER1' }]);
+    });
+
+    it('skips a hash it already indexed and calls to other contracts', async () => {
+        const { service, hasTx, applyCall } = await build();
+        hasTx.mockResolvedValueOnce(true);
+        await expect(service.indexTx('DONE1', 'x.testnet')).resolves.toMatchObject({ indexed: false, reason: 'Already indexed' });
+        viewTransactionStatus.mockResolvedValue({ ...ok(null, 'OTHER1'), transaction: { hash: 'OTHER1', signer_id: 'x.testnet', receiver_id: 'other.testnet', actions: [{ FunctionCall: { method_name: 'fund_job', args: b64({}) } }] } });
+        await expect(service.indexTx('OTHER1', 'x.testnet')).resolves.toMatchObject({ indexed: false, reason: 'Not a call to the AGORA contract' });
+        expect(applyCall.mock.calls).toHaveLength(0);
+    });
+
     it('calls the contract view through the RPC provider', async () => {
         const { service } = await build();
         callFunction.mockResolvedValue({ free: '5', escrowed: '0' });
@@ -224,6 +282,16 @@ describe('ChainService (real mode)', () => {
 });
 
 describe('outcome helpers', () => {
+    it('reads the single function call of a transaction', () => {
+        const tx = (actions: unknown[]) => ({ transaction: { signer_id: 's.testnet', receiver_id: 'c.testnet', actions } });
+        expect(functionCallOf(tx([{ FunctionCall: { method_name: 'fund_job', args: b64({ job_id: '1' }) } }]))).toEqual({ signer: 's.testnet', receiverId: 'c.testnet', method: 'fund_job', args: { job_id: '1' } });
+        expect(functionCallOf(tx([{ FunctionCall: { method_name: 'x', args: 'not-json' } }]))?.args).toEqual({});
+        expect(functionCallOf(tx([{ Transfer: {} }]))).toBeNull();
+        expect(functionCallOf(tx([]))).toBeNull();
+        expect(functionCallOf(null)).toBeNull();
+    });
+
+
     it('decodes success values', () => {
         expect(decodeSuccessValue(b64('17'))).toBe('17');
         expect(decodeSuccessValue(Buffer.from('plain').toString('base64'))).toBe('plain');

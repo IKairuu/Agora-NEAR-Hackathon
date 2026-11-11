@@ -25,6 +25,13 @@ export class InternalController {
         return this.internalService.agentNotify(body);
     }
 
+    @Post('v1/chain/tx')
+    @HttpCode(200)
+    @UseGuards(InternalKeyGuard)
+    indexChainTx(@Body() body: unknown) {
+        return this.internalService.indexChainTx(body);
+    }
+
     @Post('v1/runner/result')
     @HttpCode(200)
     @UseGuards(InternalKeyGuard)

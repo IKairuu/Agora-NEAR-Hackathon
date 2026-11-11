@@ -21,7 +21,7 @@ const jobSelect = {
     categoryRef: { select: { slug: true, name: true } },
     seller: { select: { displayName: true, ownerId: true } },
     acceptanceSpecs: { select: { specHash: true, lockedAt: true }, orderBy: { version: 'desc' }, take: 1 },
-    _count: { select: { bids: true } },
+    _count: { select: { bids: true, completionRecords: true } },
 } satisfies Prisma.JobSelect;
 
 export type JobRow = Prisma.JobGetPayload<{ select: typeof jobSelect }>;

@@ -83,6 +83,9 @@ export const jobRefOf = (value: unknown): JobRef | null => {
     return null;
 };
 
+export const jobKeyOf = (call: Pick<MockCall, 'method' | 'args'>): JobRef | null =>
+    jobRefOf(call.method === 'ft_transfer_call' ? bondJobOf(call.args['msg']) : call.args['job_id']);
+
 export const usdcOf = (units: unknown): number => {
     const n = Number(typeof units === 'string' || typeof units === 'number' ? units : NaN);
     return Number.isFinite(n) ? n / 1_000_000 : NaN;
@@ -330,13 +333,19 @@ export class IndexerService {
 
     async onMockCall(call: MockCall) {
         if (isStakeCall(call) || call.method === 'return_stake') return this.onStakeCall(call);
-        const jobKey = jobRefOf(call.method === 'ft_transfer_call' ? bondJobOf(call.args['msg']) : call.args['job_id']);
+        const jobKey = jobKeyOf(call);
         const refusal = await this.refusalFor(call, jobKey);
         await this.indexerRepository.recordTx({
             txHash: call.txHash, signer: call.signer, method: call.method, args: call.args as Prisma.InputJsonValue, ok: refusal === null, error: refusal, jobKey,
         });
         if (refusal) throw new BadRequestException(`Contract refused ${call.method}: ${refusal}`);
+        return this.applyCall(call);
+    }
 
+    async applyCall(call: MockCall) {
+        if (isStakeCall(call)) return this.indexerRepository.addStake(call.signer, usdcOf(call.args['amount']), call.txHash, MOCK_START_BALANCE);
+        if (call.method === 'return_stake') return this.indexerRepository.returnStake(call.signer);
+        const jobKey = jobKeyOf(call);
         if (DISPUTE_METHODS.includes(call.method) && jobKey) return this.applyDispute(call, jobKey);
         if (call.method === 'fund_job' && jobKey) return this.indexerRepository.fundJob(jobKey, call.txHash, MOCK_START_BALANCE);
         if (call.method === 'grant_attempt') return null;
@@ -364,6 +373,20 @@ export class IndexerService {
         return null;
     }
 
+    async hasTx(txHash: string): Promise<boolean> {
+        return this.indexerRepository.hasTx(txHash);
+    }
+
+    async partiesOf(key: JobRef): Promise<string[]> {
+        const ctx = await this.indexerRepository.getDisputeContext(key);
+        if (!ctx) return [];
+        return [ctx.buyer.nearAccountId, ctx.seller?.nearAccountId].filter((a): a is string => typeof a === 'string' && a.length > 0);
+    }
+
+    async syncBalance(accountId: string, free: number, escrowed: number) {
+        return this.indexerRepository.syncBalance(accountId, free, escrowed);
+    }
+
     async onMockRelease(jobId: string, txHash: string) {
         const fee = this.feeBps();
         const dao = this.dao();
@@ -382,8 +405,7 @@ export class IndexerService {
             txHash: call.txHash, signer: call.signer, method: call.method, args: call.args as Prisma.InputJsonValue, ok: refusal === null, error: refusal, jobKey: null,
         });
         if (refusal) throw new BadRequestException(`Contract refused ${call.method}: ${refusal}`);
-        if (call.method === 'return_stake') return this.indexerRepository.returnStake(call.signer);
-        return this.indexerRepository.addStake(call.signer, usdcOf(call.args['amount']), call.txHash, MOCK_START_BALANCE);
+        return this.applyCall(call);
     }
 
     private async applyDispute(call: MockCall, jobKey: JobRef) {

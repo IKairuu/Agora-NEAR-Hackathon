@@ -441,6 +441,22 @@ export class IndexerRepository {
         }, MONEY_TX);
     }
 
+    async hasTx(txHash: string): Promise<boolean> {
+        return (await prisma.chainTx.count({ where: { txHash } })) > 0;
+    }
+
+    async syncBalance(accountId: string, free: number, escrowed: number) {
+        return prisma.$transaction(async (tx) => {
+            const owner = await tx.profile.findFirst({ where: { nearAccountId: accountId }, select: { id: true } });
+            return tx.balance.upsert({
+                where: { accountId },
+                create: { accountId, profileId: owner?.id ?? null, available: free, escrowed, syncedAt: new Date() },
+                update: { available: free, escrowed, syncedAt: new Date() },
+                select: { accountId: true },
+            });
+        });
+    }
+
     async getBalance(accountId: string) {
         return prisma.balance.findUnique({ where: { accountId }, select: { available: true, escrowed: true, spentToday: true, dayStarted: true } });
     }

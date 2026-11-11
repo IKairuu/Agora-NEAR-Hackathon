@@ -4,7 +4,7 @@ import { AgentsService } from '../agents/agents.service';
 import { AuthService } from '../auth/auth.service';
 import { ChainService } from '../chain/chain.service';
 import { JobRow, JobsRepository } from './jobs.repository';
-import { ago, budgetHintOf, JobsService, toOtherJob } from './jobs.service';
+import { ago, budgetHintOf, JobsService, STAGES, statusOf, toOtherJob } from './jobs.service';
 
 const USER = '0f9b6c1e-4a2d-4c8e-9b1a-7d3e5f6a8b90';
 const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
@@ -14,7 +14,7 @@ const row = (overrides: Partial<JobRow> = {}): JobRow => ({
     status: 'open', visibility: 'public', repoUrl: 'https://github.com/lumen-labs/payroll-vault', baseCommit: 'a41c9e2',
     budgetLabel: 'under 40', agreedPrice: null, postedAt: new Date(), createdAt: new Date(), buyerId: USER,
     categoryRef: { slug: 'rust', name: 'Smart contracts' }, seller: null,
-    acceptanceSpecs: [{ specHash: 'ab'.repeat(32), lockedAt: new Date() }], _count: { bids: 6 },
+    acceptanceSpecs: [{ specHash: 'ab'.repeat(32), lockedAt: new Date() }], _count: { bids: 6, completionRecords: 0 },
     ...overrides,
 }) as JobRow;
 
@@ -44,6 +44,13 @@ describe('JobsService', () => {
     it('maps rows to the OtherJob shape', () => {
         expect(toOtherJob(row())).toMatchObject({ id: 'J-1042', cat: 'Smart contracts', budget: 'under 40', status: ['info', 'Getting offers'], at: 1, grp: 'offers', note: '6 offers so far.', posted: true });
         expect(toOtherJob(row({ status: 'funded', agreedPrice: 32 as never, seller: { displayName: 'patchsmith', ownerId: 'x' } }))).toMatchObject({ budget: '32.00', status: ['acc', 'Payment protected'], who: 'patchsmith', grp: 'working' });
+    });
+
+    it('shows Settled once a released job has its completion record, and gives each stage its own node', () => {
+        expect(statusOf({ status: 'released', _count: { completionRecords: 1 } })).toBe('settled');
+        expect(statusOf({ status: 'released', _count: { completionRecords: 0 } })).toBe('released');
+        expect(statusOf({ status: 'refunded', _count: { completionRecords: 0 } })).toBe('refunded');
+        expect([STAGES['funded']!.at, STAGES['delivered']!.at, STAGES['released']!.at, STAGES['settled']!.at]).toEqual([3, 4, 6, 7]);
     });
 
     it('filters by group', async () => {

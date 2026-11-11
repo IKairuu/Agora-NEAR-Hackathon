@@ -49,6 +49,9 @@ export interface PostResult {
 
 const stageOf = (status: string): StageInfo => STAGES[status] ?? STAGES['draft']!;
 
+export const statusOf = (row: { status: string; _count: { completionRecords: number } }): string =>
+    row.status === 'released' && row._count.completionRecords > 0 ? 'settled' : row.status;
+
 export const ago = (date: Date | null, now = new Date()): string => {
     if (!date) return '';
     const minutes = Math.max(0, Math.round((now.getTime() - date.getTime()) / 60000));
@@ -73,7 +76,7 @@ const noteOf = (row: JobRow): string | undefined => {
 };
 
 export const toOtherJob = (row: JobRow) => {
-    const info = stageOf(row.status);
+    const info = stageOf(statusOf(row));
     return {
         id: row.ref,
         title: row.title,
@@ -90,7 +93,7 @@ export const toOtherJob = (row: JobRow) => {
 };
 
 export const toJob = (row: JobRow) => {
-    const info = stageOf(row.status);
+    const info = stageOf(statusOf(row));
     const spec = row.acceptanceSpecs[0];
     return {
         id: row.ref,

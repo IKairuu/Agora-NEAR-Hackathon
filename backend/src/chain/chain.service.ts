@@ -1,6 +1,6 @@
-import { BadRequestException, Injectable, ServiceUnavailableException } from '@nestjs/common';
+import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { Account, actions, JsonRpcProvider, KeyPairSigner, KeyPairString, teraToGas } from 'near-api-js';
-import { IndexerService, jobRefOf, bondJobOf } from '../indexer/indexer.service.js';
+import { IndexerService, jobKeyOf, jobRefOf, bondJobOf, MockCall, ownerOf, usdcOf } from '../indexer/indexer.service.js';
 import { ChainRepository } from './chain.repository.js';
 import { mockIdMethods, mockViews } from './mock-state.js';
 
@@ -89,6 +89,28 @@ export const panicMessage = (failure: unknown): string => {
 
 const failureOf = (status: unknown): unknown => (status && typeof status === 'object' && 'Failure' in status ? (status as { Failure: unknown }).Failure : null);
 
+export interface IndexResult {
+    indexed: boolean;
+    ok: boolean | null;
+    method: string | null;
+    reason: string | null;
+}
+
+export const functionCallOf = (res: unknown): { signer: string; receiverId: string; method: string; args: Record<string, unknown> } | null => {
+    const t = (res as { transaction?: { signer_id?: unknown; receiver_id?: unknown; actions?: unknown } } | null)?.transaction;
+    if (!t || typeof t.signer_id !== 'string' || typeof t.receiver_id !== 'string' || !Array.isArray(t.actions) || t.actions.length !== 1) return null;
+    const fc = (t.actions[0] as { FunctionCall?: { method_name?: unknown; args?: unknown } } | null)?.FunctionCall;
+    if (!fc || typeof fc.method_name !== 'string') return null;
+    let args: Record<string, unknown> = {};
+    try {
+        const parsed = JSON.parse(Buffer.from(typeof fc.args === 'string' ? fc.args : '', 'base64').toString('utf8')) as unknown;
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) args = parsed as Record<string, unknown>;
+    } catch {
+        args = {};
+    }
+    return { signer: t.signer_id, receiverId: t.receiver_id, method: fc.method_name, args };
+};
+
 export const parseOutcome = (outcome: {
     status: unknown;
     transaction_outcome?: { id: string };
@@ -112,6 +134,7 @@ export class ChainService {
     private readonly rpcUrl = process.env['NEAR_RPC_URL'] || `https://rpc.${process.env['NEAR_NETWORK'] ?? 'testnet'}.near.org`;
     private counter = Math.floor(Date.now() / 1000);
     private provider: JsonRpcProvider | null = null;
+    private readonly logger = new Logger(ChainService.name);
     private readonly accounts = new Map<string, Account>();
 
     constructor(
@@ -209,7 +232,45 @@ export class ChainService {
         }
         await this.record(accountId, method, args, outcome);
         if (!outcome.ok) throw new BadRequestException(`Contract refused ${method}: ${outcome.error}`);
+        await this.applyConfirmed({ signer: accountId, method, args, txHash: outcome.txHash });
         return { tx_hash: outcome.txHash, explorer_url: this.explorerTxUrl(outcome.txHash), ok: true, result: outcome.result };
+    }
+
+    async indexTx(txHash: string, signerId: string): Promise<IndexResult> {
+        if (this.mode !== 'real') return { indexed: false, ok: null, method: null, reason: 'Chain mode is mock, so the mock already applied this call' };
+        if (await this.indexer.hasTx(txHash)) return { indexed: false, ok: null, method: null, reason: 'Already indexed' };
+        let res: unknown;
+        try {
+            res = await this.rpc().viewTransactionStatus({ txHash, accountId: signerId, waitUntil: 'FINAL' });
+        } catch (e) {
+            throw new BadRequestException(`Could not read ${txHash}: ${e instanceof Error ? e.message : 'unknown error'}`);
+        }
+        const call = functionCallOf(res);
+        if (!call) return { indexed: false, ok: null, method: null, reason: 'Not a single function call' };
+        if (call.receiverId !== this.contractId && call.method !== 'ft_transfer_call') return { indexed: false, ok: null, method: call.method, reason: 'Not a call to the AGORA contract' };
+        const outcome = { ...parseOutcome(res as Parameters<typeof parseOutcome>[0]), txHash };
+        await this.record(call.signer, call.method, call.args, outcome);
+        if (outcome.ok) await this.applyConfirmed({ signer: call.signer, method: call.method, args: call.args, txHash });
+        return { indexed: true, ok: outcome.ok, method: call.method, reason: outcome.error };
+    }
+
+    private async applyConfirmed(call: MockCall): Promise<void> {
+        try {
+            await this.indexer.applyCall(call);
+        } catch (e) {
+            this.logger.error(`Indexing ${call.method} ${call.txHash} failed: ${e instanceof Error ? e.message : 'unknown error'}`);
+        }
+        const accounts = new Set<string>([ownerOf(call.signer)]);
+        const jobKey = jobKeyOf(call);
+        if (jobKey) (await this.indexer.partiesOf(jobKey)).forEach((a) => accounts.add(a));
+        for (const accountId of accounts) {
+            try {
+                const b = await this.view<{ free: string; escrowed: string }>('get_balance', { account_id: accountId });
+                await this.indexer.syncBalance(accountId, usdcOf(b.free), usdcOf(b.escrowed));
+            } catch (e) {
+                this.logger.warn(`Balance sync for ${accountId} failed: ${e instanceof Error ? e.message : 'unknown error'}`);
+            }
+        }
     }
 
     private async record(signer: string, method: string, args: Record<string, unknown>, outcome: TxOutcome): Promise<void> {

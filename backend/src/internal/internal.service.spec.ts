@@ -26,7 +26,7 @@ describe('InternalService', () => {
             getBid: jest.fn(), getReviewRun: jest.fn(), saveRunResult: jest.fn().mockResolvedValue(1), getVoteTally: jest.fn(), getAgentBid: jest.fn(), createHireOffer: jest.fn().mockResolvedValue({ id: 'offer-1' }), getOwner: jest.fn().mockResolvedValue({ id: OWNER }), pauseByGuardian: jest.fn().mockResolvedValue(1), settleDelivery: jest.fn().mockResolvedValue(1), recordRecheck: jest.fn().mockResolvedValue(1), setBidStatus: jest.fn().mockResolvedValue(1), createNotifications: jest.fn(async (n: unknown[]) => n.length),
         } as unknown as jest.Mocked<InternalRepository>;
         indexer = { onMockRelease: jest.fn().mockResolvedValue({ jobId: JOB, payout: 31.36, fee: 0.64 }) } as unknown as jest.Mocked<IndexerService>;
-        chain = { callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-set_bid_flags-1', explorer_url: '', ok: true, result: null }) } as unknown as jest.Mocked<ChainService>;
+        chain = { callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-set_bid_flags-1', explorer_url: '', ok: true, result: null }), isMock: jest.fn().mockReturnValue(true), indexTx: jest.fn() } as unknown as jest.Mocked<ChainService>;
         agents = {
             dispatch: jest.fn(async (flow: string) => ({ flow, runId: 'r', status: 'sent' })),
             dispatchBuyer: jest.fn().mockResolvedValue({ flow: 'buyer', runId: 'r', status: 'sent' }),
@@ -274,6 +274,25 @@ describe('InternalService', () => {
         const res = await service.agentNotify({ role: 'deadline_refund', ok: false, jobId: JOB, result: {}, error: 'Contract refused' });
         expect(chain.callAs.mock.calls).toHaveLength(0);
         expect(res.actions).toEqual(['refund_expired refused']);
+    });
+
+    it('indexes the timer transaction by hash in real mode instead of calling the chain again', async () => {
+        chain.isMock.mockReturnValue(false);
+        chain.indexTx.mockResolvedValue({ indexed: true, ok: true, method: 'refund_expired', reason: null });
+        const prev = process.env['AGORA_CHAIN_MODE'];
+        process.env['AGORA_CHAIN_MODE'] = 'real';
+        const res = await service.agentNotify({ role: 'deadline_refund', ok: true, jobId: JOB, result: { method: 'refund_expired', txHash: '8yQkTzFwH5mXbVnP2cRjL7sA4dE9gU3hW6' } });
+        process.env['AGORA_CHAIN_MODE'] = prev;
+        expect(chain.callAs.mock.calls).toHaveLength(0);
+        expect(chain.indexTx.mock.calls[0]).toEqual(['8yQkTzFwH5mXbVnP2cRjL7sA4dE9gU3hW6', 'agora-testnet.testnet']);
+        expect(res.actions).toEqual(['indexed', 'expired and refunded', 'notified 2']);
+    });
+
+    it('validates a chain tx before indexing it', async () => {
+        chain.indexTx.mockResolvedValue({ indexed: true, ok: true, method: 'fund_job', reason: null });
+        await expect(service.indexChainTx({ txHash: 'not a hash!', signer: 'x.testnet' })).rejects.toThrow('Invalid chain tx');
+        await expect(service.indexChainTx({ txHash: '8yQkTzFwH5mXbVnP2cRjL7sA4dE9gU3hW6', signer: 'lumen.testnet' })).resolves.toMatchObject({ indexed: true });
+        expect(chain.indexTx.mock.calls[0]).toEqual(['8yQkTzFwH5mXbVnP2cRjL7sA4dE9gU3hW6', 'lumen.testnet']);
     });
 
     it('finalizes a dispute through the mock chain', async () => {
