@@ -1,6 +1,6 @@
 import { ARRIVE, BIDS, DAO_COUNCIL, DONE_JOBS, NEG_LOG, SETTLED, GIGS, HELD, JOB, JOB_LISTING, KICKOFF, ME, OPEN_JOBS, OTHER_JOBS, REPLIES, REVIEWERS, SELLERS_DIR, SPEC, T_MSGS, T_TIME, THREADS, gigBy, liveOpenRef, setLiveOpenJobs, type Bid, type DemoData, type Gig, type OpenJob, type Order, type OtherJob, type SellerDir } from '../data/data';
 import type { ChatMsg } from '../store/store';
-import { getState, setState, toast, type FollowUp, type LiveNote } from '../store/store';
+import { getState, setState, subscribe, toast, type FollowUp, type LiveNote, type LiveSpec, type SpecDoc } from '../store/store';
 import type { Thread } from '../store/actions';
 import { api, ApiError } from './api';
 
@@ -37,8 +37,31 @@ let likedBefore: string[] | null = null;
 const replace = <T,>(target: T[], items: T[]) => { target.splice(0, target.length, ...items); };
 
 interface MeView { id: string; name: string; acct: string; agents: string; initials: string; email: string; role: 'hire' | 'work' | null; mode: 'buy' | 'sell'; seller: boolean }
-interface JobView { id: string; uuid: string; title: string; repo: string; base: string; cat: string; plain: string; posted: string; specHash: string; specLocked: boolean; budget: string; stage: string; status: [string, string]; offers: number }
-interface SpecView { id: string; locked: boolean; specHash: string | null; rows: [string, string, string][] }
+interface JobView { id: string; uuid: string; title: string; repo: string; base: string; cat: string; plain: string; posted: string; specHash: string; specLocked: boolean; budget: string; stage: string; status: [string, string]; offers: number; remove?: 'delete' | 'cancel' | null }
+
+/* ---- delete or cancel a job: the API says which one a job allows, and checks it again when asked ---- */
+const REMOVAL: Record<string, 'delete' | 'cancel' | null> = {};
+/** Whether the signed-in buyer can delete (a draft) or cancel (an open job) this job; null when neither. */
+export const removalFor = (ref: string): 'delete' | 'cancel' | null => (isLive() ? REMOVAL[ref] ?? null : null);
+type SpecView = SpecDoc;
+/** Shown for a job that has no repository yet; the spec writer needs one to write tests. */
+export const NO_REPO = 'No repository attached yet';
+/** The followed job's budget as the job API shows it (empty when none was given). */
+export const JOB_BUDGET = { label: '' };
+/* whether the spec writer workflow is connected on this server (GET /agents/v1), asked once per session */
+let agentsOn: { session: number; on: boolean | null } | null = null;
+async function specWriterConnected(): Promise<boolean | null> {
+  if (agentsOn?.session === session) return agentsOn.on;
+  const s = session;
+  const res = await api<{ connected?: boolean }>('/agents/v1', { quiet: true }).catch(() => null);
+  const on = typeof res?.connected === 'boolean' ? res.connected : null;
+  if (s === session) agentsOn = { session: s, on };
+  return on;
+}
+async function specState(spec: SpecView | null, hasRepo: boolean): Promise<LiveSpec> {
+  if (spec) return { state: spec.locked ? 'locked' : 'draft', doc: spec };
+  return { state: 'none', repo: hasRepo, agents: hasRepo ? await specWriterConnected() : null };
+}
 type OfferView = Bid & { bidId: string };
 interface HeldView { bidId: string; name: string; acct: string; kind: 'agent' | 'human'; price: number; fraud: number; why: string; text: string }
 interface OffersView { offers: OfferView[]; held: HeldView[]; bestPick: string | null; waitingFor: number }
@@ -65,8 +88,26 @@ export function stageNumber(job: Pick<JobView, 'stage' | 'offers'>): number {
 
 let timer: ReturnType<typeof setInterval> | null = null;
 
-/** Called after a real sign-in. Stays in demo mode if the API cannot be reached. */
-export async function goLive(): Promise<void> {
+/*
+ * Buying or Selling is the user's choice and is saved on the account (PATCH /me/v1 { mode }) whenever it changes
+ * in a live session, from the sidebar switch or from a screen that belongs to one side (Open jobs, an open job).
+ * The account's value is only used when nothing on this device knows the user's mode yet (see goLive).
+ */
+let savedMode: 'buy' | 'sell' | null = null;
+subscribe(() => {
+  const s = getState();
+  if (!s.live || s.tour >= 0 || savedMode === null || s.mode === savedMode) return;
+  const mode = s.mode;
+  savedMode = mode;
+  void api('/me/v1', { method: 'PATCH', body: { mode }, quiet: true }).catch(() => { if (savedMode === mode) savedMode = null; });
+});
+
+/**
+ * Called after a real sign-in. Stays in demo mode if the API cannot be reached.
+ * `keepMode`: this device already shows this user (a reload, a tab coming back, the end of the demo tour), so their
+ * current Buying or Selling stays; without it (a new sign-in) the mode saved on the account is used.
+ */
+export async function goLive(opts: { keepMode?: boolean } = {}): Promise<void> {
   const s = ++session;
   let me: MeView;
   try { me = await api<MeView>('/me/v1', { quiet: true }); } catch (e) {
@@ -77,7 +118,10 @@ export async function goLive(): Promise<void> {
   if (likedBefore === null) likedBefore = getState().liked;
   clearDemo();
   Object.assign(ME, { name: me.name, acct: me.acct, agents: me.agents, initials: me.initials, email: me.email });
-  setState((s) => ({ live: true, seller: me.seller, role: s.role ?? me.role, mode: me.mode, orders: [], newJobs: [], extra: [], tLog: {}, chatLog: {} }));
+  const mode = opts.keepMode ? getState().mode : me.mode === 'sell' ? 'sell' : 'buy';
+  /* the account learns a mode kept from this device only if it differs (savedMode = what the server has) */
+  savedMode = me.mode === 'sell' ? 'sell' : 'buy';
+  setState((s) => ({ live: true, seller: me.seller, role: s.role ?? me.role, mode, orders: [], newJobs: [], extra: [], tLog: {}, chatLog: {} }));
   await Promise.allSettled([loadMarket(), loadSaved()]);
   await refreshAll(true);
   if (!timer) timer = setInterval(() => { void refreshAll(false); }, 8000);
@@ -144,6 +188,8 @@ async function loadPublicOpenJobs(): Promise<void> {
 /** Leaves live mode and puts the demo story back. The market stays: it is the same public data. */
 export function leaveLive(): void {
   session++;
+  savedMode = null;
+  agentsOn = null;
   if (timer) { clearInterval(timer); timer = null; }
   restoreDemo();
   setLiveOpenJobs(null);
@@ -161,6 +207,8 @@ async function refreshAll(first: boolean): Promise<void> {
 
 async function loadJobs(adopt: boolean): Promise<void> {
   const jobs = await liveApi<(OtherJob & { grp: string })[]>('/jobs/v1', { quiet: true });
+  for (const k of Object.keys(REMOVAL)) delete REMOVAL[k];
+  for (const j of jobs) REMOVAL[j.id] = j.remove ?? null;
   if (adopt && !getState().liveJob) {
     const current = jobs.find((j) => ['offers', 'waiting', 'working'].includes(j.grp));
     if (current) setState({ liveJob: { id: '', ref: current.id } });
@@ -176,10 +224,15 @@ async function loadCurrentJob(): Promise<void> {
   const sid = session;
   const job = await liveApi<JobView>(`/jobs/v1/${ref}`, { quiet: true }).catch(() => null);
   if (!job) return;
-  Object.assign(JOB, { id: job.id, title: job.title, repo: job.repo || 'No repository attached yet', base: job.base || 'main', cat: job.cat, plain: job.plain, posted: job.posted, specHash: job.specHash ? shortHash(job.specHash) : '' });
+  REMOVAL[job.id] = job.remove ?? null;
+  Object.assign(JOB, { id: job.id, title: job.title, repo: job.repo || NO_REPO, base: job.base || 'main', cat: job.cat, plain: job.plain, posted: job.posted, specHash: job.specHash ? shortHash(job.specHash) : '' });
+  JOB_BUDGET.label = job.budget;
   const spec = await liveApi<SpecView>(`/specs/v1?job=${ref}`, { quiet: true }).catch(() => null);
   if (stale(sid)) return;
   replace(SPEC, spec ? spec.rows : [['Tests are being written', 'The spec writer drafts failing tests from your repository', 'Pending']]);
+  const liveSpec = await specState(spec, !!job.repo);
+  if (stale(sid) || getState().liveJob?.ref !== ref) return;
+  setState({ liveSpec });
   const stage = stageNumber(job);
   if (stage >= 2) await loadOffers(ref);
   if (stage >= 5) await loadReviews(ref);
@@ -287,10 +340,11 @@ export async function liveSubmitAsk(text: string): Promise<boolean> {
   try { res = await api<{ id: string; ref: string }>('/requests/v1', { body: { text }, quiet: true }); }
   catch (e) { setState({ asked: false, askText: '', pendingAsk: false }); toast(notSent(e), 'block', 6000); return false; }
   /* show the new job, not the previous one, until its details load */
-  Object.assign(JOB, { id: res.ref, title: text, repo: 'No repository attached yet', base: 'main', cat: '', plain: text, posted: 'just now', specHash: '' });
+  Object.assign(JOB, { id: res.ref, title: text, repo: NO_REPO, base: 'main', cat: '', plain: text, posted: 'just now', specHash: '' });
+  JOB_BUDGET.label = '';
   replace(SPEC, [['Tests are being written', 'The spec writer drafts failing tests from your repository', 'Pending']]);
-  setState({ liveJob: { id: res.id, ref: res.ref }, pendingAsk: false, draft: '', stage: 1, offerSt: '', preNeg: false, declined: [], bidsShown: 0 });
-  toast(`${res.ref} created. The spec writer is turning it into tests.`);
+  setState({ liveJob: { id: res.id, ref: res.ref }, pendingAsk: false, draft: '', stage: 1, offerSt: '', preNeg: false, declined: [], bidsShown: 0, liveSpec: { state: 'loading' } });
+  toast(`${res.ref} created.`);
   await refreshAll(false);
   return true;
 }
@@ -325,10 +379,32 @@ async function liveFollowUp(text: string): Promise<boolean> {
   return true;
 }
 
+/**
+ * Deletes a draft or cancels an open job. The API refuses jobs that are agreed or funded and other users' jobs,
+ * and its message is shown as a toast. A job the New request chat follows is let go of, so the chat starts empty.
+ */
+export async function liveRemoveJob(ref: string, kind: 'delete' | 'cancel'): Promise<boolean> {
+  try {
+    if (kind === 'delete') await api(`/jobs/v1/${ref}`, { method: 'DELETE' });
+    else await api('/jobs/v1/cancel', { body: { id: ref } });
+  } catch { await refreshAll(false); return false; }
+  REMOVAL[ref] = null;
+  if (getState().liveJob?.ref === ref) {
+    Object.assign(JOB, { id: '', title: '', repo: '', base: '', cat: '', plain: '', posted: '', specHash: '' });
+    setState({ liveJob: null, asked: false, askText: '', pendingAsk: false, followUps: [], liveSpec: { state: 'loading' }, stage: 1, offerSt: '', preNeg: false, declined: [], bidsShown: 0, hire: '' });
+  }
+  toast(kind === 'delete' ? `Draft ${ref} deleted.` : `${ref} cancelled. It is no longer on Open jobs and stays in your history.`);
+  await refreshAll(false);
+  return true;
+}
+
 export async function liveLockSpec(): Promise<void> {
   const ref = getState().liveJob?.ref; if (!ref) return;
   const spec = await api<SpecView>(`/specs/v1?job=${ref}`, { quiet: true }).catch(() => null);
   if (!spec) { toast('The spec writer has not drafted tests for this job yet. Try again in a minute.', 'hold'); return; }
+  /* lock only the draft the user is looking at: if the spec writer replaced it meanwhile, show the new one first */
+  const shown = getState().liveSpec;
+  if (shown.state === 'draft' && shown.doc.id !== spec.id) { setState({ liveSpec: { state: 'draft', doc: spec } }); toast('The spec writer updated the tests. Check the new draft, then lock it.', 'hold'); return; }
   let hash = spec.specHash ?? '';
   if (!spec.locked) {
     const locked = await api<{ specHash: string }>('/specs/v1/lock', { body: { id: spec.id } }).catch(() => null);

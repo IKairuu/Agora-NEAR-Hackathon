@@ -138,6 +138,15 @@ export function OtherJobCard({ j }: { j: OtherJob }) {
     </button>
   );
 }
+/** Delete (a draft) or Cancel (an open job), with a confirm dialog. Renders nothing for jobs that allow neither. */
+export function RemoveJobButton({ id, title, kind, sm = true }: { id: string; title: string; kind: 'delete' | 'cancel' | null | undefined; sm?: boolean }) {
+  if (!kind) return null;
+  return (
+    <button className={`btn danger ${sm ? 'sm' : ''}`} onClick={(e) => { e.stopPropagation(); openModal('removejob', { id, kind, title }); }}>
+      <Icon name="x" />{kind === 'delete' ? 'Delete draft' : 'Cancel job'}
+    </button>
+  );
+}
 export const allOtherJobs = () => [...getState().newJobs, ...OTHER_JOBS];
 
 /* ---------------- services: thumbnails and cards ---------------- */

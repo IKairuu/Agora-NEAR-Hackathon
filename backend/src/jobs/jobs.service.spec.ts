@@ -4,7 +4,7 @@ import { AgentsService } from '../agents/agents.service';
 import { AuthService } from '../auth/auth.service';
 import { ChainService } from '../chain/chain.service';
 import { JobRow, JobsRepository } from './jobs.repository';
-import { ago, budgetHintOf, JobsService, STAGES, statusOf, toOtherJob } from './jobs.service';
+import { ago, budgetHintOf, JobsService, removalOf, STAGES, statusOf, toJob, toOtherJob } from './jobs.service';
 
 const USER = '0f9b6c1e-4a2d-4c8e-9b1a-7d3e5f6a8b90';
 const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
@@ -12,7 +12,7 @@ const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
 const row = (overrides: Partial<JobRow> = {}): JobRow => ({
     id: JOB, ref: 'J-1042', title: 'Make test_split_rounding pass in split_payment()', description: 'Our payroll contract splits a USDC payment...',
     status: 'open', visibility: 'public', repoUrl: 'https://github.com/lumen-labs/payroll-vault', baseCommit: 'a41c9e2',
-    budgetLabel: 'under 40', agreedPrice: null, postedAt: new Date(), createdAt: new Date(), buyerId: USER,
+    budgetLabel: 'under 40', agreedPrice: null, acceptedBidId: null, postedAt: new Date(), createdAt: new Date(), buyerId: USER,
     categoryRef: { slug: 'rust', name: 'Smart contracts' }, seller: null,
     acceptanceSpecs: [{ specHash: 'ab'.repeat(32), lockedAt: new Date() }], _count: { bids: 6, completionRecords: 0 },
     ...overrides,
@@ -31,6 +31,7 @@ describe('JobsService', () => {
     beforeEach(() => {
         repo = {
             getJobs: jest.fn(), getJob: jest.fn(), getOwnedJob: jest.fn(), publishJob: jest.fn(),
+            deleteDraft: jest.fn().mockResolvedValue(1), cancelJob: jest.fn().mockResolvedValue(1),
             getPostContext: jest.fn().mockResolvedValue(post()), setOnchainJob: jest.fn().mockResolvedValue(1), setBuyerAccounts: jest.fn(),
         } as unknown as jest.Mocked<JobsRepository>;
         chain = {
@@ -39,6 +40,73 @@ describe('JobsService', () => {
         } as unknown as jest.Mocked<ChainService>;
         agents = { dispatchBidders: jest.fn().mockResolvedValue([{ flow: 'bidding', runId: 'r1', status: 'sent' }, { flow: 'bidding', runId: 'r2', status: 'failed' }]) } as unknown as jest.Mocked<AgentsService>;
         service = new JobsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService, chain, agents);
+    });
+
+    describe('delete and cancel', () => {
+        it('allows delete for drafts, cancel for open jobs without an accepted offer, nothing after that', () => {
+            expect(removalOf({ status: 'draft', acceptedBidId: null } as never)).toBe('delete');
+            expect(removalOf({ status: 'open', acceptedBidId: null } as never)).toBe('cancel');
+            expect(removalOf({ status: 'negotiating', acceptedBidId: null } as never)).toBe('cancel');
+            expect(removalOf({ status: 'negotiating', acceptedBidId: 'b1' } as never)).toBeNull();
+            for (const status of ['agreed', 'funded', 'in_progress', 'delivered', 'reviewed', 'disputed', 'released', 'settled', 'refunded', 'expired', 'cancelled']) {
+                expect(removalOf({ status, acceptedBidId: null } as never)).toBeNull();
+            }
+        });
+
+        it('tells only the buyer what they may remove', () => {
+            expect(toJob(row({ status: 'draft' }), USER).remove).toBe('delete');
+            expect(toJob(row({ status: 'draft' }), 'someone-else').remove).toBeNull();
+            expect(toOtherJob(row()).remove).toBe('cancel');
+        });
+
+        it('deletes the buyer\'s own draft', async () => {
+            repo.getOwnedJob.mockResolvedValue(row({ status: 'draft' }));
+            await expect(service.deleteJob('Bearer t', 'J-1042')).resolves.toMatchObject({ ref: 'J-1042' });
+            expect(repo.getOwnedJob).toHaveBeenCalledWith(USER, { ref: 'J-1042' });
+            expect(repo.deleteDraft).toHaveBeenCalledWith(USER, JOB);
+        });
+
+        it('does not find another user\'s job', async () => {
+            repo.getOwnedJob.mockResolvedValue(null);
+            await expect(service.deleteJob('Bearer t', 'J-1042')).rejects.toThrow('Job not found');
+            await expect(service.cancelJob('Bearer t', { id: 'J-1042' })).rejects.toThrow('Job not found');
+            expect(repo.deleteDraft).not.toHaveBeenCalled();
+            expect(repo.cancelJob).not.toHaveBeenCalled();
+        });
+
+        it('refuses to delete or cancel an agreed or funded job', async () => {
+            for (const status of ['agreed', 'funded', 'delivered', 'disputed']) {
+                repo.getOwnedJob.mockResolvedValue(row({ status: status as never }));
+                await expect(service.deleteJob('Bearer t', 'J-1042')).rejects.toThrow('Open a dispute');
+                await expect(service.cancelJob('Bearer t', { id: 'J-1042' })).rejects.toThrow('Open a dispute');
+            }
+            repo.getOwnedJob.mockResolvedValue(row({ status: 'negotiating', acceptedBidId: 'b1' }));
+            await expect(service.cancelJob('Bearer t', { id: 'J-1042' })).rejects.toThrow('Open a dispute');
+            expect(repo.deleteDraft).not.toHaveBeenCalled();
+            expect(repo.cancelJob).not.toHaveBeenCalled();
+        });
+
+        it('sends drafts to delete and posted jobs to cancel', async () => {
+            repo.getOwnedJob.mockResolvedValue(row({ status: 'open' }));
+            await expect(service.deleteJob('Bearer t', 'J-1042')).rejects.toThrow('Cancel it instead');
+            repo.getOwnedJob.mockResolvedValue(row({ status: 'draft' }));
+            await expect(service.cancelJob('Bearer t', { id: 'J-1042' })).rejects.toThrow('Delete it instead');
+        });
+
+        it('cancels an open job', async () => {
+            repo.getOwnedJob.mockResolvedValue(row({ status: 'negotiating' }));
+            await expect(service.cancelJob('Bearer t', { id: 'J-1042' })).resolves.toMatchObject({ ref: 'J-1042' });
+            expect(repo.cancelJob).toHaveBeenCalledWith(USER, JOB);
+        });
+
+        it('reports a race with a seller accepting', async () => {
+            repo.getOwnedJob.mockResolvedValue(row({ status: 'open' }));
+            repo.cancelJob.mockResolvedValue(0);
+            await expect(service.cancelJob('Bearer t', { id: 'J-1042' })).rejects.toThrow('A seller was agreed');
+            repo.getOwnedJob.mockResolvedValue(row({ status: 'draft' }));
+            repo.deleteDraft.mockResolvedValue(0);
+            await expect(service.deleteJob('Bearer t', 'J-1042')).rejects.toThrow('changed while you were deleting');
+        });
     });
 
     it('maps rows to the OtherJob shape', () => {
@@ -142,4 +210,5 @@ describe('toOpenJob', () => {
         } as never, now);
         expect(card).toMatchObject({ id: 'J-1042', cats: 'Smart contracts', budget: 'under 40', check: '2 failing tests', bids: 6, buyer: 'Lumen Labs', minutesAgo: 3 });
     });
+
 });

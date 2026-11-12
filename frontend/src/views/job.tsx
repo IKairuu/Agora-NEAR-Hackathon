@@ -1,9 +1,10 @@
-import { Fragment, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type ReactNode } from 'react';
 import { agentPick, ARRIVE, ATT, BIDS, HELD, JOB, KICKOFF, ME, NEG_LOG, REVIEWERS, sellerBy, SPEC, usd, type Bid } from '../data/data';
 import { act, hire, isUnread, markSeen, openRequest, scrollMsgs, sendChat, sendThread, threads, type Thread } from '../store/actions';
 import { getState, hb, hPrice, priceOf, setState, useApp, type ChatMsg, type State } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
-import { Gate, Head, Lifecycle, Mk, RLink, SignInButton, T, Tl } from '../ui/parts';
+import { Gate, Head, Lifecycle, Mk, RemoveJobButton, RLink, SignInButton, T, Tl } from '../ui/parts';
+import { removalFor } from '../lib/live';
 import { Shell } from '../ui/Shell';
 import { OrderAction } from './orders';
 
@@ -96,7 +97,10 @@ export function Job() {
         crumbs={<><RLink r="jobs">Job requests</RLink> / {JOB.id}</>}
         title={JOB.title}
         sub={<>{JOB.cat}, posted {JOB.posted}, spec <span className="mono">{JOB.specHash}</span></>}
-        actions={accepted ? <RLink r="room" className="btn primary"><Icon name="lock" />Protected payment</RLink> : s.offerSt ? <RLink r="chat" className="btn primary"><Icon name="chat" />Chat room</RLink> : undefined}
+        actions={<>
+          <RemoveJobButton id={JOB.id} title={JOB.title} kind={s.live ? removalFor(JOB.id) : null} sm={false} />
+          {accepted ? <RLink r="room" className="btn primary"><Icon name="lock" />Protected payment</RLink> : s.offerSt ? <RLink r="chat" className="btn primary"><Icon name="chat" />Chat room</RLink> : null}
+        </>}
       />
       <Lifecycle />
       <div className="tabs" role="tablist">{tab('bids', `Offers${bidsIn ? ', 4 plus 2 held' : ''}`)}{tab('neg', 'Negotiation log')}{tab('spec', 'Acceptance spec')}</div>
@@ -145,68 +149,153 @@ const initials = (t: Thread) => (t.ag ? <Icon name="bot" /> : t.who.slice(0, 2).
 function PCard({ icon, k = '', title, t, children }: { icon: IconName; k?: string; title: ReactNode; t: string; children: ReactNode }) {
   return <div className={`pcard ${k}`}><div className="pc-h"><Icon name={icon} /><b>{title}</b><time>{t}</time></div>{children}</div>;
 }
-function OfferCard({ s, x }: { s: State; x: Bid }) {
-  return (
-    <PCard icon="brief" title="Hire offer sent by your agent" t="16:11:52">
-      <dl className="kv"><dt>To</dt><dd>{x.name}</dd><dt>Price</dt><dd className="num">{usd(priceOf(s, x))} USDC, 1 milestone</dd><dt>Delivery</dt><dd>{x.days}, up to {x.attempts ?? ATT} attempts</dd><dt>Tests</dt><dd><span className="mono">{JOB.specHash}</span>, locked</dd><dt>Payment</dt><dd>Protected the moment you accept</dd></dl>
-    </PCard>
-  );
+/*
+ * One conversation view for every thread, demo or real. The data is the only difference:
+ * chatModel() turns a thread into the same shape whether it comes from the demo story or from the backend
+ * (/threads/v1 and its messages, plus the followed job's hire offer and payment state), and ChatThread draws it.
+ */
+type ChatItem =
+  | { kind: 'card'; key: string; icon: IconName; k?: string; title: ReactNode; t: string; body: ReactNode }
+  | { kind: 'agent'; key: string; text: string; acts?: ReactNode }
+  | { kind: 'sys'; key: string; text: string }
+  | { kind: 'msg'; key: string; m: ChatMsg };
+interface ChatModel {
+  who: Who; sellMode: boolean;
+  strip: { pill: [string, string]; job: string; jobLink: boolean; title: string; amt: string; action: ReactNode };
+  items: ChatItem[]; typing: boolean; quick: string[];
+  send: (text: string) => void;
+}
+
+function offerCard(s: State, x: Bid, t: string, key: string): ChatItem {
+  return {
+    kind: 'card', key, icon: 'brief', title: 'Hire offer sent by your agent', t,
+    body: <dl className="kv"><dt>To</dt><dd>{x.name}</dd><dt>Price</dt><dd className="num">{usd(priceOf(s, x))} USDC, 1 milestone</dd><dt>Delivery</dt><dd>{x.days}, up to {x.attempts ?? ATT} attempts</dd><dt>Tests</dt><dd><span className="mono">{JOB.specHash}</span>, locked</dd><dt>Payment</dt><dd>Protected the moment you accept</dd></dl>,
+  };
 }
 /** The next lowest valid offer the buyer hasn't been declined by. */
 function nextOffer(s: State) {
   return ARRIVE.map((k) => BIDS.find((b) => b.key === k)).filter((b): b is Bid => !!b && !s.declined.includes(b.key)).sort((a, b) => priceOf(s, a) - priceOf(s, b))[0];
 }
 
-/** The demo thread: hire offer cards, then the chat with the hired seller. */
-function DemoThread({ s, log }: { s: State; log: ChatMsg[] }) {
+/**
+ * The hire steps of the job the buyer is following: offer sent, declined or accepted, payment protected.
+ * `demo` adds the demo's scripted times and its "seller accepts / declines" buttons; real data has neither.
+ */
+function hireItems(s: State, demo: boolean): ChatItem[] {
   const b = hb(s), accepted = s.stage >= 5, amt = usd(hPrice(s));
-  const nx = s.offerSt === 'declined' ? nextOffer(s) : undefined;
+  const at = (t: string) => (demo ? t : '');
+  const out: ChatItem[] = [{ kind: 'sys', key: 'intro', text: `You chose ${b.name}. Your agent sends the hire offer, and every step is logged in Job requests. Messages stay on AGORA, and money only moves through Protected payment.` }];
+  s.declined.filter((k) => k !== b.key).forEach((k) => {
+    const x = sellerBy(k); if (!x) return;
+    out.push(offerCard(s, x, at('16:11:52'), 'o-' + k));
+    out.push({ kind: 'card', key: 'd-' + k, icon: 'x', k: 'block', title: `${x.name} declined`, t: at('16:12'), body: <p className="muted small">Nothing was locked. Your agent moved to the next offer.</p> });
+  });
+  out.push(offerCard(s, b, at('16:11:52'), 'o-' + b.key));
+  if (accepted) {
+    out.push({ kind: 'card', key: 'acc', icon: 'check', k: 'ok', title: `${b.name} accepted the offer`, t: at('16:12:01'), body: <p className="muted small">The contract checked that the seller is not you or one of your agents.</p> });
+    out.push({
+      kind: 'card', key: 'pay', icon: 'lock', k: 'ok', title: 'Payment protected', t: at('16:12:02'),
+      body: <>
+        <p className="small"><b className="num">{amt} USDC</b> moved into Protected payment by your transaction agent{demo ? '. 9 limit checks passed: per-job cap, daily cap, category, fraud flag, price check and more.' : ', after your spending limits were checked.'}</p>
+        <p className="muted xsmall">Held in USDC escrow by the contract. It pays {b.name} when 2 of 3 reviewers pass the tests.</p>
+      </>,
+    });
+  } else if (s.offerSt === 'declined') {
+    const nx = nextOffer(s);
+    out.push({ kind: 'card', key: 'dec', icon: 'x', k: 'block', title: `${b.name} declined`, t: at('16:12'), body: <p className="muted small">Nothing was locked.</p> });
+    out.push({
+      kind: 'agent', key: 'next', text: nx ? `The next lowest valid offer is ${nx.name} at ${usd(priceOf(s, nx))} USDC. Send the same offer?` : 'No valid offers left. You can post the job publicly.',
+      acts: nx && <><button className="btn sm primary" onClick={() => hire(nx.key)}>Send offer to {nx.name}</button><RLink r="ask" className="btn sm ghost" onClick={openRequest}>Back to offers</RLink></>,
+    });
+  } else {
+    out.push({
+      kind: 'card', key: 'wait', icon: 'chat', k: 'wait', title: `Waiting for ${b.name} to accept or decline`, t: 'now',
+      body: <>
+        <p className="muted small">{b.kind === 'agent' ? 'Seller agents usually answer in seconds.' : 'Most developers answer within an hour.'} If they decline, your agent offers the job to the next one.</p>
+        {demo && <div className="cc-acts"><button className="btn sm" onClick={act.selleraccept}>Seller accepts, demo</button><button className="btn sm ghost" onClick={act.sellerdecline}>Seller declines, demo</button></div>}
+      </>,
+    });
+  }
+  return out;
+}
+
+/** Status of the followed job's hire, the same words in the demo and with real data. */
+const hireStatus = (s: State): [string, string] =>
+  s.stage >= 7 ? ['ok', 'Paid'] : s.stage >= 5 ? ['acc', 'Payment protected'] : s.offerSt === 'declined' ? ['block', 'Declined'] : ['hold', 'Waiting on seller'];
+
+/** The thread as the one chat view draws it, from demo data or from the backend. */
+function chatModel(s: State, cur: Thread): ChatModel {
+  const demo = cur.k === 'demo';
+  const msgs = cur.msgs.map((m, i): ChatItem => ({ kind: 'msg', key: 'm' + i, m }));
+  /* the thread about the job the buyer is following: show its hire steps, from the demo story or the live job */
+  const hireThread = demo || (s.live && cur.mode === 'buy' && !!cur.job && cur.job === s.liveJob?.ref && (s.stage >= 5 || (s.stage >= 4 && !!s.offerSt)));
+  if (hireThread) {
+    const b = hb(s), accepted = s.stage >= 5;
+    return {
+      who: { name: b.name, kind: b.kind }, sellMode: false,
+      strip: { pill: hireStatus(s), job: JOB.id, jobLink: true, title: JOB.title, amt: `${usd(hPrice(s))} USDC${b.days ? ` · ${b.days}` : ''}`, action: accepted ? <RLink r="room" className="btn sm"><Icon name="lock" />Protected payment</RLink> : null },
+      items: [...hireItems(s, demo), ...msgs],
+      typing: demo && s.typing,
+      quick: accepted && cur.msgs.length <= 1 ? (demo && KICKOFF[b.key] ? ['Yes, always to the last worker', 'Split the remainder evenly', 'Let me check and come back'] : ['Sounds good', 'Ping me if the spec is unclear']) : [],
+      send: demo ? sendChat : sendThread,
+    };
+  }
+  return {
+    who: { name: cur.who, kind: cur.ag ? 'agent' : 'person' }, sellMode: cur.mode === 'sell',
+    strip: { pill: cur.st, job: cur.job, jobLink: false, title: cur.title, amt: cur.amt ? `${cur.amt} USDC` : '', action: cur.order ? <OrderAction o={cur.order} full={false} /> : <RLink r="jobs" className="btn sm">View job</RLink> },
+    items: msgs, typing: false, quick: [], send: sendThread,
+  };
+}
+
+/** The one chat view: who, the job strip, the timeline of cards and messages, quick replies and the composer. */
+function ChatThread({ cur, model }: { cur: Thread; model: ChatModel }) {
+  const [text, setText] = useState('');
+  const { who: b, strip } = model;
+  const submit = (e?: FormEvent) => { e?.preventDefault(); if (!text.trim()) return; model.send(text); setText(''); };
+  const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } };
   return (
-    <>
-      <div className="sys">You chose {b.name}. Your agent sends the hire offer, and every step is logged in Job requests. Messages stay on AGORA, and money only moves through Protected payment.</div>
-      {s.declined.filter((k) => k !== b.key).map((k) => { const x = sellerBy(k)!; return (
-        <Fragment key={k}>
-          <OfferCard s={s} x={x} />
-          <PCard icon="x" k="block" title={`${x.name} declined`} t="16:12"><p className="muted small">Nothing was locked. Your agent moved to the next offer.</p></PCard>
-        </Fragment>
-      ); })}
-      <OfferCard s={s} x={b} />
-      {accepted ? (
-        <>
-          <PCard icon="check" k="ok" title={`${b.name} accepted the offer`} t="16:12:01"><p className="muted small">The contract checked that the seller is not you or one of your agents.</p></PCard>
-          <PCard icon="lock" k="ok" title="Payment protected" t="16:12:02">
-            <p className="small"><b className="num">{amt} USDC</b> moved into Protected payment by your transaction agent. 9 limit checks passed: per-job cap, daily cap, category, fraud flag, price check and more.</p>
-            <p className="muted xsmall">Held in USDC escrow by the contract. It pays {b.name} when 2 of 3 reviewers pass the tests.</p>
-          </PCard>
-        </>
-      ) : s.offerSt === 'declined' ? (
-        <>
-          <PCard icon="x" k="block" title={`${b.name} declined`} t="16:12"><p className="muted small">Nothing was locked.</p></PCard>
-          <div className="msg bot"><span className="avatar ag"><Icon name="bot" /></span><div>
-            <div className="who">Your buyer agent, for you</div>
-            <div className="bub">{nx ? `The next lowest valid offer is ${nx.name} at ${usd(priceOf(s, nx))} USDC. Send the same offer?` : 'No valid offers left. You can post the job publicly.'}</div>
-            {nx && <div className="cc-acts"><button className="btn sm primary" onClick={() => hire(nx.key)}>Send offer to {nx.name}</button><RLink r="ask" className="btn sm ghost" onClick={openRequest}>Back to offers</RLink></div>}
-          </div></div>
-        </>
-      ) : (
-        <PCard icon="chat" k="wait" title={`Waiting for ${b.name} to accept or decline`} t="now">
-          <p className="muted small">{b.kind === 'agent' ? 'Seller agents usually answer in seconds.' : 'Most developers answer within an hour.'} If they decline, your agent offers the job to the next one.</p>
-          <div className="cc-acts"><button className="btn sm" onClick={act.selleraccept}>Seller accepts, demo</button><button className="btn sm ghost" onClick={act.sellerdecline}>Seller declines, demo</button></div>
-        </PCard>
-      )}
-      {log.map((m, i) => <Msg key={i} m={m} b={b} />)}
-      {s.typing && <div className="msg them"><span className={`avatar ${b.kind === 'agent' ? 'ag' : ''}`}>{b.name.slice(0, 2).toUpperCase()}</span><div className="bub typing" aria-label={`${b.name} is typing`}><i /><i /><i /></div></div>}
-    </>
+    <section className="inbox-r" aria-label={`Conversation with ${cur.who}`}>
+      <div className="ib-head"><span className={`avatar ${cur.ag ? 'ag' : ''}`}>{initials(cur)}</span><div><b>{cur.who}</b><div className="muted xsmall">{cur.mode === 'sell' ? 'Buyer' : 'Seller'}{cur.ag ? ', AI agent' : ''}</div></div></div>
+      <div className="jstrip">
+        <span className={`pill ${strip.pill[0]}`}>{strip.pill[1]}</span>
+        {strip.job && (strip.jobLink ? <RLink r="jobs" className="mono xsmall">{strip.job}</RLink> : <span className="mono xsmall muted">{strip.job}</span>)}
+        <b className="js-t">{strip.title}</b>
+        {strip.amt && <span className="num js-a">{strip.amt}</span>}
+        {strip.action}
+      </div>
+      <div className="msgs" id="msgs" aria-live="polite">
+        {model.items.map((it) => {
+          if (it.kind === 'card') return <PCard key={it.key} icon={it.icon} k={it.k} title={it.title} t={it.t}>{it.body}</PCard>;
+          if (it.kind === 'sys') return <div key={it.key} className="sys">{it.text}</div>;
+          if (it.kind === 'agent') return (
+            <div key={it.key} className="msg bot"><span className="avatar ag"><Icon name="bot" /></span><div>
+              <div className="who">{model.sellMode ? 'Your bidding agent, for you' : 'Your buyer agent, for you'}</div>
+              <div className="bub">{it.text}</div>
+              {it.acts && <div className="cc-acts">{it.acts}</div>}
+            </div></div>
+          );
+          return <Msg key={it.key} m={it.m} b={b} sellMode={model.sellMode} />;
+        })}
+        {!model.items.length && <div className="sys">No messages yet. Say hello, or ask about the job.</div>}
+        {model.typing && <div className="msg them"><span className={`avatar ${b.kind === 'agent' ? 'ag' : ''}`}>{b.name.slice(0, 2).toUpperCase()}</span><div className="bub typing" aria-label={`${b.name} is typing`}><i /><i /><i /></div></div>}
+      </div>
+      {model.quick.length > 0 && <div className="quick">{model.quick.map((q) => <button key={q} className="chip" onClick={() => model.send(q)}>{q}</button>)}</div>}
+      <form className="compose" onSubmit={submit}>
+        <label className="visually-hidden" htmlFor="chat-in">Message {cur.who}</label>
+        <textarea className="input" id="chat-in" rows={1} placeholder={`Message ${cur.who}`} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} />
+        <button className="btn primary icon" type="submit" aria-label="Send"><Icon name="up" /></button>
+      </form>
+    </section>
   );
 }
 
 export function Chat() {
   const s = useApp();
-  const [text, setText] = useState('');
   const f = s.inboxF || (s.mode === 'sell' ? 'sell' : 'buy');
   const all = s.stage >= 1 ? threads() : [];
   const list = all.filter((t) => f === 'all' || t.mode === f);
-  const cur = list.find((t) => t.k === s.thread) || list[0];
+  /* 'demo' names the followed job's hire thread; with real data that is the backend thread about the same job */
+  const cur = list.find((t) => t.k === s.thread) || (s.live && s.thread === 'demo' ? list.find((t) => !!t.job && t.job === s.liveJob?.ref) : undefined) || list[0];
   const curKey = cur?.k ?? '';
   useEffect(() => { if (curKey && curKey !== getState().thread) setState({ thread: curKey }); markSeen(curKey); }, [curKey]);
   const opened = useRef(false);
@@ -228,7 +317,7 @@ export function Chat() {
               <span className={`avatar ${t.ag ? 'ag' : ''}`}>{initials(t)}</span>
               <span className="tr-b">
                 <span className="tr-top"><b>{t.who}</b><span className="muted xsmall">{t.time}</span></span>
-                <span className="tr-job">{t.job} · {t.title}</span>
+                <span className="tr-job">{t.job ? `${t.job} · ` : ''}{t.title}</span>
                 <span className="tr-last">{t.last}</span>
               </span>
               {isUnread(t) && !on && <i className="udot" aria-label="Unread" />}
@@ -238,56 +327,14 @@ export function Chat() {
       </div>
     </aside>
   );
-  if (!cur) return (
-    <Shell cur="chat">
-      <Head title="Messages" />
-      <div className="inbox">{side}<section className="inbox-r"><div className="empty"><Icon name="chat" /><b>No conversations here</b><span>Threads start when your agent picks a seller, or a buyer sends you a request.</span></div></section></div>
-    </Shell>
-  );
-
-  const demo = cur.k === 'demo';
-  const submit = (e?: FormEvent) => { e?.preventDefault(); if (demo) sendChat(text); else sendThread(text); setText(''); };
-  const onKey = (e: KeyboardEvent) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); submit(); } };
-  let strip: ReactNode, body: ReactNode, quick: string[] = [];
-  if (demo) {
-    const b = hb(s), accepted = s.stage >= 5, log = cur.msgs;
-    quick = accepted && log.length === 1 ? (KICKOFF[b.key] ? ['Yes, always to the last worker', 'Split the remainder evenly', 'Let me check and come back'] : ['Sounds good', 'Ping me if the spec is unclear']) : [];
-    strip = (
-      <div className="jstrip">
-        <span className={`pill ${cur.st[0]}`}>{cur.st[1]}</span><RLink r="jobs" className="mono xsmall">{JOB.id}</RLink><b className="js-t">{JOB.title}</b>
-        <span className="num js-a">{usd(hPrice(s))} USDC · {b.days}</span>
-        {accepted && <RLink r="room" className="btn sm"><Icon name="lock" />Protected payment</RLink>}
-      </div>
-    );
-    body = <DemoThread s={s} log={log} />;
-  } else {
-    const b: Who = { name: cur.who, kind: cur.ag ? 'agent' : 'person' };
-    strip = (
-      <div className="jstrip">
-        <span className={`pill ${cur.st[0]}`}>{cur.st[1]}</span><span className="mono xsmall muted">{cur.job}</span><b className="js-t">{cur.title}</b>
-        <span className="num js-a">{cur.amt} USDC</span>
-        {cur.order ? <OrderAction o={cur.order} full={false} /> : <RLink r="jobs" className="btn sm">View job</RLink>}
-      </div>
-    );
-    body = cur.msgs.map((m, i) => <Msg key={i} m={m} b={b} sellMode={cur.mode === 'sell'} />);
-  }
-
   return (
     <Shell cur="chat">
       <Head title="Messages" />
       <div className="inbox">
         {side}
-        <section className="inbox-r" aria-label={`Conversation with ${cur.who}`}>
-          <div className="ib-head"><span className={`avatar ${cur.ag ? 'ag' : ''}`}>{initials(cur)}</span><div><b>{cur.who}</b><div className="muted xsmall">{cur.mode === 'sell' ? 'Buyer' : 'Seller'}{cur.ag ? ', AI agent' : ''}</div></div></div>
-          {strip}
-          <div className="msgs" id="msgs" aria-live="polite">{body}</div>
-          {quick.length > 0 && <div className="quick">{quick.map((q) => <button key={q} className="chip" onClick={() => sendChat(q)}>{q}</button>)}</div>}
-          <form className="compose" onSubmit={submit}>
-            <label className="visually-hidden" htmlFor="chat-in">Message {cur.who}</label>
-            <textarea className="input" id="chat-in" rows={1} placeholder={`Message ${cur.who}`} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={onKey} />
-            <button className="btn primary icon" type="submit" aria-label="Send"><Icon name="up" /></button>
-          </form>
-        </section>
+        {cur
+          ? <ChatThread key={cur.k} cur={cur} model={chatModel(s, cur)} />
+          : <section className="inbox-r"><div className="empty"><Icon name="chat" /><b>No conversations here</b><span>Threads start when your agent picks a seller, or a buyer sends you a request.</span></div></section>}
       </div>
     </Shell>
   );
