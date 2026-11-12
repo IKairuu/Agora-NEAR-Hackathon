@@ -29,8 +29,11 @@ const Cancel = ({ label = 'Cancel' }: { label?: string }) => <button className="
 
 function SignIn() {
   const [mail, setMail] = useState('');
-  const submit = (e: FormEvent) => { e.preventDefault(); act.signMail(mail.trim()); };
-  const [busy, setBusy] = useState<'' | 'google' | 'github'>('');
+  const [busy, setBusy] = useState<'' | 'google' | 'github' | 'email'>('');
+  const submit = (e: FormEvent) => {
+    e.preventDefault(); setBusy('email');
+    void act.signMail(mail.trim()).then((err) => { setBusy(''); if (err) toast(err, 'hold'); });
+  };
   /* Real sign-in leaves the page for the provider; if it fails to start, the button comes back. */
   const oauth = (via: 'google' | 'github') => {
     if (!authConfigured) { act.signVia(via); return; }
@@ -45,12 +48,12 @@ function SignIn() {
         <p className="muted">New here? Signing in creates your account. AGORA makes a NEAR account for you: no password, no seed phrase, no gas.</p>
         <button className="btn wide" disabled={!!busy} aria-busy={busy === 'google'} onClick={() => oauth('google')}><GoogleIcon />{busy === 'google' ? 'Opening Google…' : 'Continue with Google'}</button>
         <button className="btn wide" disabled={!!busy} aria-busy={busy === 'github'} onClick={() => oauth('github')}><Icon name="github" />{busy === 'github' ? 'Opening GitHub…' : 'Continue with GitHub'}</button>
-        <button className="btn wide" onClick={act.passkey}><Icon name="lock" />Continue with a passkey</button>
+        {!authConfigured && <button className="btn wide" onClick={act.passkey}><Icon name="lock" />Continue with a passkey</button>}
         <div className="or"><span>or</span></div>
         <form className="mailrow" onSubmit={submit}>
           <label className="visually-hidden" htmlFor="mail-in">Email</label>
           <input className="input" id="mail-in" type="email" placeholder="you@example.com" autoComplete="email" value={mail} onChange={(e) => setMail(e.target.value)} />
-          <button className="btn" type="submit">Continue</button>
+          <button className="btn" type="submit" disabled={!!busy} aria-busy={busy === 'email'}>{busy === 'email' ? 'Sending…' : 'Continue'}</button>
         </form>
         <div className="or"><span>Already use NEAR?</span></div>
         <button className="btn wide ghost-line" onClick={() => setState({ modal: { kind: 'wallets' } })}><Icon name="wallet" />Connect a NEAR wallet</button>
@@ -64,19 +67,26 @@ function SignIn() {
 function Code() {
   const { mail } = useApp();
   const [code, setCode] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const verify = (e: FormEvent) => {
+    e.preventDefault(); setBusy(true); setErr('');
+    void act.signCode(code).then((m) => { setBusy(false); if (m) setErr(m); });
+  };
   return (
     <Frame cls="auth-m">
       <div className="auth">
         <Tile size="lg" />
         <h2>Check your email</h2>
-        <p className="muted">We sent a 6-digit code to <b>{mail || 'your inbox'}</b>. It expires in 10 minutes.</p>
-        <form className="stack" onSubmit={(e) => { e.preventDefault(); act.signCode(code); }}>
+        <p className="muted">We sent a code to <b>{mail || 'your inbox'}</b>. Type it here, or open the sign-in link in the same email.</p>
+        <form className="stack" onSubmit={verify}>
           <label className="visually-hidden" htmlFor="code-in">6-digit code</label>
-          <input className="input otp num" id="code-in" inputMode="numeric" autoComplete="one-time-code" maxLength={6} placeholder="000000" value={code} onChange={(e) => setCode(e.target.value)} />
-          <button className="btn primary wide" type="submit">Verify and continue</button>
+          <input className="input otp num" id="code-in" inputMode="numeric" autoComplete="one-time-code" maxLength={10} placeholder="000000" value={code} onChange={(e) => setCode(e.target.value)} aria-invalid={!!err} aria-describedby={err ? 'code-err' : undefined} />
+          {err && <span className="hint" id="code-err" role="alert">{err}</span>}
+          <button className="btn primary wide" type="submit" disabled={busy} aria-busy={busy}>{busy ? 'Checking…' : 'Verify and continue'}</button>
         </form>
-        <div className="row" style={{ justifyContent: 'center' }}><button className="lk" onClick={act.passkey}>Use a passkey instead</button><button className="lk" onClick={act.resend}>Resend code</button></div>
-        <p className="muted xsmall">AGORA never asks for a password. A one-time code or a passkey can't be reused or leaked. Prototype: any 6 digits work.</p>
+        <div className="row" style={{ justifyContent: 'center' }}>{!authConfigured && <button className="lk" onClick={act.passkey}>Use a passkey instead</button>}<button className="lk" onClick={act.resend}>Resend code</button></div>
+        <p className="muted xsmall">AGORA never asks for a password. A one-time code can't be reused.{authConfigured ? '' : ' Prototype: any 6 digits work.'}</p>
       </div>
     </Frame>
   );

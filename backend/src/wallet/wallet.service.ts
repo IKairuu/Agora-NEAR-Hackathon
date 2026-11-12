@@ -35,7 +35,9 @@ const LABELS: Record<string, string> = {
 };
 
 export const labelOf = (method: string, args: Record<string, unknown>): string =>
-    method === 'ft_transfer_call' && args['msg'] === 'starter_stake' ? LABELS['starter_stake']! : LABELS[method] ?? method;
+    method === 'ft_transfer_call' && args['msg'] === 'starter_stake' ? LABELS['starter_stake']!
+        : method === 'ft_transfer_call' && args['msg'] === 'deposit' ? 'Deposit from your NEAR wallet'
+            : LABELS[method] ?? method;
 
 const units = (amount: number): string => String(Math.round(amount * 1_000_000));
 const usdc = (value: unknown): number | null => {
@@ -68,13 +70,13 @@ export class WalletService {
         const account = await this.walletRepository.getAccount(authId);
         const acct = account?.nearAccountId ?? '';
         const agents = account?.agentsAccountId ?? '';
-        if (acct) await this.chainService.refreshBalance(acct);
-        const [balance, activity] = await Promise.all([
+        const [live, balance, activity] = await Promise.all([
+            acct ? this.chainService.liveBalance(acct) : Promise.resolve(null),
             acct ? this.walletRepository.getBalance(acct) : Promise.resolve(null),
             this.walletRepository.getActivity(authId, [acct, agents].filter(Boolean)),
         ]);
-        const available = balance ? Number(balance.available) : 0;
-        const escrowed = balance ? Number(balance.escrowed) : 0;
+        const available = live ? live.available : balance ? Number(balance.available) : 0;
+        const escrowed = live ? live.escrowed : balance ? Number(balance.escrowed) : 0;
         return {
             acct,
             agents,

@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, BIDS, gigBy, JOB, KICKOFF, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, THREADS, usd, type Order } from '../data/data';
-import { finishWalletSignIn, saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
+import { finishWalletSignIn, sendEmailCode, verifyEmailCode, saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
 import { api } from '../lib/api';
 import type { OwnershipProof } from '../lib/near';
@@ -259,7 +259,10 @@ function goRole(r: 'hire' | 'work') {
 export const act = {
   signin: () => openModal('signin'),
   code: () => openModal('code'),
-  resend: () => toast('A new code is on its way. The old one stops working.'),
+  resend: () => {
+    if (!authConfigured) { toast('A new code is on its way. The old one stops working.'); return; }
+    void sendEmailCode(getState().mail).then((err) => toast(err ? `Could not send the code: ${err}` : 'A new code is on its way. The old one stops working.', err ? 'block' : 'ok'));
+  },
   passkey: () => { setState({ signVia: 'passkey' }); toast('Passkey confirmed with your device. Nothing to remember.'); act.walletstep(); },
   walletstep: () => openModal('walletstep'),
   walletpick: () => openModal('walletpick'),
@@ -554,13 +557,25 @@ export const act = {
     setState({ nextJob: s.nextJob + 1, extra: [...s.extra, { id: 'J-' + s.nextJob, text: v, t: clock(), posted: false }] });
     acScroll();
   },
-  signMail: (v: string) => {
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { toast('Enter an email address, like you@example.com.', 'hold'); return; }
+  /** Email sign-in: real Supabase one-time code when sign-in is configured, simulated in the prototype. Returns an error or null. */
+  signMail: async (v: string): Promise<string | null> => {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return 'Enter an email address, like you@example.com.';
+    if (authConfigured) {
+      const err = await sendEmailCode(v);
+      if (err) return `Could not send the code: ${err}`;
+    }
     setState({ signVia: 'email', mail: v }); act.code();
+    return null;
   },
-  signCode: (v: string) => {
-    if (v.replace(/\D/g, '').length !== 6) { toast('Enter the 6 digits from the email.', 'hold'); return; }
-    act.walletstep();
+  signCode: async (v: string): Promise<string | null> => {
+    const code = v.replace(/\D/g, '');
+    if (code.length < 6 || code.length > 10) return 'Enter the code from the email.';
+    if (!authConfigured) { act.walletstep(); return null; }
+    const s = getState();
+    savePending({ via: 'email', after: s.after, rolePick: s.rolePick, tour: s.tour, draft: s.draft });
+    const err = await verifyEmailCode(s.mail, code);
+    if (err) { takePending(); return err.toLowerCase().includes('expired') || err.toLowerCase().includes('invalid') ? 'That code is wrong or expired. Check the newest email, or resend.' : err; }
+    return null;
   },
 };
 

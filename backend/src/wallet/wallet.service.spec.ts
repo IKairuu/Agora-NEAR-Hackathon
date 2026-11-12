@@ -31,7 +31,7 @@ describe('WalletService', () => {
             isMock: jest.fn().mockReturnValue(true),
             indexTx: jest.fn().mockResolvedValue({ indexed: true, ok: true, method: 'ft_transfer_call', reason: null }),
             verifyWalletSignature: jest.fn().mockResolvedValue(undefined),
-            refreshBalance: jest.fn().mockResolvedValue(false),
+            liveBalance: jest.fn().mockResolvedValue(null),
         } as unknown as jest.Mocked<ChainService>;
         admin = {
             getUserEmail: jest.fn().mockResolvedValue('kai@example.com'),
@@ -54,7 +54,13 @@ describe('WalletService', () => {
         expect(w.items[0]).toMatchObject({ label: 'Moved to Protected payment', job: 'J-1042', amount: 32 });
         expect(w.items[1]).toMatchObject({ label: 'Deposit', amount: 10 });
         expect(repo.getActivity.mock.calls[0]).toEqual([USER, ['lumen.testnet', 'agents.lumen.testnet']]);
-        expect(chain.refreshBalance.mock.calls[0]).toEqual(['lumen.testnet']);
+        expect(chain.liveBalance.mock.calls[0]).toEqual(['lumen.testnet']);
+    });
+
+    it('shows the contract balance in real mode instead of the saved one', async () => {
+        chain.liveBalance.mockResolvedValue({ available: 15, escrowed: 0 });
+        repo.getBalance.mockResolvedValue({ available: D(120), escrowed: D(0), spentToday: D(0), dayStarted: new Date() });
+        await expect(service.getWallet('Bearer t')).resolves.toMatchObject({ available: 15, escrowed: 0, total: 15 });
     });
 
     it('withdraws with the full-access key and one yocto', async () => {
@@ -178,6 +184,7 @@ describe('wallet labels', () => {
     it('tells a starter stake apart from a dispute bond', () => {
         expect(labelOf('ft_transfer_call', { msg: 'starter_stake' })).toBe('Starter stake added');
         expect(labelOf('ft_transfer_call', { msg: 'dispute_bond:7' })).toBe('Dispute bond paid to ask the DAO');
+        expect(labelOf('ft_transfer_call', { msg: 'deposit' })).toBe('Deposit from your NEAR wallet');
         expect(labelOf('return_stake', {})).toBe('Starter stake returned');
         expect(labelOf('unknown_method', {})).toBe('unknown_method');
     });

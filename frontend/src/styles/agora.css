@@ -420,6 +420,7 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.5; }
 .wal-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: var(--space-md); align-items: stretch; }
 .wal-card .lbl .tag { font-size: var(--text-xs); padding: 1px 8px; border-radius: var(--radius-pill); background: var(--color-paper-3); color: var(--color-ink-2); margin-left: 4px; }
 .wal-card .total.sm { font-size: clamp(2rem, 2vw + 1rem, 2.5rem); }
+.wal-card .total.loading { color: var(--color-muted); }
 .wal-card .note { font-size: var(--text-xs); color: var(--color-ink-2); margin: var(--space-xs) 0 0; max-width: 32ch; }
 .wal-card .lk.small { margin-top: var(--space-2xs); }
 .wal-acts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: auto; padding-top: var(--space-md); }

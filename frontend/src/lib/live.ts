@@ -1,6 +1,6 @@
 import { ARRIVE, BIDS, DAO_COUNCIL, DONE_JOBS, NEG_LOG, SETTLED, GIGS, HELD, JOB, JOB_LISTING, KICKOFF, ME, OPEN_JOBS, OTHER_JOBS, REPLIES, REVIEWERS, SELLERS_DIR, SPEC, T_MSGS, T_TIME, THREADS, gigBy, liveOpenRef, setLiveOpenJobs, type Bid, type DemoData, type Gig, type OpenJob, type Order, type OtherJob, type SellerDir } from '../data/data';
 import type { ChatMsg } from '../store/store';
-import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type SellForm, type LiveNote, type LiveSpec, type SpecDoc } from '../store/store';
+import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type SellForm, type LiveNote, type LiveSpec, type SpecDoc, type WalletItem } from '../store/store';
 import type { Thread } from '../store/actions';
 import { api, ApiError } from './api';
 import { depositCall, sendCalls, walletBalances, walletSend, withdrawCall } from './near';
@@ -216,7 +216,7 @@ export function leaveLive(): void {
   setLiveOpenJobs(null);
   if (likedBefore !== null) { setState({ liked: likedBefore }); likedBefore = null; }
   setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));
-  setState({ live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null });
+  setState({ live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null, walletErr: false, walletItems: [] });
 }
 
 async function refreshAll(first: boolean): Promise<void> {
@@ -691,11 +691,13 @@ export async function liveDeliver(ref: string): Promise<void> {
 
 async function loadMoney(): Promise<void> {
   const [wallet, limits] = await Promise.all([
-    liveApi<{ available: number; escrowed: number; usedToday: number; chain?: { mode: string; network: string; contract: string; usdc: string | null } }>('/wallet/v1', { quiet: true }).catch(() => null),
+    liveApi<{ available: number; escrowed: number; usedToday: number; chain?: { mode: string; network: string; contract: string; usdc: string | null }; items?: WalletItem[] }>('/wallet/v1', { quiet: true }).catch(() => null),
     liveApi<{ paused: boolean }>('/mandates/v1', { quiet: true }).catch(() => null),
   ]);
   if (!wallet) return;
-  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused) }, chain: wallet.chain ?? null });
+  const tokenArrived = Boolean(wallet.chain?.usdc) && wallet.chain?.usdc !== getState().chain?.usdc;
+  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused) }, chain: wallet.chain ?? null, walletItems: wallet.items ?? [] });
+  if (tokenArrived) void loadWalletBalances();
 }
 
 const usdcIn = (id: string): number | undefined => {
@@ -759,8 +761,11 @@ export const walletMode = (): boolean => getState().chain?.mode === 'real';
 /** Reads what the linked account holds in its own NEAR wallet. Quiet: a failed read just leaves the line out. */
 export async function loadWalletBalances(): Promise<void> {
   if (!ME.acct) return;
-  const bal = await walletBalances(ME.acct, getState().chain?.usdc ?? null).catch(() => null);
-  if (bal) setState({ walletBal: bal });
+  try {
+    setState({ walletBal: await walletBalances(ME.acct, getState().chain?.usdc ?? null), walletErr: false });
+  } catch {
+    setState({ walletErr: true });
+  }
 }
 
 /** Sends a transaction the wallet just signed to the backend, which reads it from the chain and updates the balance. */

@@ -107,6 +107,7 @@ describe('ChainService (mock mode)', () => {
 
     it('keeps the database balance in mock mode', async () => {
         const { service, syncBalance } = await build();
+        await expect(service.liveBalance('lumen.testnet')).resolves.toBeNull();
         await expect(service.refreshBalance('lumen.testnet')).resolves.toBe(false);
         expect(syncBalance.mock.calls).toHaveLength(0);
     });
@@ -155,7 +156,7 @@ describe('ChainService (real mode)', () => {
         expect(getVaultSecret.mock.calls[0]).toEqual(['near_key:agents.lumen.testnet']);
         expect(fromSecretKey.mock.calls[0]).toEqual([KEY]);
         expect(accountCtor.mock.calls[0]![0]).toBe('agents.lumen.testnet');
-        expect(providerCtor.mock.calls[0]).toEqual([{ url: 'https://rpc.testnet.near.org' }]);
+        expect(providerCtor.mock.calls[0]).toEqual([{ url: 'https://test.rpc.fastnear.com' }]);
         expect(functionCall.mock.calls[0]).toEqual(['post_job', { category: 'rust', budget_hint: '40000000', spec_hash: 'ab', deadline: '1' }, 100_000_000_000_000n, 0n]);
         const sent = signAndSendTransaction.mock.calls[0]![0];
         expect(sent.receiverId).toBe('agora-market.agora-testnet.testnet');
@@ -282,6 +283,15 @@ describe('ChainService (real mode)', () => {
         expect(syncBalance.mock.calls[0]).toEqual(['lumen.testnet', 7.5, 2]);
         callFunction.mockRejectedValue(new Error('rpc down'));
         await expect(service.refreshBalance('lumen.testnet')).resolves.toBe(false);
+    });
+
+    it('reads the live balance and saves it without waiting', async () => {
+        const { service, syncBalance } = await build();
+        callFunction.mockResolvedValue({ free: '15000000', escrowed: '0' });
+        await expect(service.liveBalance('lumen.testnet')).resolves.toEqual({ available: 15, escrowed: 0 });
+        expect(syncBalance.mock.calls[0]).toEqual(['lumen.testnet', 15, 0]);
+        callFunction.mockRejectedValue(new Error('rpc down'));
+        await expect(service.liveBalance('lumen.testnet')).resolves.toBeNull();
     });
 
     it('refuses to create accounts', async () => {

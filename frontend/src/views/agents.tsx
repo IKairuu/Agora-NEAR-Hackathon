@@ -138,7 +138,13 @@ export function Wallet() {
   const [d, c] = usd(total).split('.');
   const mock = !s.live || s.chain?.mode !== 'real';
   const hist: [IconName, string, string, string, string, string][] = [];
-  /* the sample history belongs to the demo account; a real wallet has no history endpoint yet */
+  /* the sample history belongs to the demo account; a signed-in account shows its own transactions from the backend */
+  const IN = new Set(['deposit', 'refund_milestone', 'refund_expired', 'return_stake']);
+  const OUT = new Set(['withdraw', 'starter_stake']);
+  const itemIcon = (m: string): IconName => (IN.has(m) || (m === 'ft_transfer_call') ? 'down' : OUT.has(m) ? 'up' : m === 'fund_job' ? 'lock' : 'check');
+  const sign = (it: { method: string; label: string }) => (IN.has(it.method) || it.label.startsWith('Deposit') ? '+' : OUT.has(it.method) || it.label.startsWith('Withdraw') ? '−' : '');
+  const when = (iso: string) => { const d = new Date(iso); return Number.isNaN(d.getTime()) ? '' : d.toLocaleString([], { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }); };
+  const realTx = (h: string | null) => Boolean(h && !h.startsWith('mock-'));
   if (!s.live) {
     if (s.stage >= 7) hist.push(['up', 'Released to ' + hb(s).name, `${JOB.id}, from Protected payment`, '−' + usd(hPrice(s)), '16:31', '9xQe…f2A']);
     if (s.stage >= 5) hist.push(['lock', 'Moved to Protected payment', JOB.id, usd(hPrice(s)), '16:12', '4Lmc…a71']);
@@ -150,8 +156,9 @@ export function Wallet() {
         <div className="wal-cards">
           <section className="wal-card panel" aria-labelledby="wal-budget">
             <span className="lbl" id="wal-budget">Agent budget <span className="tag">in AGORA</span></span>
-            <span className="total num">${d}<span className="c">.{c}</span></span>
-            <span className="sub">Free {usd(free(s))} · Locked in jobs {usd(escrow(s))}</span>
+            {s.live && !s.money
+              ? <><span className="total num loading" aria-busy="true">$—</span><span className="sub">Loading your balance…</span></>
+              : <><span className="total num">${d}<span className="c">.{c}</span></span><span className="sub">Free {usd(free(s))} · Locked in jobs {usd(escrow(s))}</span></>}
             <p className="note">{mock ? 'Test money: the server runs in mock mode, so nothing here is on chain.' : 'Your agents can spend this, only inside your limits.'}</p>
             <div className="wal-acts two">
               <button className="pri" onClick={act.addfunds}><i><Icon name="plus" /></i>Add funds</button>
@@ -164,7 +171,8 @@ export function Wallet() {
             {s.walletBal ? <>
               <span className="total sm num">{s.walletBal.usdc === null ? '—' : usd(s.walletBal.usdc)} <span className="c">USDC</span></span>
               <span className="sub">{s.walletBal.near.toFixed(2)} NEAR for fees</span>
-            </> : <span className="sub">{s.live ? 'Balances show here once your wallet is linked.' : 'Sample data: your own wallet shows here after you sign in.'}</span>}
+            </> : <span className="sub">{!s.live ? 'Sample data: your own wallet shows here after you sign in.' : !ME.acct ? 'Balances show here once your wallet is linked.' : s.walletErr ? 'Could not reach the NEAR network.' : 'Loading your wallet…'}</span>}
+            {s.live && s.walletErr && <button className="btn sm" onClick={() => void loadWalletBalances()}>Retry</button>}
             <p className="note">Only you can spend this. Agents can't touch it.</p>
             {s.live && s.walletBal && s.chain?.usdc && s.chain.network === 'testnet' && <button className="btn sm" disabled={faucetBusy} aria-busy={faucetBusy} onClick={() => { setFaucetBusy(true); void liveFaucet().finally(() => setFaucetBusy(false)); }}><Icon name="plus" />{faucetBusy ? 'Waiting for your wallet…' : 'Get 50 test USDC'}</button>}
             {s.live && <button className="lk small" onClick={() => setState({ modal: { kind: 'linkwallet' } })}><Icon name="wallet" />{s.walletBal ? 'Link a different wallet' : 'Link your own NEAR wallet'}</button>}
@@ -186,7 +194,18 @@ export function Wallet() {
           </div>
         ) : (
           <div className="panel">
-            {!hist.length && <div className="panel-b"><div className="empty"><Icon name="wallet" /><b>No transactions to show yet</b><span>Deposits, protected payments and releases on this account appear here.</span></div></div>}
+            {s.live && s.walletItems.map((it) => (
+              <div key={it.id} className="asset">
+                <span className="tok lock"><Icon name={itemIcon(it.method)} /></span>
+                <div>
+                  <b style={{ fontWeight: 500 }}>{it.label}</b>{it.status !== 'success' && it.status !== 'confirmed' && <span className={`pill ${it.error ? 'block' : 'hold'}`} style={{ marginLeft: 8 }}>{it.error ? 'Refused' : it.status}</span>}
+                  <div className="muted xsmall">{[it.job, when(it.at)].filter(Boolean).join(', ')}{realTx(it.txHash) && it.explorer ? <>, <a className="mono" href={it.explorer} target="_blank" rel="noreferrer">tx {it.txHash!.slice(0, 4)}…{it.txHash!.slice(-4)}</a></> : null}</div>
+                  {it.error && <div className="muted xsmall">{it.error}</div>}
+                </div>
+                <div className="v"><b>{it.amount === null ? '' : `${sign(it)}${usd(it.amount)}`}</b><span className="muted xsmall">{it.amount === null ? '' : 'USDC'}</span></div>
+              </div>
+            ))}
+            {!hist.length && !(s.live && s.walletItems.length) && <div className="panel-b"><div className="empty"><Icon name="wallet" /><b>No transactions to show yet</b><span>Deposits, protected payments and releases on this account appear here.</span></div></div>}
             {hist.map((h) => <div key={h[1]} className="asset"><span className="tok lock"><Icon name={h[0]} /></span><div><b style={{ fontWeight: 500 }}>{h[1]}</b><div className="muted xsmall">{h[2]}, {h[4]}, tx <span className="mono">{h[5]}</span></div></div><div className="v"><b>{h[3]}</b><span className="muted xsmall">USDC</span></div></div>)}
           </div>
         )}

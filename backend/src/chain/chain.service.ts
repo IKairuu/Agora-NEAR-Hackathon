@@ -132,7 +132,7 @@ export class ChainService {
     private readonly mode = process.env['AGORA_CHAIN_MODE'] ?? 'mock';
     private readonly network = process.env['NEAR_NETWORK'] ?? 'testnet';
     private readonly contractId = process.env['AGORA_CONTRACT_ID'] || 'agora-market.agora-testnet.testnet';
-    private readonly rpcUrl = process.env['NEAR_RPC_URL'] || `https://rpc.${process.env['NEAR_NETWORK'] ?? 'testnet'}.near.org`;
+    private readonly rpcUrl = process.env['NEAR_RPC_URL'] || ((process.env['NEAR_NETWORK'] ?? 'testnet') === 'mainnet' ? 'https://free.rpc.fastnear.com' : 'https://test.rpc.fastnear.com');
     private counter = Math.floor(Date.now() / 1000);
     private provider: JsonRpcProvider | null = null;
     private readonly logger = new Logger(ChainService.name);
@@ -292,6 +292,22 @@ export class ChainService {
         const jobKey = jobKeyOf(call);
         if (jobKey) (await this.indexer.partiesOf(jobKey)).forEach((a) => accounts.add(a));
         for (const accountId of accounts) await this.refreshBalance(accountId);
+    }
+
+    async liveBalance(accountId: string): Promise<{ available: number; escrowed: number } | null> {
+        if (this.mode !== 'real') return null;
+        try {
+            const b = await this.view<{ free: string; escrowed: string }>('get_balance', { account_id: accountId });
+            const available = usdcOf(b.free);
+            const escrowed = usdcOf(b.escrowed);
+            this.indexer.syncBalance(accountId, available, escrowed).catch((e: unknown) => {
+                this.logger.warn(`Balance save for ${accountId} failed: ${e instanceof Error ? e.message : 'unknown error'}`);
+            });
+            return { available, escrowed };
+        } catch (e) {
+            this.logger.warn(`Balance read for ${accountId} failed: ${e instanceof Error ? e.message : 'unknown error'}`);
+            return null;
+        }
     }
 
     async refreshBalance(accountId: string): Promise<boolean> {

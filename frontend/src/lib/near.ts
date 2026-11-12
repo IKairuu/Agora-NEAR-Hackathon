@@ -139,26 +139,26 @@ export const sendCalls = (to: string, amount: number): WalletCall[] => [
   { method: 'ft_transfer', args: { receiver_id: to, amount: usdcUnits(amount), memo: 'Sent from AGORA' }, tgas: 30, deposit: ONE_YOCTO },
 ];
 
-/** The public RPC. Reading balances does not need the wallet library, so it is not loaded for this. */
-const RPC_URL = (import.meta.env.VITE_NEAR_RPC_URL as string | undefined) || `https://rpc.${NEAR_NETWORK}.near.org`;
+/** A public RPC (FastNEAR; rpc.<network>.near.org is deprecated and rate-limited). Reading balances does not need the wallet library. */
+const RPC_URL = (import.meta.env.VITE_NEAR_RPC_URL as string | undefined) || (NEAR_NETWORK === 'mainnet' ? 'https://free.rpc.fastnear.com' : 'https://test.rpc.fastnear.com');
 
 async function rpcQuery<T>(params: Record<string, unknown>): Promise<T> {
   const res = await fetch(RPC_URL, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 'agora', method: 'query', params: { finality: 'final', ...params } }),
+    body: JSON.stringify({ jsonrpc: '2.0', id: 'agora', method: 'query', params: { finality: 'optimistic', ...params } }),
   });
   const data = (await res.json()) as { result?: T & { error?: string }; error?: { message?: string } };
   if (!data.result || data.result.error) throw new Error(data.error?.message ?? data.result?.error ?? 'RPC error');
   return data.result;
 }
 
-/** What the account holds in its own wallet, read from the chain: USDC (null if no token is set) and NEAR. */
+/** What the account holds in its own wallet, read from the chain: USDC (null if no token is set) and NEAR. Throws if the RPC fails. */
 export async function walletBalances(accountId: string, usdc: string | null): Promise<{ usdc: number | null; near: number }> {
   const near = rpcQuery<{ amount: string }>({ request_type: 'view_account', account_id: accountId })
-    .then((r) => Number(BigInt(r.amount) / 10n ** 18n) / 1_000_000, () => 0);
+    .then((r) => Number(BigInt(r.amount) / 10n ** 18n) / 1_000_000);
   const token = usdc
     ? rpcQuery<{ result: number[] }>({ request_type: 'call_function', account_id: usdc, method_name: 'ft_balance_of', args_base64: btoa(JSON.stringify({ account_id: accountId })) })
-      .then((r) => Number(JSON.parse(new TextDecoder().decode(new Uint8Array(r.result))) as string) / 1_000_000, () => 0)
+      .then((r) => Number(JSON.parse(new TextDecoder().decode(new Uint8Array(r.result))) as string) / 1_000_000)
     : Promise.resolve(null);
   const [n, u] = await Promise.all([near, token]);
   return { usdc: u, near: n };
