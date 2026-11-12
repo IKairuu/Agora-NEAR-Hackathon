@@ -8,7 +8,7 @@ import { JobsService } from './jobs.service';
 
 describe('JobsController', () => {
     it('passes the token and inputs through to the service', async () => {
-        const service = { getJobs: jest.fn().mockResolvedValue([]), getJob: jest.fn().mockResolvedValue({}), publishJob: jest.fn().mockResolvedValue({}) };
+        const service = { getJobs: jest.fn().mockResolvedValue([]), getJob: jest.fn().mockResolvedValue({}), publishJob: jest.fn().mockResolvedValue({}), deleteJob: jest.fn().mockResolvedValue({}), cancelJob: jest.fn().mockResolvedValue({}) };
         const module = await Test.createTestingModule({
             controllers: [JobsController],
             providers: [{ provide: JobsService, useValue: service }],
@@ -20,5 +20,9 @@ describe('JobsController', () => {
         expect(service.getJob).toHaveBeenCalledWith('Bearer t', 'J-1042');
         await controller.publishJob('Bearer t', { id: 'J-1042' });
         expect(service.publishJob).toHaveBeenCalledWith('Bearer t', { id: 'J-1042' });
+        await controller.deleteJob('Bearer t', 'J-1042');
+        expect(service.deleteJob).toHaveBeenCalledWith('Bearer t', 'J-1042');
+        await controller.cancelJob('Bearer t', { id: 'J-1042' });
+        expect(service.cancelJob).toHaveBeenCalledWith('Bearer t', { id: 'J-1042' });
     });
 });

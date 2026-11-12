@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
 import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
@@ -63,6 +63,16 @@ export const ago = (date: Date | null, now = new Date()): string => {
     return days === 1 ? 'yesterday' : `${days} days ago`;
 };
 
+/**
+ * What the buyer may do to take a job away: delete a draft, cancel an open job before an offer is accepted.
+ * Once a seller is agreed or the payment is funded, neither: problems go through the dispute flow.
+ */
+export const removalOf = (row: Pick<JobRow, 'status' | 'acceptedBidId'>): 'delete' | 'cancel' | null => {
+    if (row.status === 'draft') return 'delete';
+    if ((row.status === 'open' || row.status === 'negotiating') && !row.acceptedBidId) return 'cancel';
+    return null;
+};
+
 const budgetOf = (row: JobRow): string =>
     row.agreedPrice !== null ? Number(row.agreedPrice).toFixed(2) : (row.budgetLabel ?? '');
 
@@ -89,10 +99,12 @@ export const toOtherJob = (row: JobRow) => {
         grp: info.grp,
         posted: row.visibility === 'public' && row.status !== 'draft',
         href: `/job?id=${row.ref}`,
+        remove: removalOf(row),
     };
 };
 
-export const toJob = (row: JobRow) => {
+/** `viewer`: who asks. Only the job's buyer is told whether it can be deleted or cancelled. */
+export const toJob = (row: JobRow, viewer?: string) => {
     const info = stageOf(statusOf(row));
     const spec = row.acceptanceSpecs[0];
     return {
@@ -113,6 +125,7 @@ export const toJob = (row: JobRow) => {
         visibility: row.visibility,
         seller: row.seller?.displayName ?? '',
         offers: row._count.bids,
+        remove: viewer !== undefined && viewer === row.buyerId ? removalOf(row) : null,
     };
 };
 
@@ -155,7 +168,39 @@ export class JobsService {
         const authId = await this.authId(token);
         const row = await this.jobsRepository.getJob(authId, this.jobKey(id));
         if (!row) throw new NotFoundException('Job not found');
-        return toJob(row);
+        return toJob(row, authId);
+    }
+
+    /** Deletes a draft. Other users' jobs are not found; posted, agreed or funded jobs are refused. */
+    async deleteJob(token: string, id: string) {
+        const authId = await this.authId(token);
+        const row = await this.jobsRepository.getOwnedJob(authId, this.jobKey(id));
+        if (!row) throw new NotFoundException('Job not found');
+        const removal = removalOf(row);
+        if (removal === 'cancel') throw new BadRequestException('This job is already posted. Cancel it instead of deleting it.');
+        if (removal !== 'delete') throw new BadRequestException(this.lockedMessage(row.status));
+        const count = await this.jobsRepository.deleteDraft(authId, row.id);
+        if (count === 0) throw new ConflictException('This job changed while you were deleting it. Reload and try again.');
+        return { message: 'Job Successfully Deleted', id: row.id, ref: row.ref };
+    }
+
+    /** Cancels an open job before any offer is accepted. It leaves Open jobs and stays in the buyer's history. */
+    async cancelJob(token: string, body: PublishJob) {
+        const authId = await this.authId(token);
+        const row = await this.jobsRepository.getOwnedJob(authId, this.jobKey(body.id));
+        if (!row) throw new NotFoundException('Job not found');
+        const removal = removalOf(row);
+        if (removal === 'delete') throw new BadRequestException('This job is still a draft. Delete it instead.');
+        if (removal !== 'cancel') throw new BadRequestException(this.lockedMessage(row.status));
+        const count = await this.jobsRepository.cancelJob(authId, row.id);
+        if (count === 0) throw new ConflictException('A seller was agreed while you were cancelling. Reload to see the job.');
+        return { message: 'Job Successfully Cancelled', id: row.id, ref: row.ref };
+    }
+
+    private lockedMessage(status: string): string {
+        if (status === 'cancelled') return 'This job is already cancelled';
+        if (['released', 'settled', 'refunded', 'expired'].includes(status)) return 'This job is finished and stays in your history';
+        return 'A seller is agreed or the payment is protected, so this job cannot be deleted. Open a dispute if something is wrong.';
     }
 
     async publishJob(token: string, body: PublishJob) {

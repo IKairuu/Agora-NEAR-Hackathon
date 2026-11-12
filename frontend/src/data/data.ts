@@ -26,6 +26,8 @@ export interface Reviewer { id: string; model: string; att: string }
 export interface OtherJob {
   id: string; title: string; cat: string; budget: string; status: [string, string]; who: string; note?: string;
   due?: string; at?: number; grp?: string; ev?: [string, string, string][]; href?: string; posted?: boolean;
+  /** Live: what the buyer may do to take the job away, as the API decides (a draft is deleted, an open job cancelled). */
+  remove?: 'delete' | 'cancel' | null;
 }
 export interface Order { id: string; buyer: string; title: string; cat: string; price: string; st: number; note: string }
 export type ThreadFrom = 'agent' | 'them' | 'me' | 'sys';

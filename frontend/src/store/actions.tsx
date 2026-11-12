@@ -201,7 +201,7 @@ function endTour(finished: boolean) {
   });
   resetRequest();
   if (guest) { go('home'); toast(finished ? 'Demo finished. Sign in to post your own job.' : 'Demo closed. You are not signed in.'); return; }
-  if (snap.user && authConfigured) void goLive();
+  if (snap.user && authConfigured) void goLive({ keepMode: true });
 
   if (finished) toast('Demo finished. Everything stays clickable.');
 }
@@ -213,7 +213,7 @@ function endTour(finished: boolean) {
  */
 export function resetRequest(keepDraft = false) {
   setState((s) => ({
-    asked: false, askText: '', draft: keepDraft ? s.draft : '', extra: [], bidsShown: 0, pendingAsk: false, followUps: [],
+    asked: false, askText: '', draft: keepDraft ? s.draft : '', extra: [], bidsShown: 0, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
     offerSt: '', preNeg: false, declined: [], streamId: s.streamId + 1,
   }));
 }
@@ -570,9 +570,12 @@ export function initAuth(): () => void {
         return;
       }
       const fresh = getState().user?.id !== user.id && getState().tour < 0;
+      /* Supabase also sends SIGNED_IN when a tab regains focus: the same user, already live, needs nothing */
+      if (!fresh && event === 'SIGNED_IN' && getState().live) return;
       setState((s) => ({ user, signVia: s.signVia || user.via, stage: fresh ? 1 : Math.max(s.stage, 1), role: s.role || user.onboarding.role || null }));
       if (fresh) resetRequest();
-      if (getState().tour < 0) void goLive();
+      /* a reload or a tab coming back keeps the mode this device shows; another account uses its own */
+      if (getState().tour < 0) void goLive({ keepMode: !fresh });
     }, 0);
   });
   return () => data.subscription.unsubscribe();
