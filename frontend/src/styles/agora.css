@@ -108,6 +108,9 @@ h1 { font-size: var(--text-2xl); } h2 { font-size: var(--text-xl); letter-spacin
 p { margin: 0; text-wrap: pretty; }
 a { color: inherit; text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
 button, input, select, textarea { font: inherit; color: inherit; }
+/* the open list of a native <select> takes its colours from the options: give them the theme's, so a transparent select (e.g. Sort by) stays readable in dark mode */
+select option, select optgroup { background-color: var(--color-card); color: var(--color-ink); }
+select option:disabled { color: var(--color-muted); }
 svg { display: block; }
 [hidden] { display: none !important; }
 .mono { font-family: var(--font-mono); font-size: 0.86em; letter-spacing: 0; }
@@ -232,6 +235,10 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.5; }
 .nav a.on { background: var(--color-paper-3); color: var(--color-ink); }
 .nav a.on svg { color: var(--color-accent); }
 .nav a .count { margin-left: auto; font-size: var(--text-2xs); background: var(--color-rule); padding: 1px var(--space-xs); border-radius: var(--radius-pill); color: var(--color-ink-2); }
+/* seller screens before a seller profile exists: visible, dimmed, with a lock; they lead to the seller setup */
+.nav a.locked { color: var(--color-muted); }
+.nav a.locked .count.lock { background: none; padding: 0; display: inline-flex; }
+.nav a.locked .count.lock svg { width: 13px; height: 13px; }
 .nav svg { width: 17px; height: 17px; flex: none; }
 .side-foot { margin-top: auto; display: flex; flex-direction: column; gap: var(--space-sm); padding: 0 var(--space-2xs); }
 .guard { border: 1px solid var(--color-rule); border-radius: 12px; padding: var(--space-sm); font-size: var(--text-xs); display: flex; flex-direction: column; gap: var(--space-2xs); color: var(--color-muted); }

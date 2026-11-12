@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, BIDS, gigBy, JOB, KICKOFF, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, THREADS, usd, type Order } from '../data/data';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { appDataLoaded, demoLoaded, goLive, isLive, leaveLive, liveAddFunds, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
+import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg, type State } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -160,6 +160,7 @@ export const TOUR: TourStep[] = [
 ];
 export function tourGo(i: number) {
   if (isLive()) { leaveLive(); toast('The demo tour uses sample data. Sign in again afterwards to see your own jobs.', 'hold'); }
+  else if (getState().restoring) leaveLive(); /* the account was still loading: drop it, the tour needs the demo story */
   const s = TOUR[i];
   setState((st) => ({ tour: i, stage: s.st, attack: null, voting: false, role: s.st >= 1 && !st.role ? 'hire' : st.role, tourMin: false, modal: null }));
   s.act?.();
@@ -474,7 +475,7 @@ export const act = {
     const s = getState();
     if (s.mode === m && route !== 'home') return;
     setState({ mode: m }); go(m === 'sell' ? (s.seller ? 'orders' : 'sell') : 'dash');
-    toast(m === 'sell' ? 'Switched to selling. Orders buyers sent you are here.' : 'Switched to buying.');
+    toast(m === 'sell' ? (s.seller ? 'Switched to selling. Orders buyers sent you are here.' : 'Switched to selling. Set up your seller profile to start getting orders.') : 'Switched to buying.');
   },
   fold: () => {
     // the page grows into the freed space, slid in with a FLIP transform
@@ -558,13 +559,15 @@ export function initAuth(): () => void {
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_OUT') { leaveLive(); setState({ user: null }); return; }
     /* a saved Google or GitHub sign-in whose Supabase session has expired: back to guest */
-    if (event === 'INITIAL_SESSION' && !session && getState().user) { setState({ stage: 0, user: null, role: null, signVia: '' }); return; }
+    if (event === 'INITIAL_SESSION' && !session && getState().user) { setState({ stage: 0, user: null, role: null, signVia: '' }); stopRestoring(); return; }
     if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;
     const user = userOf(session);
     setTimeout(() => {
       const pending = takePending();
       if (pending) {
         setState({ user, signVia: pending.via, after: pending.after, rolePick: pending.rolePick, tour: pending.tour, draft: pending.draft });
+        /* back from Google or GitHub: never show the demo account while this account loads */
+        beginRestoring();
         if (user.onboarding.wallet) act.signin2(); else act.walletstep();
         void goLive();
         return;
@@ -575,7 +578,7 @@ export function initAuth(): () => void {
       setState((s) => ({ user, signVia: s.signVia || user.via, stage: fresh ? 1 : Math.max(s.stage, 1), role: s.role || user.onboarding.role || null }));
       if (fresh) resetRequest();
       /* a reload or a tab coming back keeps the mode this device shows; another account uses its own */
-      if (getState().tour < 0) void goLive({ keepMode: !fresh });
+      if (getState().tour < 0) { beginRestoring(); void goLive({ keepMode: !fresh }); }
     }, 0);
   });
   return () => data.subscription.unsubscribe();

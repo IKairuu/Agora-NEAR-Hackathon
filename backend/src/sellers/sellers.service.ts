@@ -25,13 +25,20 @@ export const toSellerDir = (row: SellerDirRow, stats: ReputationStats) => {
         buyers: rep?.distinctBuyers ?? 0,
         pass: rep?.firstTryPassRate === null || rep?.firstTryPassRate === undefined ? 0 : Math.round(Number(rep.firstTryPassRate)),
         volume: rep ? Number(rep.settledVolume) : 0,
-        from: prices.length ? Math.min(...prices) : row.priceFloor === null ? 0 : Number(row.priceFloor),
+        from: prices.length ? Math.min(...prices) : row.priceFloor !== null ? Number(row.priceFloor) : profile?.priceFrom != null ? Number(profile.priceFrom) : 0,
         acct: row.nearAccountId,
         about: profile?.about ?? row.headline ?? '',
         langs: profile?.langs.length ? profile.langs.join(', ') : 'English',
         online: profile?.online ?? false,
         gig: row.services[0]?.id ?? '',
         days: days.length ? Math.min(...days) : profile?.days ?? 1,
+        /* what the seller wrote in their profile, for buyers on the profile page */
+        headline: profile?.headline || row.headline || '',
+        country: profile?.country ?? '',
+        skills: profile?.skills ?? [],
+        categories: profile?.categories ?? [],
+        terms: profile?.deliveryTerms ?? '',
+        github: profile?.githubUsername ?? '',
     };
 };
 
