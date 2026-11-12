@@ -291,13 +291,18 @@ export class ChainService {
         const accounts = new Set<string>([ownerOf(call.signer)]);
         const jobKey = jobKeyOf(call);
         if (jobKey) (await this.indexer.partiesOf(jobKey)).forEach((a) => accounts.add(a));
-        for (const accountId of accounts) {
-            try {
-                const b = await this.view<{ free: string; escrowed: string }>('get_balance', { account_id: accountId });
-                await this.indexer.syncBalance(accountId, usdcOf(b.free), usdcOf(b.escrowed));
-            } catch (e) {
-                this.logger.warn(`Balance sync for ${accountId} failed: ${e instanceof Error ? e.message : 'unknown error'}`);
-            }
+        for (const accountId of accounts) await this.refreshBalance(accountId);
+    }
+
+    async refreshBalance(accountId: string): Promise<boolean> {
+        if (this.mode !== 'real') return false;
+        try {
+            const b = await this.view<{ free: string; escrowed: string }>('get_balance', { account_id: accountId });
+            await this.indexer.syncBalance(accountId, usdcOf(b.free), usdcOf(b.escrowed));
+            return true;
+        } catch (e) {
+            this.logger.warn(`Balance sync for ${accountId} failed: ${e instanceof Error ? e.message : 'unknown error'}`);
+            return false;
         }
     }
 

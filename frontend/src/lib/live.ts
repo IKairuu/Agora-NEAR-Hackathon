@@ -805,6 +805,23 @@ export async function liveWalletSendUsdc(to: string, amount: number): Promise<bo
   }
 }
 
+/** Testnet only: the test USDC token's faucet registers the wallet and gives it 50 USDC, once a day. Signed in the wallet. */
+export async function liveFaucet(): Promise<boolean> {
+  const usdc = getState().chain?.usdc;
+  if (!usdc) { toast('The USDC token is not set on the server (AGORA_USDC_CONTRACT_ID).', 'block'); return false; }
+  try {
+    const hash = await walletSend(ME.acct, usdc, [{ method: 'faucet', args: {}, tgas: 30, deposit: 0n }]);
+    toast(`50 test USDC added to your NEAR wallet (tx ${shortHash(hash)}). Now use Add funds to give your agents a budget.`);
+    await loadWalletBalances();
+    return true;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'The wallet did not send it';
+    const wait = /try again in (\d+) minutes/.exec(msg);
+    toast(wait ? `You already claimed test USDC today. Try again in ${wait[1]} minutes.` : msg, 'block');
+    return false;
+  }
+}
+
 /** Mock chain only: adds test USDC so jobs can be funded. */
 export async function liveAddFunds(): Promise<void> {
   const amount = Number((window.prompt('Add how many test USDC?', '100') ?? '').replace(/[^\d.]/g, ''));

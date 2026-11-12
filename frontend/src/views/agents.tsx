@@ -1,7 +1,7 @@
 import { agentPick, ATTACK, CATS, HELD, JOB, ME, usd } from '../data/data';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { act } from '../store/actions';
-import { loadWalletBalances } from '../lib/live';
+import { liveFaucet, loadWalletBalances } from '../lib/live';
 import { escrow, free, hb, hPrice, paused, setState, useApp } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
 import { Check, Feed, Gate, Head, RLink, SignInButton, T } from '../ui/parts';
@@ -131,10 +131,12 @@ export function Mandate() {
 /* ---------------- wallet, simple like a NEAR wallet ---------------- */
 export function Wallet() {
   const s = useApp();
+  const [faucetBusy, setFaucetBusy] = useState(false);
   useEffect(() => { if (s.live) void loadWalletBalances(); }, [s.live]);
   if (s.stage < 1) return <Shell cur="wallet"><Head title="Wallet" /><Gate msg="Sign in to see your wallet"><SignInButton /></Gate></Shell>;
   const total = free(s) + escrow(s);
   const [d, c] = usd(total).split('.');
+  const mock = !s.live || s.chain?.mode !== 'real';
   const hist: [IconName, string, string, string, string, string][] = [];
   /* the sample history belongs to the demo account; a real wallet has no history endpoint yet */
   if (!s.live) {
@@ -145,19 +147,32 @@ export function Wallet() {
   return (
     <Shell cur="wallet">
       <div className="wal">
-        <div className="wal-card panel">
-          <button className="acct" onClick={act.copyacct} aria-label="Copy account name">{ME.acct}<Icon name="copy" /></button>
-          {s.live && <button className="lk small" onClick={() => setState({ modal: { kind: 'linkwallet' } })}><Icon name="wallet" />Link your own NEAR wallet</button>}
-          <span className="lbl">Total balance</span>
-          <span className="total num">${d}<span className="c">.{c}</span></span>
-          <span className="sub">{usd(free(s))} available{escrow(s) ? `, ${usd(escrow(s))} protected` : ''}</span>
-          {s.live && s.chain && <span className="sub">{s.chain.mode === 'real' ? 'USDC held by the AGORA contract' : 'Test money: the server runs in mock mode'}{s.walletBal ? ` · in your NEAR wallet: ${s.walletBal.usdc === null ? '' : `${usd(s.walletBal.usdc)} USDC, `}${s.walletBal.near.toFixed(2)} NEAR` : ''}</span>}
-          <div className="wal-acts">
-            <button className="pri" onClick={act.addfunds}><i><Icon name="plus" /></i>Add funds</button>
-            <button onClick={act.send}><i><Icon name="up" /></i>Send</button>
-            <button onClick={act.receive}><i><Icon name="down" /></i>Receive</button>
-            <button onClick={act.withdrawme}><i><Icon name="out" /></i>Withdraw</button>
-          </div>
+        <div className="wal-cards">
+          <section className="wal-card panel" aria-labelledby="wal-budget">
+            <span className="lbl" id="wal-budget">Agent budget <span className="tag">in AGORA</span></span>
+            <span className="total num">${d}<span className="c">.{c}</span></span>
+            <span className="sub">Free {usd(free(s))} · Locked in jobs {usd(escrow(s))}</span>
+            <p className="note">{mock ? 'Test money: the server runs in mock mode, so nothing here is on chain.' : 'Your agents can spend this, only inside your limits.'}</p>
+            <div className="wal-acts two">
+              <button className="pri" onClick={act.addfunds}><i><Icon name="plus" /></i>Add funds</button>
+              <button onClick={act.withdrawme}><i><Icon name="out" /></i>Withdraw</button>
+            </div>
+          </section>
+          <section className="wal-card panel" aria-labelledby="wal-own">
+            <span className="lbl" id="wal-own">Your NEAR wallet</span>
+            {ME.acct && <button className="acct" onClick={act.copyacct} aria-label="Copy account name">{ME.acct}<Icon name="copy" /></button>}
+            {s.walletBal ? <>
+              <span className="total sm num">{s.walletBal.usdc === null ? '—' : usd(s.walletBal.usdc)} <span className="c">USDC</span></span>
+              <span className="sub">{s.walletBal.near.toFixed(2)} NEAR for fees</span>
+            </> : <span className="sub">{s.live ? 'Balances show here once your wallet is linked.' : 'Sample data: your own wallet shows here after you sign in.'}</span>}
+            <p className="note">Only you can spend this. Agents can't touch it.</p>
+            {s.live && s.walletBal && s.chain?.usdc && s.chain.network === 'testnet' && <button className="btn sm" disabled={faucetBusy} aria-busy={faucetBusy} onClick={() => { setFaucetBusy(true); void liveFaucet().finally(() => setFaucetBusy(false)); }}><Icon name="plus" />{faucetBusy ? 'Waiting for your wallet…' : 'Get 50 test USDC'}</button>}
+            {s.live && <button className="lk small" onClick={() => setState({ modal: { kind: 'linkwallet' } })}><Icon name="wallet" />{s.walletBal ? 'Link a different wallet' : 'Link your own NEAR wallet'}</button>}
+            <div className="wal-acts two">
+              <button onClick={act.send}><i><Icon name="up" /></i>Send</button>
+              <button onClick={act.receive}><i><Icon name="down" /></i>Receive</button>
+            </div>
+          </section>
         </div>
         <div className="tabs" role="tablist">
           <button role="tab" aria-selected={s.walTab === 'assets'} className={s.walTab === 'assets' ? 'on' : ''} onClick={() => setState({ walTab: 'assets' })}>Assets</button>

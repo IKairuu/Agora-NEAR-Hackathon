@@ -31,6 +31,7 @@ describe('WalletService', () => {
             isMock: jest.fn().mockReturnValue(true),
             indexTx: jest.fn().mockResolvedValue({ indexed: true, ok: true, method: 'ft_transfer_call', reason: null }),
             verifyWalletSignature: jest.fn().mockResolvedValue(undefined),
+            refreshBalance: jest.fn().mockResolvedValue(false),
         } as unknown as jest.Mocked<ChainService>;
         admin = {
             getUserEmail: jest.fn().mockResolvedValue('kai@example.com'),
@@ -53,6 +54,7 @@ describe('WalletService', () => {
         expect(w.items[0]).toMatchObject({ label: 'Moved to Protected payment', job: 'J-1042', amount: 32 });
         expect(w.items[1]).toMatchObject({ label: 'Deposit', amount: 10 });
         expect(repo.getActivity.mock.calls[0]).toEqual([USER, ['lumen.testnet', 'agents.lumen.testnet']]);
+        expect(chain.refreshBalance.mock.calls[0]).toEqual(['lumen.testnet']);
     });
 
     it('withdraws with the full-access key and one yocto', async () => {

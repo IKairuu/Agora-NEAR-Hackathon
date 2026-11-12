@@ -399,7 +399,7 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.5; }
 .payslip .amt .u { font-size: 0.45em; color: var(--color-muted); margin-left: var(--space-2xs); letter-spacing: 0; }
 
 /* ---------- wallet, NEAR style ---------- */
-.wal { width: min(600px, 100%); margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-md); }
+.wal { width: min(880px, 100%); margin: 0 auto; display: flex; flex-direction: column; gap: var(--space-md); }
 .wal-card { border-radius: 24px; padding: var(--space-lg) var(--space-lg) var(--space-lg); display: flex; flex-direction: column; align-items: center; gap: var(--space-2xs); text-align: center; position: relative; overflow: hidden; }
 .wal-card .acct { display: inline-flex; align-items: center; gap: var(--space-xs); min-height: 32px; padding: 0 var(--space-sm); border-radius: var(--radius-pill); border: 1px solid var(--color-rule-2); font-size: var(--text-xs); background: none; cursor: pointer; color: var(--color-ink-2); }
 .wal-card .acct:hover { border-color: var(--color-muted); color: var(--color-ink); }
@@ -417,6 +417,12 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.5; }
 .wal-acts button:active i { transform: scale(0.96); }
 .wal-acts button:focus-visible { outline: 2px solid var(--color-focus); }
 .wal-acts .ic { width: 20px; height: 20px; }
+.wal-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(300px, 100%), 1fr)); gap: var(--space-md); align-items: stretch; }
+.wal-card .lbl .tag { font-size: var(--text-xs); padding: 1px 8px; border-radius: var(--radius-pill); background: var(--color-paper-3); color: var(--color-ink-2); margin-left: 4px; }
+.wal-card .total.sm { font-size: clamp(2rem, 2vw + 1rem, 2.5rem); }
+.wal-card .note { font-size: var(--text-xs); color: var(--color-ink-2); margin: var(--space-xs) 0 0; max-width: 32ch; }
+.wal-card .lk.small { margin-top: var(--space-2xs); }
+.wal-acts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: auto; padding-top: var(--space-md); }
 .asset { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-sm); align-items: center; padding: var(--space-sm) var(--space-md); border-bottom: 1px solid var(--color-rule); }
 .asset:last-child { border-bottom: 0; }
 .asset .tok { width: 40px; height: 40px; border-radius: 50%; display: grid; place-items: center; font-weight: 600; font-size: var(--text-xs); background: var(--color-info-soft); color: var(--color-info); }

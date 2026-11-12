@@ -68,6 +68,7 @@ export class WalletService {
         const account = await this.walletRepository.getAccount(authId);
         const acct = account?.nearAccountId ?? '';
         const agents = account?.agentsAccountId ?? '';
+        if (acct) await this.chainService.refreshBalance(acct);
         const [balance, activity] = await Promise.all([
             acct ? this.walletRepository.getBalance(acct) : Promise.resolve(null),
             this.walletRepository.getActivity(authId, [acct, agents].filter(Boolean)),

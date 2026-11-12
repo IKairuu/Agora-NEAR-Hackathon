@@ -105,6 +105,12 @@ describe('ChainService (mock mode)', () => {
         expect(decoded.receiver_id).toBe('agora-market.agora-testnet.testnet');
     });
 
+    it('keeps the database balance in mock mode', async () => {
+        const { service, syncBalance } = await build();
+        await expect(service.refreshBalance('lumen.testnet')).resolves.toBe(false);
+        expect(syncBalance.mock.calls).toHaveLength(0);
+    });
+
     it('does not index by hash in mock mode, because the mock already applied the call', async () => {
         const { service, applyCall } = await build();
         await expect(service.indexTx('ANY1', 'x.testnet')).resolves.toMatchObject({ indexed: false });
@@ -267,6 +273,15 @@ describe('ChainService (real mode)', () => {
         callFunction.mockResolvedValue({ free: '5', escrowed: '0' });
         await expect(service.view('get_balance', { account_id: 'lumen.testnet' })).resolves.toEqual({ free: '5', escrowed: '0' });
         expect(callFunction.mock.calls[0]).toEqual([{ contractId: 'agora-market.agora-testnet.testnet', method: 'get_balance', args: { account_id: 'lumen.testnet' } }]);
+    });
+
+    it('refreshes one balance from the contract', async () => {
+        const { service, syncBalance } = await build();
+        callFunction.mockResolvedValue({ free: '7500000', escrowed: '2000000' });
+        await expect(service.refreshBalance('lumen.testnet')).resolves.toBe(true);
+        expect(syncBalance.mock.calls[0]).toEqual(['lumen.testnet', 7.5, 2]);
+        callFunction.mockRejectedValue(new Error('rpc down'));
+        await expect(service.refreshBalance('lumen.testnet')).resolves.toBe(false);
     });
 
     it('refuses to create accounts', async () => {
