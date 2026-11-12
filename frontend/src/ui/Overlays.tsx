@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { DONE_JOBS, gigBy, ME, OTHER_JOBS, ROLES, usd, VIA } from '../data/data';
-import { act, orderAct, TOUR } from '../store/actions';
+import { act, go, orderAct, TOUR } from '../store/actions';
+import { liveRemoveJob } from '../lib/live';
 import { closeModal, free, hPrice, setState, useApp, useToasts } from '../store/store';
 import { authConfigured } from '../lib/supabase';
 import { GoogleIcon, Icon, Tile } from './icons';
@@ -199,6 +200,30 @@ function Unpause() {
   );
 }
 
+/** Confirm before a draft is deleted or an open job is cancelled. */
+function RemoveJob({ id, kind, title }: { id: string; kind: 'delete' | 'cancel'; title: string }) {
+  const [busy, setBusy] = useState(false);
+  const del = kind === 'delete';
+  const run = async () => {
+    setBusy(true);
+    const done = await liveRemoveJob(id, kind);
+    setBusy(false);
+    if (!done) return;
+    closeModal();
+    if (location.pathname === '/job' || location.pathname === '/ask') go('jobs');
+  };
+  return (
+    <Frame>
+      <h2>{del ? 'Delete this draft?' : 'Cancel this job?'}</h2>
+      <p><b>{title || id}</b> <span className="mono muted xsmall">{id}</span></p>
+      <p className="muted">{del
+        ? 'The request and its draft tests are removed for good. Nothing was posted or paid, so no seller sees it.'
+        : 'The job leaves Open jobs, offers still waiting are turned down, and any hire offer you sent is withdrawn. No payment was made. The job stays in your history as Cancelled.'}</p>
+      <div className="acts"><Cancel label={del ? 'Keep the draft' : 'Keep the job'} /><button className="btn danger" onClick={() => { void run(); }} disabled={busy}>{busy ? (del ? 'Deleting…' : 'Cancelling…') : del ? 'Delete draft' : 'Cancel job'}</button></div>
+    </Frame>
+  );
+}
+
 function RequestService() {
   const { svc } = useApp();
   const g = gigBy(svc);
@@ -278,6 +303,7 @@ export function ModalHost() {
     case 'reqsvc': return <RequestService />;
     case 'ojob': return <OtherJob id={modal.props?.id ?? ''} />;
     case 'offer': return <Offer id={modal.props?.id ?? ''} />;
+    case 'removejob': return <RemoveJob id={modal.props?.id ?? ''} kind={modal.props?.kind === 'delete' ? 'delete' : 'cancel'} title={modal.props?.title ?? ''} />;
     default: return null;
   }
 }
