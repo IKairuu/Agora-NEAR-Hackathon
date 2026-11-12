@@ -28,6 +28,9 @@ describe('MandatesService', () => {
         chain = {
             callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-set_mandate-2', explorer_url: '', result: null }),
             createAccount: jest.fn().mockResolvedValue({ account_id: 'agora-new.testnet', agents_account_id: 'agents.agora-new.testnet' }),
+            isMock: jest.fn().mockReturnValue(true),
+            view: jest.fn(),
+            walletChainInfo: jest.fn().mockReturnValue({ mode: 'real', network: 'testnet', contract: 'agora-market.testnet', usdc: null }),
         } as unknown as jest.Mocked<ChainService>;
         service = new MandatesService(repo, { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService, chain);
     });
@@ -66,5 +69,31 @@ describe('MandatesService', () => {
         await expect(service.pauseAgents('Bearer t')).rejects.toThrow('already paused');
         await expect(service.unpauseAgents('Bearer t')).resolves.toMatchObject({ paused: false });
         expect(chain.callAs.mock.calls[1]).toEqual(['owner', 'lumen.testnet', 'unpause', {}, '1']);
+    });
+
+    it('checks limits for a wallet to sign without signing anything', async () => {
+        repo.getMandate.mockResolvedValue(profile(saved()));
+        await expect(service.checkMandate('Bearer t', { per_job_cap: 10, daily_cap: 50, new_seller_cap: 10 } as never)).resolves.toMatchObject({
+            signer: 'lumen.testnet', contract: 'agora-market.testnet', method: 'set_mandate',
+            args: { per_job_cap: '10000000', daily_cap: '50000000', new_seller_cap: '10000000', review_timeout_hours: 6, categories: ['rust'], strict: false, approved_sellers: [] },
+        });
+        await expect(service.checkMandate('Bearer t', { new_seller_cap: 25, per_job_cap: 10 } as never)).rejects.toThrow('above the per-job cap');
+        expect(chain.callAs.mock.calls).toHaveLength(0);
+        expect(chain.createAccount.mock.calls).toHaveLength(0);
+    });
+
+    it('asks for a linked wallet before checking limits to sign', async () => {
+        repo.getMandate.mockResolvedValue({ nearAccountId: null, agentsAccountId: null, mandate: null, approvedSellers: [] } as never);
+        await expect(service.checkMandate('Bearer t', { daily_cap: 50 } as never)).rejects.toThrow('Link your NEAR wallet first');
+    });
+
+    it('shows the limits from the contract in real mode, and the saved copy if the read fails', async () => {
+        chain.isMock.mockReturnValue(false);
+        repo.getMandate.mockResolvedValue(profile(saved()));
+        chain.view.mockResolvedValueOnce({ per_job_cap: '10000000', daily_cap: '50000000', new_seller_cap: '10000000', review_timeout_hours: 12, categories: ['rust', 'fe'], strict: true, paused: true });
+        await expect(service.getMandate('Bearer t')).resolves.toMatchObject({ perJobCap: 10, dailyCap: 50, newSellerCap: 10, reviewWindowHours: 12, categories: ['rust', 'fe'], strict: true, paused: true });
+        expect(chain.view).toHaveBeenCalledWith('get_mandate', { account_id: 'lumen.testnet' });
+        chain.view.mockRejectedValueOnce(new Error('rpc down'));
+        await expect(service.getMandate('Bearer t')).resolves.toMatchObject({ perJobCap: 40, dailyCap: 100, paused: false });
     });
 });

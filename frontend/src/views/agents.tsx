@@ -2,6 +2,7 @@ import { agentPick, ATTACK, CATS, HELD, JOB, ME, usd } from '../data/data';
 import { useEffect, useState } from 'react';
 import { act } from '../store/actions';
 import { liveFaucet, loadWalletBalances } from '../lib/live';
+import { accessKeys, type AccessKeyRow } from '../lib/near';
 import { escrow, free, hb, hPrice, paused, setState, useApp } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
 import { Check, Feed, Gate, Head, RLink, SignInButton, T } from '../ui/parts';
@@ -76,8 +77,20 @@ export function Agents() {
 }
 
 /* ---------------- limits and keys ---------------- */
+const money = (n: number) => `${n.toFixed(2)} USDC`;
+
 export function Mandate() {
   const s = useApp();
+  const lim = s.live ? s.limits : null;
+  // When the saved limits arrive (or change after a save), show them: the boxes are remounted with the new values,
+  // and the category chips and strict switch follow the saved mandate.
+  const limKey = lim ? JSON.stringify(lim) : 'sample';
+  useEffect(() => {
+    if (!lim) return;
+    setState({ cats: Object.fromEntries(CATS.map(([k]) => [k, lim.categories.includes(k)])), strict: lim.strict });
+  }, [limKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  const used = s.live ? (s.money?.usedToday ?? 0) : (s.stage >= 5 ? 32 : 0);
+  const dayCap = lim?.dailyCap ?? 120;
   if (s.stage < 1) return <Shell cur="mandate"><Head title="Limits and keys" /><Gate msg="Sign in to set your limits"><SignInButton /></Gate></Shell>;
   return (
     <Shell cur="mandate">
@@ -85,11 +98,11 @@ export function Mandate() {
       <div className="grid g-main">
         <div className="stack">
           <div className="panel"><div className="panel-h"><h2>Spending</h2><div className="r"><T name="Contract-enforced" tip="Checked by the marketplace contract, not by the agent" /></div></div><div className="panel-b">
-            <div className="grid g-2">
-              <div className="field"><label htmlFor="m-job">Per-job cap</label><input className="input num" id="m-job" placeholder="e.g. 50.00 USDC" defaultValue="50.00 USDC" /></div>
-              <div className="field"><label htmlFor="m-day">Daily cap</label><input className="input num" id="m-day" placeholder="e.g. 120.00 USDC" defaultValue="120.00 USDC" /><div className="bar"><i style={{ transform: `scaleX(${s.stage >= 5 ? 0.27 : 0})` }} /></div><span className="hint">{s.stage >= 5 ? '32.00' : '0.00'} used today</span></div>
-              <div className="field"><label htmlFor="m-new">New-seller value cap</label><input className="input num" id="m-new" placeholder="e.g. 25.00 USDC" defaultValue="25.00 USDC" /><span className="hint">For sellers with fewer than 3 settled jobs. The first-job pool covers the gap.</span></div>
-              <div className="field"><label htmlFor="m-win">If reviewers stall</label><select className="input" id="m-win"><option>12 hours, then a fresh re-check</option><option>6 hours</option><option>24 hours</option></select></div>
+            <div className="grid g-2" key={limKey}>
+              <div className="field"><label htmlFor="m-job">Per-job cap</label><input className="input num" id="m-job" placeholder="e.g. 50.00 USDC" defaultValue={money(lim?.perJobCap ?? 50)} /></div>
+              <div className="field"><label htmlFor="m-day">Daily cap</label><input className="input num" id="m-day" placeholder="e.g. 120.00 USDC" defaultValue={money(dayCap)} /><div className="bar"><i style={{ transform: `scaleX(${Math.min(1, used / dayCap)})` }} /></div><span className="hint">{used.toFixed(2)} used today</span></div>
+              <div className="field"><label htmlFor="m-new">New-seller value cap</label><input className="input num" id="m-new" placeholder="e.g. 25.00 USDC" defaultValue={money(lim?.newSellerCap ?? 25)} /><span className="hint">For sellers with fewer than 3 settled jobs. The first-job pool covers the gap.</span></div>
+              <div className="field"><label htmlFor="m-win">If reviewers stall</label><select className="input" id="m-win" defaultValue={String(lim?.reviewWindowHours ?? 12)}><option value="12">12 hours, then a fresh re-check</option><option value="6">6 hours</option><option value="24">24 hours</option></select></div>
             </div>
             <div className="field"><span className="lab">Allowed categories</span><div className="chips">{CATS.map(([k, label]) => <button key={k} className={`chip ${s.cats[k] ? 'on' : ''}`} aria-pressed={!!s.cats[k]} onClick={() => setState({ cats: { ...s.cats, [k]: !s.cats[k] } })}>{label}</button>)}</div></div>
             <div className="row" style={{ flexWrap: 'nowrap' }}>
@@ -99,14 +112,14 @@ export function Mandate() {
           </div></div>
           <div className="panel">
             <div className="panel-h"><h2>Keys on {ME.acct}</h2><div className="r"><T name="Function-call keys" tip="NEAR access keys limited to one contract and named methods" /><T name="Sub-account" tip={`${ME.agents} holds agent keys`} /></div></div>
-            <div className="tablewrap"><table>
+            {s.live ? <LiveKeys /> : <div className="tablewrap"><table>
               <thead><tr><th>Key</th><th>Held by</th><th>Can call</th><th><span className="visually-hidden">Action</span></th></tr></thead>
               <tbody>
                 <tr><td className="mono">ed25519:4Fz…9Qa</td><td>You (Google sign-in)</td><td><span className="pill acc">Full access</span> withdraw, unpause, change limits</td><td /></tr>
                 <tr><td className="mono">ed25519:7Hk…2mL</td><td>Transaction agent</td><td className="mono xsmall">post_job place_bid accept_offer fund_job submit_delivery vote</td><td><button className="btn sm danger" onClick={act.deletekey}>Delete</button></td></tr>
                 <tr><td className="mono">ed25519:Cq1…x8T</td><td>Guardian</td><td className="mono xsmall">pause</td><td><button className="btn sm danger" onClick={act.deletekey}>Delete</button></td></tr>
               </tbody>
-            </table></div>
+            </table></div>}
             <div className="panel-b"><p className="muted xsmall">Agent keys can't withdraw and can't attach a deposit. NEAR enforces this at the protocol level. Deleting <span className="mono">{ME.agents}</span> removes every agent key at once.</p></div>
           </div>
           {s.tour >= 0 && <div className="panel"><div className="panel-h"><h2>Test your limits</h2></div><div className="panel-b">
@@ -125,6 +138,50 @@ export function Mandate() {
         </div>
       </div>
     </Shell>
+  );
+}
+
+/** The signed-in account's real access keys, read from NEAR for the account and its agents sub-account. */
+function LiveKeys() {
+  const s = useApp();
+  const [rows, setRows] = useState<{ acct: string; keys: AccessKeyRow[] | null }[] | null>(null);
+  const [err, setErr] = useState(false);
+  const accts = [ME.acct, ME.agents].filter((a, i, all) => a && all.indexOf(a) === i);
+  const load = () => {
+    setErr(false); setRows(null);
+    Promise.all(accts.map(async (acct) => ({ acct, keys: await accessKeys(acct) }))).then(setRows, () => setErr(true));
+  };
+  useEffect(load, [ME.acct, ME.agents]);
+  const contract = s.chain?.contract;
+  const holder = (acct: string, k: AccessKeyRow) => {
+    if (k.full) return acct === ME.acct ? 'You (your wallet)' : 'Full access';
+    if (k.receiver === contract && k.methods.includes('fund_job')) return 'Transaction agent';
+    if (k.receiver === contract && k.methods.length === 1 && k.methods[0] === 'pause') return 'Guardian';
+    if (k.receiver === contract) return 'Agent key';
+    return `App login (${k.receiver})`;
+  };
+  const short = (pk: string) => (pk.length > 20 ? `${pk.slice(0, 12)}…${pk.slice(-4)}` : pk);
+  if (!accts.length) return <div className="panel-b"><p className="muted">Link a NEAR wallet to see its keys.</p></div>;
+  if (err) return <div className="panel-b"><p className="muted">Could not reach the NEAR network. <button className="lk" onClick={load}>Retry</button></p></div>;
+  if (!rows) return <div className="panel-b"><p className="muted">Reading your keys from NEAR…</p></div>;
+  return (
+    <div className="tablewrap"><table>
+      <thead><tr><th>Key</th><th>Account</th><th>Held by</th><th>Can call</th></tr></thead>
+      <tbody>
+        {rows.flatMap(({ acct, keys }) => !keys?.length
+          ? [<tr key={acct}><td className="muted" colSpan={2}><span className="mono">{acct}</span></td><td className="muted" colSpan={2}>Not created on chain yet</td></tr>]
+          : keys.map((k) => (
+            <tr key={acct + k.publicKey}>
+              <td className="mono" title={k.publicKey}>{short(k.publicKey)}</td>
+              <td className="mono xsmall">{acct}</td>
+              <td>{holder(acct, k)}</td>
+              <td>{k.full
+                ? <><span className="pill acc">Full access</span> {acct === ME.acct ? 'withdraw, unpause, change limits' : 'everything'}</>
+                : <span className="mono xsmall">{k.methods.length ? k.methods.join(' ') : 'any method'} on {k.receiver}{k.allowance !== null ? ` · ${k.allowance} NEAR gas allowance` : ''}</span>}</td>
+            </tr>
+          )))}
+      </tbody>
+    </table></div>
   );
 }
 

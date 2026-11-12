@@ -1,9 +1,9 @@
 import { ARRIVE, BIDS, DAO_COUNCIL, DONE_JOBS, NEG_LOG, SETTLED, GIGS, HELD, JOB, JOB_LISTING, KICKOFF, ME, OPEN_JOBS, OTHER_JOBS, REPLIES, REVIEWERS, SELLERS_DIR, SPEC, T_MSGS, T_TIME, THREADS, gigBy, liveOpenRef, setLiveOpenJobs, type Bid, type DemoData, type Gig, type OpenJob, type Order, type OtherJob, type SellerDir } from '../data/data';
 import type { ChatMsg } from '../store/store';
-import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type SellForm, type LiveNote, type LiveSpec, type SpecDoc, type WalletItem } from '../store/store';
+import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type SellForm, type LiveNote, type LiveSpec, type SpecDoc, type Limits, type WalletItem } from '../store/store';
 import type { Thread } from '../store/actions';
 import { api, ApiError } from './api';
-import { depositCall, sendCalls, walletBalances, walletSend, withdrawCall } from './near';
+import { depositCall, mandateCall, pauseCall, sendCalls, unpauseCall, walletBalances, walletSend, withdrawCall, type WalletCall } from './near';
 
 /*
  * All data comes from the backend. The screens read the shared objects in data/data.ts directly:
@@ -692,11 +692,12 @@ export async function liveDeliver(ref: string): Promise<void> {
 async function loadMoney(): Promise<void> {
   const [wallet, limits] = await Promise.all([
     liveApi<{ available: number; escrowed: number; usedToday: number; chain?: { mode: string; network: string; contract: string; usdc: string | null }; items?: WalletItem[] }>('/wallet/v1', { quiet: true }).catch(() => null),
-    liveApi<{ paused: boolean }>('/mandates/v1', { quiet: true }).catch(() => null),
+    liveApi<Limits & { paused: boolean }>('/mandates/v1', { quiet: true }).catch(() => null),
   ]);
   if (!wallet) return;
   const tokenArrived = Boolean(wallet.chain?.usdc) && wallet.chain?.usdc !== getState().chain?.usdc;
-  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused) }, chain: wallet.chain ?? null, walletItems: wallet.items ?? [] });
+  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused) }, chain: wallet.chain ?? null, walletItems: wallet.items ?? [],
+    ...(limits ? { limits: { perJobCap: limits.perJobCap, dailyCap: limits.dailyCap, newSellerCap: limits.newSellerCap, reviewWindowHours: limits.reviewWindowHours, categories: limits.categories, strict: limits.strict } } : {}) });
   if (tokenArrived) void loadWalletBalances();
 }
 
@@ -718,16 +719,49 @@ export async function liveSaveMandate(): Promise<void> {
     categories: Object.keys(s.cats).filter((k) => s.cats[k]),
     strict: s.strict,
   };
+  if (walletMode()) {
+    // Real chain: only the owner's own key can call set_mandate, and that key is in their wallet.
+    // The backend checks the limits first, then the wallet signs exactly those arguments.
+    const plan = await api<{ contract: string; args: Record<string, unknown> }>('/mandates/v1/check', { body }).catch(() => null);
+    if (!plan) return;
+    const hash = await signInWallet(plan.contract, mandateCall(plan.args));
+    if (hash) toast(`Limits saved on-chain, signed in your wallet (tx ${shortHash(hash)}).`);
+    return;
+  }
   const res = await api<{ txHash: string }>('/mandates/v1', { method: 'PATCH', body }).catch(() => null);
   if (res) { toast(`Limits saved on-chain with your full-access key (tx ${shortHash(res.txHash)}).`); await refreshAll(false); }
 }
 
+/** Real chain mode: one contract call signed in the user's wallet, then recorded by the backend. Returns the tx hash, or null if the wallet did not send it. */
+async function signInWallet(contract: string, call: WalletCall): Promise<string | null> {
+  if (!ME.acct) { toast('Link your NEAR wallet first.', 'hold'); return null; }
+  try {
+    const hash = await walletSend(ME.acct, contract, [call]);
+    await recordWalletTx(hash);
+    return hash;
+  } catch (e) {
+    toast(e instanceof Error ? e.message : 'The wallet did not send it', 'block');
+    return null;
+  }
+}
+
 export async function livePause(): Promise<void> {
+  const contract = getState().chain?.contract;
+  if (walletMode() && contract) {
+    if (await signInWallet(contract, pauseCall())) toast('All agents paused. Funding and release calls are stopped.', 'block');
+    return;
+  }
   const res = await api('/mandates/v1/pause', { body: {} }).catch(() => null);
   if (res) { toast('All agents paused. Funding and release calls are stopped.', 'block'); await refreshAll(false); }
 }
 
 export async function liveUnpause(): Promise<boolean> {
+  const contract = getState().chain?.contract;
+  if (walletMode() && contract) {
+    if (!(await signInWallet(contract, unpauseCall()))) return false;
+    toast('Agents are active again.');
+    return true;
+  }
   const res = await api('/mandates/v1/unpause', { body: {} }).catch(() => null);
   if (!res) return false;
   toast('Agents are active again.');
