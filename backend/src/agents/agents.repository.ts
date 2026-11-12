@@ -14,6 +14,27 @@ export class AgentsRepository {
         });
     }
 
+    async getBuyerContext(jobId: string) {
+        return prisma.job.findFirst({
+            where: { id: jobId },
+            select: { id: true, buyerId: true, status: true, limits: { select: { maxPriceCiphertext: true } } },
+        });
+    }
+
+    async getAgentSellers(jobId: string, take: number) {
+        const job = await prisma.job.findFirst({
+            where: { id: jobId, status: { in: ['open', 'negotiating'] }, visibility: 'public' },
+            select: { id: true, buyerId: true, category: true },
+        });
+        if (!job) return [];
+        return prisma.seller.findMany({
+            where: { kind: 'agent', categories: { has: job.category }, ownerId: { not: job.buyerId }, bids: { none: { jobId: job.id } } },
+            select: { id: true, ownerId: true, agentId: true },
+            orderBy: { createdAt: 'asc' },
+            take,
+        });
+    }
+
     async getTeam(userId: string) {
         return prisma.profile.findFirst({
             where: { id: userId },

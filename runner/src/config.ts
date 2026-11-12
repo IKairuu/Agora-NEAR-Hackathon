@@ -1,5 +1,6 @@
 import 'dotenv/config';
 import path from 'node:path';
+import { publicKeyOf } from './holdout.js';
 
 const num = (name: string, fallback: number): number => {
     const raw = process.env[name];
@@ -17,10 +18,15 @@ const list = (name: string, fallback: string[]): string[] => {
 const runnerKey = process.env['AGORA_RUNNER_KEY'] ?? '';
 if (runnerKey.length < 16) throw new Error('AGORA_RUNNER_KEY must be set and at least 16 characters');
 
+const holdoutPrivateKey = process.env['AGORA_RUNNER_HOLDOUT_PRIVATE_KEY']?.trim() ?? '';
+const holdoutPublic = holdoutPrivateKey ? publicKeyOf(holdoutPrivateKey) : null;
+
 export const config = {
     port: num('PORT', 4100),
     runnerKey,
     internalKey: process.env['AGORA_INTERNAL_KEY'] ?? '',
+    holdoutPrivateKey,
+    holdoutPublic,
     logDir: path.resolve(process.env['AGORA_RUNNER_LOG_DIR'] ?? 'logs'),
     workDir: path.resolve(process.env['AGORA_RUNNER_WORK_DIR'] ?? 'work'),
     image: process.env['AGORA_RUNNER_IMAGE'] ?? 'agora-runner-rust',

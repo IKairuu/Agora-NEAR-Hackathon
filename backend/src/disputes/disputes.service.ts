@@ -5,6 +5,7 @@ import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { ChainService } from '../chain/chain.service.js';
 import { bondNeeded, claimOf, ESCALATION_WINDOW_MS } from '../indexer/indexer.service.js';
+import { holdoutRunOf } from '../holdout.js';
 import { dispatchRun, testFilesOf } from '../runner.js';
 import { CreateDispute } from './dto/CreateDispute.dto.js';
 import { EscalateDispute } from './dto/EscalateDispute.dto.js';
@@ -95,6 +96,7 @@ export class DisputesService {
             const userIds = [job.buyerId, ...(job.seller ? [job.seller.ownerId] : [])];
             await this.disputesRepository.startRecheck({ deliveryId: delivery.id, round, runId, userIds, ref: job.ref, reason });
             if (spec) {
+                const holdout = await this.disputesRepository.getRunHoldout(job.id);
                 runner = await dispatchRun({
                     repoUrl: delivery.repoUrl,
                     commit: delivery.commitSha,
@@ -104,6 +106,7 @@ export class DisputesService {
                     testFiles: testFilesOf(spec.testFiles),
                     allowedPaths: spec.allowedPaths,
                     failingTests: spec.failingTests,
+                    ...holdoutRunOf(holdout ?? { holdoutHash: null }),
                     runId,
                     deliveryId: delivery.id,
                 });

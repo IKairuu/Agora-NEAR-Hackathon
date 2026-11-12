@@ -36,7 +36,7 @@ export class InternalRepository {
     async getJob(id: string) {
         return prisma.job.findFirst({
             where: { id },
-            select: { id: true, ref: true, title: true, buyerId: true, seller: { select: { ownerId: true } } },
+            select: { id: true, ref: true, onchainId: true, title: true, buyerId: true, seller: { select: { ownerId: true } } },
         });
     }
 
@@ -48,6 +48,39 @@ export class InternalRepository {
                 job: { select: { id: true, ref: true, onchainId: true, buyerId: true } },
                 seller: { select: { displayName: true, ownerId: true } },
             },
+        });
+    }
+
+    async getAgentBid(id: string) {
+        return prisma.bid.findFirst({
+            where: { id },
+            select: {
+                id: true, status: true, price: true,
+                job: { select: { id: true, ref: true, status: true, buyerId: true } },
+                seller: { select: { id: true, ownerId: true, agentId: true, kind: true, displayName: true } },
+            },
+        });
+    }
+
+    async createHireOffer(data: { jobId: string; bidId: string; sellerId: string; price: number }) {
+        return prisma.$transaction(async (tx) => {
+            const open = await tx.hireOffer.findFirst({ where: { jobId: data.jobId, status: 'sent' }, select: { id: true } });
+            if (open) return null;
+            return tx.hireOffer.create({ data, select: { id: true } });
+        });
+    }
+
+    async getOwner(id: string) {
+        return prisma.profile.findFirst({ where: { id }, select: { id: true } });
+    }
+
+    async pauseByGuardian(ownerId: string, txHash: string | null) {
+        return prisma.$transaction(async (tx) => {
+            const updated = await tx.mandate.updateMany({
+                where: { ownerId, paused: false },
+                data: { paused: true, pausedBy: 'guardian', pausedAt: new Date(), ...(txHash ? { lastTxHash: txHash } : {}) },
+            });
+            return updated.count;
         });
     }
 
@@ -74,7 +107,21 @@ export class InternalRepository {
             where: { runId },
             select: {
                 id: true, status: true,
-                delivery: { select: { id: true, attempt: true, commitSha: true, milestone: { select: { job: deliveryJob } } } },
+                delivery: {
+                    select: {
+                        id: true, attempt: true, commitSha: true,
+                        milestone: {
+                            select: {
+                                job: {
+                                    select: {
+                                        ...deliveryJob.select,
+                                        acceptanceSpecs: { where: { lockedAt: { not: null } }, select: { holdoutHash: true }, orderBy: { version: 'desc' }, take: 1 },
+                                    },
+                                },
+                            },
+                        },
+                    },
+                },
             },
         });
     }
@@ -116,7 +163,7 @@ export class InternalRepository {
                 data: { status: approved ? 'approved' : 'rejected' },
             });
             if (updated.count === 0) return 0;
-            await tx.milestone.update({ where: { id: milestoneId }, data: { status: approved ? 'in_review' : 'funded' }, select: { id: true } });
+            if (!approved) await tx.milestone.update({ where: { id: milestoneId }, data: { status: 'funded' }, select: { id: true } });
             await tx.job.updateMany({ where: { id: jobId, status: 'delivered' }, data: { status: approved ? 'reviewed' : 'in_progress' } });
             return updated.count;
         });

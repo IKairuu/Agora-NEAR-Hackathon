@@ -4,9 +4,10 @@ import { isUUID } from 'class-validator';
 import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { ChainService } from '../chain/chain.service.js';
+import { ciphertextHashOf, HOLDOUT_ALG, holdoutRunOf } from '../holdout.js';
 import { dispatchRun, testFilesOf } from '../runner.js';
 import { CreateReview } from './dto/CreateReview.dto.js';
-import { EvidenceRow, JobKey, PanelRow, ReviewsRepository } from './reviews.repository.js';
+import { EvidenceRow, JobKey, PanelRow, RerunRow, ReviewsRepository } from './reviews.repository.js';
 
 export const REVIEW_TIMEOUT_MS = 12 * 60 * 60 * 1000;
 export const STALE_RUN_MS = 15 * 60 * 1000;
@@ -98,6 +99,7 @@ export const toEvidence = (job: EvidenceRow, generatedAt: Date) => {
             version: spec.version, specHash: spec.specHash, holdoutHash: spec.holdoutHash, lockedAt: spec.lockedAt, lockTx: spec.lockTx,
             testCommand: spec.testCommand, buildCommand: spec.buildCommand, failingTests: spec.failingTests, allowedPaths: spec.allowedPaths,
             testFiles: testFilesOf(spec.testFiles).map((f) => ({ path: f.path, sha256: sha256(f.content) })),
+            holdout: spec.holdout ? { holdoutHash: spec.holdout.holdoutHash, algorithm: HOLDOUT_ALG, keyId: spec.holdout.keyId, ciphertextSha256: ciphertextHashOf(spec.holdout.ciphertext) } : null,
             checks: spec.checks.map((c) => ({ name: c.name, howVerified: c.howVerified, weight: c.weight })),
         } : null,
         milestones: job.milestones.map((m) => ({
@@ -151,6 +153,16 @@ export class ReviewsService {
         if (!isUUID(body.delivery_id)) throw new BadRequestException('Delivery id must be a valid id');
         const d = await this.reviewsRepository.getRerunTarget(authId, body.delivery_id);
         if (!d) throw new NotFoundException('Delivery not found');
+        return this.startRerun(d, body.reason, true);
+    }
+
+    async rerunStalled(jobId: string) {
+        const d = await this.reviewsRepository.getOpenDeliveryOfJob(jobId);
+        if (!d) return null;
+        return this.startRerun(d, undefined, false);
+    }
+
+    private async startRerun(d: RerunRow, note: string | undefined, callChain: boolean) {
         if (!OPEN.includes(d.status)) throw new BadRequestException('This delivery is already decided');
         const last = d.reviewRuns[0];
         const why = rerunWhy(d, last);
@@ -165,13 +177,13 @@ export class ReviewsService {
         if (!spec) throw new BadRequestException('This job has no locked spec');
 
         let rerunTx: string | null = null;
-        if (why !== 'runner_failed') {
+        if (callChain && why !== 'runner_failed') {
             const platform = process.env['AGORA_PLATFORM_ACCOUNT'] ?? 'agora-testnet.testnet';
             const tx = await this.chainService.callAs('platform', platform, 'rerun_review', { job_id: job.onchainId?.toString() ?? job.ref });
             rerunTx = tx.tx_hash;
         }
         const runId = randomUUID();
-        const reason = body.reason ? `${WHY_TEXT[why]} Note: ${body.reason}` : WHY_TEXT[why];
+        const reason = note ? `${WHY_TEXT[why]} Note: ${note}` : WHY_TEXT[why];
         const userIds = [job.buyerId, ...(job.seller ? [job.seller.ownerId] : [])];
         await this.reviewsRepository.createRerun({ deliveryId: d.id, round, runId, userIds, ref: job.ref, reason });
         const runner = await dispatchRun({
@@ -183,6 +195,7 @@ export class ReviewsService {
             testFiles: testFilesOf(spec.testFiles),
             allowedPaths: spec.allowedPaths,
             failingTests: spec.failingTests,
+            ...holdoutRunOf(spec),
             runId,
             deliveryId: d.id,
         });

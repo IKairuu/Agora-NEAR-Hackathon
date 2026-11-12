@@ -1,8 +1,9 @@
 import 'dotenv/config';
 import { execFileSync } from 'node:child_process';
-import { cpSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { cpSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { sealHoldout } from '../src/holdout.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const fixture = path.join(root, 'fixtures', 'j1042');
@@ -72,7 +73,26 @@ const counts = (log: string, step: string): { passed: number; failed: number } =
 };
 
 const verdict = (r: Result): 'pass' | 'fail' =>
-    r['error'] === null && r['exitCode'] === 0 && r['installExit'] === 0 && r['scopeOk'] === true ? 'pass' : 'fail';
+    r['error'] === null && r['exitCode'] === 0 && r['installExit'] === 0 && r['scopeOk'] === true && (r['holdoutExit'] ?? 0) === 0 ? 'pass' : 'fail';
+
+const holdoutKey = async (): Promise<string | null> => {
+    const res = await fetch(`${url}/holdout-key`);
+    return res.ok ? ((await res.json()) as { publicKey: string }).publicKey : null;
+};
+
+const hiddenFiles = (name: string) => {
+    const dir = path.join(fixture, 'holdout', name, 'tests');
+    return readdirSync(dir).map((file) => ({ path: `tests/${file}`, content: readFileSync(path.join(dir, file), 'utf8') }));
+};
+
+const leaks = (r: Result, log: string, files: { path: string; content: string }[]): string | null => {
+    const seen = JSON.stringify(r) + log;
+    for (const f of files) {
+        const name = /fn (\w+)/.exec(f.content)?.[1] ?? '';
+        if (seen.includes(f.path) || (name && seen.includes(name))) return 'hidden test names reached the result or the log';
+    }
+    return null;
+};
 
 const shas = buildRepo();
 const lockedTest = readFileSync(path.join(fixture, 'base', LOCKED), 'utf8');
@@ -135,6 +155,28 @@ const cases: Case[] = [
     },
 ];
 
+const publicKey = await holdoutKey();
+if (publicKey) {
+    for (const [name, pass] of [['pass', true], ['fail', false]] as const) {
+        const files = hiddenFiles(name);
+        const sealed = sealHoldout(publicKey, { command: null, files });
+        cases.push({
+            name: `sealed hidden checks ${pass ? 'pass' : 'fail'}`,
+            run: () => post({ ...request(shas['good']!), holdoutRef: sealed.holdoutHash, holdoutBlob: sealed.blob }),
+            expect: (r, log) => {
+                const leak = leaks(r, log, files);
+                if (leak) return leak;
+                if (r['exitCode'] !== 0 || r['error'] !== null) return 'expected the locked tests to pass';
+                const counts = r['holdoutCounts'] as { passed: number; failed: number } | null;
+                if (pass) return r['holdoutExit'] === 0 && verdict(r) === 'pass' && counts?.failed === 0 ? null : 'expected hidden checks to pass';
+                return r['holdoutExit'] !== 0 && r['holdoutExit'] !== null && verdict(r) === 'fail' && (counts?.failed ?? 0) > 0 ? null : 'expected hidden checks to fail';
+            },
+        });
+    }
+} else {
+    console.log('runner has no holdout key: sealed hidden check cases skipped');
+}
+
 console.log(`fixture repo ${repoDir}`);
 for (const [name, sha] of Object.entries(shas)) console.log(`  ${name.padEnd(13)} ${sha}`);
 console.log('');
@@ -147,7 +189,7 @@ for (const c of cases) {
     if (problem) failures += 1;
     const after = log ? counts(log, 'test') : null;
     const detail = r.status === 200
-        ? `verdict=${verdict(r)} tests=${r['exitCode'] ?? '-'} build=${r['installExit'] ?? '-'} scope=${r['scopeOk'] ?? '-'} error=${r['error'] ?? '-'} changed=${JSON.stringify(r['changedFiles'])}${after ? ` passed=${after.passed} failed=${after.failed}` : ''} ms=${r['durationMs']}`
+        ? `verdict=${verdict(r)} tests=${r['exitCode'] ?? '-'} hidden=${r['holdoutExit'] ?? '-'} build=${r['installExit'] ?? '-'} scope=${r['scopeOk'] ?? '-'} error=${r['error'] ?? '-'} changed=${JSON.stringify(r['changedFiles'])}${after ? ` passed=${after.passed} failed=${after.failed}` : ''} ms=${r['durationMs']}`
         : `status=${r.status}`;
     console.log(`${problem ? 'FAIL' : 'PASS'}  ${c.name.padEnd(46)} ${detail}${problem ? `  <- ${problem}` : ''}`);
 }

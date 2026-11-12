@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { Prisma } from '../generated/prisma/client.js';
+import { SealedHoldout } from '../holdout.js';
 import { prisma } from '../prisma.js';
 import { CreateSpec } from './dto/CreateSpec.dto.js';
 import { EditSpec } from './dto/EditSpec.dto.js';
@@ -118,11 +119,24 @@ export class SpecsRepository {
         });
     }
 
+    async sealHoldout(userId: string, specId: string, sealed: SealedHoldout) {
+        return prisma.$transaction(async (tx) => {
+            const open = await tx.acceptanceSpec.updateMany({
+                where: { id: specId, lockedAt: null, job: { buyerId: userId } },
+                data: { holdoutHash: null },
+            });
+            if (open.count === 0) return 0;
+            const data = { holdoutHash: sealed.holdoutHash, ciphertext: new Uint8Array(sealed.ciphertext), keyId: sealed.keyId };
+            await tx.holdout.upsert({ where: { specId }, create: { specId, ...data }, update: data, select: { id: true } });
+            return open.count;
+        });
+    }
+
     async lockSpec(userId: string, id: string, specHash: string, holdoutHash: string | null) {
         return prisma.$transaction(async (tx) => {
             const now = new Date();
             const updated = await tx.acceptanceSpec.updateMany({
-                where: { id, lockedAt: null, job: { buyerId: userId } },
+                where: { id, lockedAt: null, job: { buyerId: userId }, holdout: holdoutHash ? { is: { holdoutHash } } : { is: null } },
                 data: { specHash, holdoutHash, approvedAt: now, lockedAt: now },
             });
             return updated.count;

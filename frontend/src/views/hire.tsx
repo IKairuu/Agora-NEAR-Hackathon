@@ -221,6 +221,7 @@ export function Ask() {
           {started && (
             <div className="ask-acts">
               <RLink r="jobs" className="btn sm ghost"><Icon name="job" />Job requests</RLink>
+              {s.stage < 4 && (s.live ? !!s.liveJob : s.stage < 2) && <button type="button" className="btn sm ghost" onClick={act.discardask}><Icon name="x" />Discard</button>}
               <button type="button" className="btn sm" onClick={newRequest}><Icon name="spark" />New request</button>
               {s.live && s.liveJob && <RemoveJobButton id={s.liveJob.ref} title={JOB.title} kind={removalFor(s.liveJob.ref)} />}
             </div>

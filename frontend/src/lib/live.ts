@@ -450,6 +450,22 @@ export async function liveKeepWait(): Promise<void> {
   if (res) toast(`${res.message}.`);
 }
 
+/** Stops following the current request so the New request page starts empty. The request stays in Job requests. */
+export function liveLeaveAsk(): void {
+  setState({ liveJob: null, asked: false, askText: '', stage: 1, offerSt: '', bidsShown: 0, draft: '' });
+  replace(BIDS, []); replace(ARRIVE, []);
+  void refreshAll(false);
+}
+
+/** Cancels the followed request (only before anyone is hired), then starts a new one. */
+export async function liveDiscardAsk(): Promise<void> {
+  const job = getState().liveJob; if (!job?.id) { liveLeaveAsk(); return; }
+  const res = await api<{ ref: string }>(`/requests/v1/${job.id}`, { method: 'DELETE' }).catch(() => null);
+  if (!res) return;
+  toast(`${res.ref} discarded. Start a new request.`);
+  liveLeaveAsk();
+}
+
 export async function liveAttachRepo(): Promise<void> {
   const job = getState().liveJob; if (!job?.id) return;
   const repo = window.prompt('Repository URL (https://github.com/owner/repo)', JOB.repo.startsWith('github.com') ? `https://${JOB.repo}` : '');

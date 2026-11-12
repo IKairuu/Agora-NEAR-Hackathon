@@ -200,6 +200,16 @@ function Unpause() {
   );
 }
 
+function Discard({ job }: { job: string }) {
+  return (
+    <Frame>
+      <h2>Discard {job}?</h2>
+      <p className="muted">The request moves to Completed as cancelled. Sellers can no longer offer on it, and this can't be undone.</p>
+      <div className="acts"><Cancel label="Keep it" /><button className="btn danger" onClick={act.discardask2}><Icon name="x" />Discard request</button></div>
+    </Frame>
+  );
+}
+
 /** Confirm before a draft is deleted or an open job is cancelled. */
 function RemoveJob({ id, kind, title }: { id: string; kind: 'delete' | 'cancel'; title: string }) {
   const [busy, setBusy] = useState(false);
@@ -303,6 +313,7 @@ export function ModalHost() {
     case 'reqsvc': return <RequestService />;
     case 'ojob': return <OtherJob id={modal.props?.id ?? ''} />;
     case 'offer': return <Offer id={modal.props?.id ?? ''} />;
+    case 'discard': return <Discard job={modal.props?.job ?? ''} />;
     case 'removejob': return <RemoveJob id={modal.props?.id ?? ''} kind={modal.props?.kind === 'delete' ? 'delete' : 'cancel'} title={modal.props?.title ?? ''} />;
     default: return null;
   }

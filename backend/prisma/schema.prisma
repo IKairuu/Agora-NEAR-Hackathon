@@ -25,6 +25,7 @@ generator client {
   // This folder is gitignored; recreate it with `npm run prisma:generate`.
   output       = "../src/generated/prisma"
   moduleFormat = "cjs"
+  importFileExtension = "js"
 }
 
 datasource db {
@@ -1122,5 +1123,18 @@ model SavedItem {
   @@unique([userId, serviceId])
   @@unique([userId, sellerId])
   @@map("saved_items")
+  @@schema("public")
+}
+
+model LlmUsage {
+  day      DateTime @db.Date
+  ownerId  String   @map("owner_id")
+  workflow String
+  model    String
+  tokens   Int      @default(0)
+  requests Int      @default(0)
+
+  @@id([day, ownerId, workflow, model])
+  @@map("llm_usage")
   @@schema("public")
 }

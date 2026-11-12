@@ -79,12 +79,16 @@ export class DeliveriesRepository {
                 },
                 acceptanceSpecs: {
                     where: { lockedAt: { not: null } },
-                    select: { testCommand: true, buildCommand: true, failingTests: true, allowedPaths: true, testFiles: true },
+                    select: { testCommand: true, buildCommand: true, failingTests: true, allowedPaths: true, testFiles: true, holdoutHash: true, holdout: { select: { holdoutHash: true, ciphertext: true } } },
                     orderBy: { version: 'desc' },
                     take: 1,
                 },
             },
         });
+    }
+
+    async extraAttempts(jobId: string) {
+        return prisma.chainTx.count({ where: { jobId, method: 'grant_attempt', status: 'success' } });
     }
 
     async createDelivery(d: NewDelivery) {

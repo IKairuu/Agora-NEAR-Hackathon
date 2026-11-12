@@ -1,4 +1,4 @@
-import { Body, Controller, Headers, HttpCode, Param, Patch, Post, UseGuards, ValidationPipe } from '@nestjs/common';
+import { Body, Controller, Delete, Headers, HttpCode, Param, Patch, Post, UseGuards, ValidationPipe } from '@nestjs/common';
 import { AuthGuard } from '../auth/auth.guard.js';
 import { CreateRequest } from './dto/CreateRequest.dto.js';
 import { CreateRequestBulk } from './dto/CreateRequestBulk.dto.js';
@@ -35,5 +35,12 @@ export class RequestsController {
     @UseGuards(AuthGuard)
     keepWaiting(@Headers('authorization') auth: string, @Param('id') id: string) {
         return this.requestsService.keepWaiting(auth, id);
+    }
+
+    @Delete('v1/:id')
+    @HttpCode(200)
+    @UseGuards(AuthGuard)
+    cancelRequest(@Headers('authorization') auth: string, @Param('id') id: string) {
+        return this.requestsService.cancelRequest(auth, id);
     }
 }

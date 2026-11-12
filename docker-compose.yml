@@ -1,0 +1,81 @@
+# Local stack in mock chain mode: Postgres, the API, the test runner and the web app.
+# Sign-in still uses your Supabase project, so fill in backend/.env, runner/.env and frontend/.env first.
+#   docker compose build && docker compose up
+#   docker compose --profile agents up    # also starts n8n
+# Host ports can be moved, for example: AGORA_API_PORT=3300 AGORA_DB_PORT=5433 docker compose up
+# The runner starts test containers through the host's Docker. Build its image once: cd runner && npm run image
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: agora
+      POSTGRES_PASSWORD: agora
+      POSTGRES_DB: agora
+    ports: ["${AGORA_DB_PORT:-5432}:5432"]
+    volumes: [agora-db:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agora"]
+      interval: 3s
+      retries: 20
+
+  backend:
+    build: ./backend
+    env_file: ./backend/.env
+    environment:
+      DATABASE_URL: postgresql://agora:agora@db:5432/agora
+      DIRECT_URL: postgresql://agora:agora@db:5432/agora
+      AGORA_CHAIN_MODE: mock
+      AGORA_RUNNER_URL: http://runner:4100
+      AGORA_NEST_URL: http://backend:3000/api
+      PORT: "3000"
+    ports: ["${AGORA_API_PORT:-3000}:3000"]
+    depends_on:
+      db: { condition: service_healthy }
+
+  runner:
+    build: ./runner
+    env_file: ./runner/.env
+    environment:
+      PORT: "4100"
+      AGORA_RUNNER_WORK_DIR: ${PWD}/runner/work
+      AGORA_RUNNER_LOG_DIR: ${PWD}/runner/logs
+    ports: ["${AGORA_RUNNER_PORT:-4100}:4100"]
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ${PWD}/runner/work:${PWD}/runner/work
+      - ${PWD}/runner/logs:${PWD}/runner/logs
+
+  frontend:
+    image: node:24-slim
+    working_dir: /app
+    command: sh -c "npm ci && npx vite --host 0.0.0.0"
+    env_file: ./frontend/.env
+    environment:
+      AGORA_API_URL: http://backend:3000
+    ports: ["${AGORA_WEB_PORT:-5173}:5173"]
+    volumes:
+      - ./frontend:/app
+      - agora-frontend-modules:/app/node_modules
+    depends_on: [backend]
+
+  n8n:
+    image: n8nio/n8n:1.94.1
+    profiles: [agents]
+    environment:
+      AGORA_NEST_URL: http://backend:3000/api
+      DB_TYPE: postgresdb
+      DB_POSTGRESDB_HOST: db
+      DB_POSTGRESDB_DATABASE: agora
+      DB_POSTGRESDB_USER: agora
+      DB_POSTGRESDB_PASSWORD: agora
+      DB_POSTGRESDB_SCHEMA: n8n
+      N8N_BLOCK_ENV_ACCESS_IN_NODE: "false"
+    ports: ["${AGORA_N8N_PORT:-5678}:5678"]
+    volumes: [agora-n8n:/home/node/.n8n]
+    depends_on:
+      db: { condition: service_healthy }
+
+volumes:
+  agora-db:
+  agora-n8n:
+  agora-frontend-modules:

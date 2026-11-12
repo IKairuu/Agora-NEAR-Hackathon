@@ -13,7 +13,7 @@ Status: Phase 0 draft, 2026-11-08. Implemented so far: setup and config, balance
 | Money token | Testnet USDC (NEP-141), 6 decimals. Address set in `new(usdc_token)` |
 | Amounts | `U128` strings in base units. `"32000000"` = 32.00 USDC |
 | Ids | `job_id` and `bid_id` are `U64` strings, counted up from `"1"` |
-| Job stage on chain | `Open`, `Accepted`, `Funded`, `Delivered`, `Released`, `Refunded`. The indexer maps them to the frontend LIFE names (Offers, Agreed, Protected, Reviewers voting, Paid, Refunded) |
+| Job stage on chain | `Open`, `Accepted`, `Funded`, `Delivered`, `Released`, `Refunded`, `Disputed`, `Expired`. The indexer maps them to the frontend LIFE names (Offers, Agreed, Protected, Reviewers voting, Paid, Refunded, Disputed, Expired) |
 | Time | Nanoseconds, `U64` strings (`env::block_timestamp`) |
 | Day for the daily cap | Calendar day in UTC: `block_timestamp / 86_400_000_000_000` |
 | Fee | 2% (`fee_bps = 200`) of each release, sent to the DAO account |
@@ -72,7 +72,7 @@ Mandate defaults (from the prototype Limits page): per-job cap 50 USDC, daily ca
 | `fund_job` | `job_id` | Buyer or buyer's agent | Runs the nine checks (section 4), moves price from free balance to escrow, adds it to used today. Emits `job_funded` |
 | `submit_delivery` | `job_id, commit_hash` | Hired seller or their agent | Uses one attempt. Assigns the three reviewers. Emits `delivery_submitted` |
 | `vote` | `job_id, approve: bool, log_hash, attestation_hash` | Assigned reviewer only | One vote each. At 2 approvals: release price minus 2% to the seller, 2% to the DAO, update reputation. At 2 rejections: attempt failed. Emits `vote_cast`, then `milestone_released` and `reputation_updated` |
-| `refund_expired` | `job_id` | Anyone | After the deadline. Returns unreleased escrow to the buyer. Cannot be blocked. Emits `milestone_refunded` |
+| `refund_expired` | `job_id` | Anyone | After the deadline. Returns unreleased escrow to the buyer and sets the stage to `Expired`. Cannot be blocked. Emits `milestone_refunded` (`reason: "expired"`) |
 | `rate` | `job_id, stars: u8` | Buyer or seller of a settled job | One rating per side |
 
 ### Disputes (Phase 4)

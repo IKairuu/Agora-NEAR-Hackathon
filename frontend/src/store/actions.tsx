@@ -3,7 +3,7 @@ import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, BIDS, gigBy, JOB, KICKOFF, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, THREADS, usd, type Order } from '../data/data';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
+import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg, type State } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -26,7 +26,7 @@ export function scrollMsgs() {
 }
 /** Bring the newest New request message into view. */
 export function acScroll() {
-  requestAnimationFrame(() => document.getElementById('aclog')?.lastElementChild?.scrollIntoView({ block: 'end', behavior: 'auto' }));
+  requestAnimationFrame(() => document.getElementById('aclog')?.lastElementChild?.scrollIntoView({ block: 'end', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
 }
 
 /* ---------------- chat with the hired seller ---------------- */
@@ -336,6 +336,18 @@ export const act = {
     });
     acScroll(); toast(`${x.id} posted on Open jobs.`);
   },
+  newask: () => {
+    window.scrollTo({ top: 0 });
+    if (isLive()) { liveLeaveAsk(); toast('Started a new request. The last one is still in Job requests.'); return; }
+    if (getState().stage < 2) { setState({ asked: false, askText: '', draft: '' }); return; }
+    toast('The demo job keeps running. Type a new request below and your agent starts it separately.');
+    requestAnimationFrame(() => document.getElementById('ask-in')?.focus());
+  },
+  discardask: () => {
+    if (isLive()) { const job = getState().liveJob; if (!job?.id) { liveLeaveAsk(); return; } openModal('discard', { job: job.ref }); return; }
+    setState({ asked: false, askText: '', draft: '' }); toast('Request discarded. Nothing was sent to sellers.');
+  },
+  discardask2: () => { closeModal(); void liveDiscardAsk(); },
   keepwait: () => isLive() ? void liveKeepWait() : toast('Your agent keeps the job private and checks again in 30 minutes.'),
   heroask: () => { const s = getState(); setState({ draft: s.q || '' }); if (s.stage >= 1) { go('ask'); return; } setState({ after: 'ask' }); act.signin(); },
   selleraccept: () => {
@@ -470,6 +482,11 @@ export const act = {
     const m0 = document.querySelector<HTMLElement>('.main'); const x0 = m0 ? m0.getBoundingClientRect().left : 0;
     const fold = !getState().fold; storage.set('agora-fold', fold ? '1' : '0');
     flushSync(() => setState({ fold }));
+    const side = document.querySelector<HTMLElement>('.side');
+    if (side && fold) {
+      side.classList.add('hold'); (document.activeElement as HTMLElement | null)?.blur();
+      side.addEventListener('mouseleave', () => side.classList.remove('hold'), { once: true });
+    } else side?.classList.remove('hold');
     const m = document.querySelector<HTMLElement>('.main');
     if (!m || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const dx = x0 - m.getBoundingClientRect().left; if (!dx) return;

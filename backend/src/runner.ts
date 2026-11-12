@@ -14,6 +14,8 @@ export interface RunJob {
     failingTests: string[];
     runId: string;
     deliveryId: string;
+    holdoutRef?: string;
+    holdoutBlob?: string;
 }
 
 export const testFilesOf = (value: unknown): RunTestFile[] =>

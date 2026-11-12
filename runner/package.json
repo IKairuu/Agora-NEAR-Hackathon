@@ -3,11 +3,17 @@
     "version": "0.1.0",
     "private": true,
     "type": "module",
+    "engines": {
+        "node": ">=24.9"
+    },
     "scripts": {
         "build": "tsc -p tsconfig.json",
         "start": "node dist/main.js",
         "dev": "tsx watch src/main.ts",
         "image": "docker build -t agora-runner-rust images/rust",
+        "test": "tsx --test test/*.test.ts",
+        "typecheck": "tsc -p tsconfig.json --noEmit",
+        "holdout:keys": "tsx scripts/holdout-keys.ts",
         "test:j1042": "tsx scripts/j1042.ts"
     },
     "dependencies": {

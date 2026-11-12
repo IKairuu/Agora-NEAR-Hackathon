@@ -3,7 +3,10 @@ import { Prisma } from '../generated/prisma/client.js';
 import { DisputeContext, IndexerRepository, JobRef, MANDATE_DEFAULTS } from './indexer.repository.js';
 
 export const MOCK_START_BALANCE = 120;
-const REFUND_METHODS = ['refund_milestone', 'refund_expired'];
+const REFUND_METHODS = ['refund_milestone', 'refund_expired', 'grant_attempt'];
+export const BASE_ATTEMPTS = 3;
+export const DEADLINE_GRACE_DAYS = 3;
+export const DEFAULT_DELIVERY_DAYS = 14;
 export const ESCALATION_WINDOW_MS = 72 * 60 * 60 * 1000;
 export const MAX_REASON_LEN = 500;
 const BOND_BPS = 500n;
@@ -50,6 +53,27 @@ export const partyOf = (ctx: Pick<DisputeContext, 'buyer' | 'seller'>, signer: s
 
 export const claimOf = (party: Party): 'release' | 'refund' => (party === 'buyer' ? 'refund' : 'release');
 
+type RefundContext = NonNullable<Awaited<ReturnType<IndexerRepository['getRefundContext']>>>;
+
+export const deadlineOf = (ctx: Pick<RefundContext, 'fundedAt' | 'deliveryDays'>): Date | null =>
+    ctx.fundedAt ? new Date(ctx.fundedAt.getTime() + ((ctx.deliveryDays ?? DEFAULT_DELIVERY_DAYS) + DEADLINE_GRACE_DAYS) * 86_400_000) : null;
+
+export const refundRefusal = (call: Pick<MockCall, 'signer' | 'method'>, ctx: RefundContext | null, now: number): string | null => {
+    if (!ctx) return 'Job not found';
+    if (call.method === 'refund_expired') {
+        const deadline = deadlineOf(ctx);
+        if (!deadline || now <= deadline.getTime()) return 'Deadline has not passed';
+        if (!['funded', 'in_progress', 'delivered', 'reviewed'].includes(ctx.status)) return 'Nothing to refund';
+        return null;
+    }
+    if (!ctx.buyerAccount || ownerOf(call.signer) !== ctx.buyerAccount) return call.method === 'grant_attempt' ? 'Only the buyer can grant an attempt' : 'Only the buyer can refund';
+    const exhausted = ['funded', 'in_progress'].includes(ctx.status)
+        && ctx.lastAttempt > 0
+        && ctx.lastAttempt >= BASE_ATTEMPTS + ctx.extraAttempts
+        && ctx.lastDeliveryStatus === 'rejected';
+    return exhausted ? null : 'Refund is allowed after the last attempt fails';
+};
+
 export const jobRefOf = (value: unknown): JobRef | null => {
     const v = typeof value === 'number' || typeof value === 'bigint' ? String(value) : value;
     if (typeof v !== 'string') return null;
@@ -58,6 +82,9 @@ export const jobRefOf = (value: unknown): JobRef | null => {
     if (/^[0-9a-f-]{36}$/i.test(v)) return { id: v };
     return null;
 };
+
+export const jobKeyOf = (call: Pick<MockCall, 'method' | 'args'>): JobRef | null =>
+    jobRefOf(call.method === 'ft_transfer_call' ? bondJobOf(call.args['msg']) : call.args['job_id']);
 
 export const usdcOf = (units: unknown): number => {
     const n = Number(typeof units === 'string' || typeof units === 'number' ? units : NaN);
@@ -306,16 +333,23 @@ export class IndexerService {
 
     async onMockCall(call: MockCall) {
         if (isStakeCall(call) || call.method === 'return_stake') return this.onStakeCall(call);
-        const jobKey = jobRefOf(call.method === 'ft_transfer_call' ? bondJobOf(call.args['msg']) : call.args['job_id']);
+        const jobKey = jobKeyOf(call);
         const refusal = await this.refusalFor(call, jobKey);
         await this.indexerRepository.recordTx({
             txHash: call.txHash, signer: call.signer, method: call.method, args: call.args as Prisma.InputJsonValue, ok: refusal === null, error: refusal, jobKey,
         });
         if (refusal) throw new BadRequestException(`Contract refused ${call.method}: ${refusal}`);
+        return this.applyCall(call);
+    }
 
+    async applyCall(call: MockCall) {
+        if (isStakeCall(call)) return this.indexerRepository.addStake(call.signer, usdcOf(call.args['amount']), call.txHash, MOCK_START_BALANCE);
+        if (call.method === 'return_stake') return this.indexerRepository.returnStake(call.signer);
+        const jobKey = jobKeyOf(call);
         if (DISPUTE_METHODS.includes(call.method) && jobKey) return this.applyDispute(call, jobKey);
         if (call.method === 'fund_job' && jobKey) return this.indexerRepository.fundJob(jobKey, call.txHash, MOCK_START_BALANCE);
-        if (REFUND_METHODS.includes(call.method) && jobKey) return this.indexerRepository.refundJob(jobKey, call.txHash);
+        if (call.method === 'grant_attempt') return null;
+        if (REFUND_METHODS.includes(call.method) && jobKey) return this.indexerRepository.refundJob(jobKey, call.txHash, call.method === 'refund_expired' ? 'expired' : 'refunded');
         if (call.method === 'deposit') {
             const owner = await this.indexerRepository.findOwner(call.signer);
             return this.indexerRepository.deposit(call.signer, owner?.id ?? null, usdcOf(call.args['amount']), MOCK_START_BALANCE);
@@ -339,6 +373,20 @@ export class IndexerService {
         return null;
     }
 
+    async hasTx(txHash: string): Promise<boolean> {
+        return this.indexerRepository.hasTx(txHash);
+    }
+
+    async partiesOf(key: JobRef): Promise<string[]> {
+        const ctx = await this.indexerRepository.getDisputeContext(key);
+        if (!ctx) return [];
+        return [ctx.buyer.nearAccountId, ctx.seller?.nearAccountId].filter((a): a is string => typeof a === 'string' && a.length > 0);
+    }
+
+    async syncBalance(accountId: string, free: number, escrowed: number) {
+        return this.indexerRepository.syncBalance(accountId, free, escrowed);
+    }
+
     async onMockRelease(jobId: string, txHash: string) {
         const fee = this.feeBps();
         const dao = this.dao();
@@ -357,8 +405,7 @@ export class IndexerService {
             txHash: call.txHash, signer: call.signer, method: call.method, args: call.args as Prisma.InputJsonValue, ok: refusal === null, error: refusal, jobKey: null,
         });
         if (refusal) throw new BadRequestException(`Contract refused ${call.method}: ${refusal}`);
-        if (call.method === 'return_stake') return this.indexerRepository.returnStake(call.signer);
-        return this.indexerRepository.addStake(call.signer, usdcOf(call.args['amount']), call.txHash, MOCK_START_BALANCE);
+        return this.applyCall(call);
     }
 
     private async applyDispute(call: MockCall, jobKey: JobRef) {
@@ -409,6 +456,10 @@ export class IndexerService {
                 free = balance ? Number(balance.available) : MOCK_START_BALANCE;
             }
             return disputeRefusal(call, ctx, this.now(), this.dao(), free);
+        }
+        if (REFUND_METHODS.includes(call.method)) {
+            const ctx = jobKey ? await this.indexerRepository.getRefundContext(jobKey) : null;
+            return refundRefusal(call, ctx, this.now());
         }
         if (call.method === 'rate') {
             const job = jobKey ? await this.indexerRepository.getRatingContext(jobKey) : null;
