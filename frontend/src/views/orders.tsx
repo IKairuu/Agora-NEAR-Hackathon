@@ -1,9 +1,9 @@
 import { O_ST, usd, type Order } from '../data/data';
 import { orderAct } from '../store/actions';
-import { setState, useApp, type State } from '../store/store';
+import { sellerLocked, setState, useApp, type State } from '../store/store';
 import { Icon } from '../ui/icons';
 import { Gate, Head, RLink, SignInButton } from '../ui/parts';
-import { Shell } from '../ui/Shell';
+import { SellerLock, Shell } from '../ui/Shell';
 
 /** The action buttons for an order at its current stage. Shared with the Messages job strip. */
 export function OrderAction({ o, full = true }: { o: Order; full?: boolean }) {
@@ -37,6 +37,7 @@ const sum = (list: Order[]) => list.reduce((n, o) => n + parseFloat(o.price), 0)
 export function Orders() {
   const s = useApp();
   if (s.stage < 1) return <Shell cur="orders"><Head title="Orders" /><Gate msg="Sign in to see your orders"><SignInButton /></Gate></Shell>;
+  if (sellerLocked(s)) return <SellerLock cur="orders" title="Orders" />;
   const active = s.orders.filter((o) => o.st < 4), req = s.orders.filter((o) => o.st === 0), done = s.orders.filter((o) => o.st === 4);
   const list = s.oTab === 'req' ? req : s.oTab === 'done' ? done : active;
   const inEscrow = sum(s.orders.filter((o) => o.st === 2 || o.st === 3));

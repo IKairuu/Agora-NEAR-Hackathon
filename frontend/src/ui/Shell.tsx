@@ -2,16 +2,41 @@ import { useState, type ReactNode } from 'react';
 import { ME, OTHER_JOBS, usd } from '../data/data';
 import { liveReadNotes } from '../lib/live';
 import { act, newRequest, unreadThreads } from '../store/actions';
-import { escrow, free, hb, hPrice, paused, useApp } from '../store/store';
+import { escrow, free, hb, hPrice, paused, sellerLocked, setState, useApp } from '../store/store';
 import { Icon, Logo, type IconName } from './icons';
-import { Pop, RLink, usePop } from './parts';
+import { Gate, Head, Pop, RLink, usePop } from './parts';
 
-function NavItem({ r, label, icon, cur, count, onClick }: { r: string; label: string; icon: IconName; cur: string; count?: string; onClick?: () => void }) {
+/** Initials from a display name, for the avatar while the account's own data is still loading. */
+const initialsOf = (name?: string) => (name ?? '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
+
+function NavItem({ r, label, icon, cur, count, onClick, locked }: { r: string; label: string; icon: IconName; cur: string; count?: string; onClick?: () => void; locked?: boolean }) {
   const on = cur === r;
+  /* a locked item still shows what selling offers, and leads to the seller setup */
+  if (locked) return (
+    <RLink r="sell" className={`locked ${on ? 'on' : ''}`} onClick={() => setState({ sellStep: 0 })} title="Set up your seller profile first" aria-label={`${label}, locked until you set up your seller profile`}>
+      <Icon name={icon} /><span className="t">{label}</span><span className="count lock" aria-hidden="true"><Icon name="lock" /></span>
+    </RLink>
+  );
   return (
     <RLink r={r} className={on ? 'on' : ''} onClick={onClick} {...(on ? { 'aria-current': 'page' } : {})}>
       <Icon name={icon} /><span className="t">{label}</span>{count && <span className="count">{count}</span>}
     </RLink>
+  );
+}
+
+/** What a seller screen shows to an account without a published seller profile. */
+export function SellerLock({ cur, title }: { cur: string; title: string }) {
+  return (
+    <Shell cur={cur}>
+      <Head title={title} />
+      <Gate msg="Set up your seller profile first">
+        <span>{title} is for sellers. Publish a seller profile to get orders, bid on open jobs and see your seller dashboard.</span>
+        <div className="row" style={{ justifyContent: 'center' }}>
+          <RLink r="sell" className="btn primary" onClick={() => setState({ sellStep: 0 })}><Icon name="store" />Set up selling</RLink>
+          <button className="btn" onClick={() => act.mode('buy', cur)}>Back to buying</button>
+        </div>
+      </Gate>
+    </Shell>
   );
 }
 
@@ -68,6 +93,7 @@ function NoteMenu({ close }: { close: () => void }) {
 /** The signed-in app frame: folding sidebar, paused band and top bar. */
 export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
   const s = useApp();
+  const locked = sellerLocked(s);
   const signed = s.stage >= 1;
   const isPaused = paused(s);
   /* After the fold toggle, the pointer is still over the sidebar, and :hover / :focus-within would peek it
@@ -98,9 +124,10 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
           {s.mode === 'sell' ? (
             <>
               <div className="nav-group">Sell</div>
-              <NavItem r="seller" label="Seller dashboard" icon="home" cur={cur} />
-              <NavItem r="orders" label="Orders" icon="job" cur={cur} count={String(s.orders.filter((o) => o.st < 4).length)} />
-              <NavItem r="openjobs" label="Open jobs" icon="explore" cur={cur} />
+              {locked && <NavItem r="sell" label="Become a seller" icon="store" cur={cur} onClick={() => setState({ sellStep: 0 })} />}
+              <NavItem r="seller" label="Seller dashboard" icon="home" cur={cur} locked={locked} />
+              <NavItem r="orders" label="Orders" icon="job" cur={cur} count={String(s.orders.filter((o) => o.st < 4).length)} locked={locked} />
+              <NavItem r="openjobs" label="Open jobs" icon="explore" cur={cur} locked={locked} />
               <div className="nav-group">Your agents</div>
               <NavItem r="agents" label="Bidding agent" icon="agents" cur={cur} />
               <NavItem r="mandate" label="Limits and keys" icon="mandate" cur={cur} />
@@ -157,12 +184,17 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
                 <RLink r="saved" className="btn icon ghost dot-host" aria-label={`Saved, ${s.liked.length}`}><Icon name="heart" />{s.liked.length > 0 && <i className="num-dot">{s.liked.length}</i>}</RLink>
                 <RLink r={s.mode === 'sell' ? 'orders' : 'jobs'} className="btn sm ghost orders">{s.mode === 'sell' ? 'Orders' : 'Job requests'}</RLink>
                 <button ref={meRef} className="me-btn" onClick={meToggle} aria-label="Account menu" aria-haspopup="menu" aria-expanded={meOpen}>
-                  <span className="avatar">{ME.initials}</span><i className="online" aria-hidden="true" />
+                  <span className="avatar">{ME.initials || initialsOf(s.user?.name)}</span><i className="online" aria-hidden="true" />
                 </button>
               </>
             ) : <button className="btn primary sm" onClick={act.signin}>Sign in</button>}
           </div>
         </header>
+        <main className="content" id="content">
+          {s.restoring && s.tour < 0
+            ? <div className="empty" role="status"><span className="spin" /><b>Loading your account…</b><span>Your jobs, messages and wallet appear in a moment.</span></div>
+            : children}
+        </main>
         <main className="content" id="content" key={s.live ? "live" : "demo"}>{children}</main>
       </div>
       {meOpen && <Pop anchor={meRef} onClose={meClose}><MeMenu close={meClose} cur={cur} /></Pop>}

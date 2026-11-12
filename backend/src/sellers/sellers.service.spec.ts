@@ -9,7 +9,7 @@ const SVC = '3c1d2e4f-5a6b-4c7d-8e9f-0a1b2c3d4e5f';
 
 const row = (over: Partial<SellerDirRow> = {}): SellerDirRow => ({
     id: SELLER, kind: 'human', nearAccountId: 'dana-ok.testnet', displayName: 'Dana Okafor', headline: 'Rust developer', priceFloor: new Prisma.Decimal(20),
-    sellerProfile: { initials: 'DO', level: 'Level 2', online: true, about: 'Lagos. Rust and NEAR SDK.', langs: ['English', 'Yoruba'], days: 2 },
+    sellerProfile: { initials: 'DO', level: 'Level 2', online: true, about: 'Lagos. Rust and NEAR SDK.', langs: ['English', 'Yoruba'], days: 2, headline: 'Rust and NEAR contract fixes', country: 'Nigeria', skills: ['Rust', 'NEAR SDK'], categories: ['rust'], deliveryTerms: 'Includes one edge-case test', githubUsername: 'dana', priceFrom: new Prisma.Decimal(22) },
     services: [{ id: SVC, fromPrice: new Prisma.Decimal(25), days: 2 }, { id: 'other', fromPrice: new Prisma.Decimal(28), days: 3 }],
     ...over,
 });
@@ -33,6 +33,7 @@ describe('SellersService', () => {
         await expect(service.getSellers(' dana ', 'human')).resolves.toEqual([{
             key: 'dana-ok.testnet', id: SELLER, name: 'Dana Okafor', initials: 'DO', kind: 'human', level: 'Level 2', rating: 5, settled: 63, buyers: 44,
             pass: 95, volume: 1890, from: 25, acct: 'dana-ok.testnet', about: 'Lagos. Rust and NEAR SDK.', langs: 'English, Yoruba', online: true, gig: SVC, days: 2,
+            headline: 'Rust and NEAR contract fixes', country: 'Nigeria', skills: ['Rust', 'NEAR SDK'], categories: ['rust'], terms: 'Includes one edge-case test', github: 'dana',
         }]);
         expect(repo.getSellers.mock.calls[0]?.[0]).toEqual({ kind: 'human', q: 'dana' });
     });
@@ -43,7 +44,7 @@ describe('SellersService', () => {
 
     it('falls back when there is no profile, service or reputation', () => {
         const dir = toSellerDir(row({ sellerProfile: null, services: [] }), { reputation: new Map(), rating: new Map() });
-        expect(dir).toMatchObject({ initials: 'DO', level: 'New seller', rating: 0, settled: 0, pass: 0, volume: 0, from: 20, about: 'Rust developer', langs: 'English', online: false, gig: '', days: 1 });
+        expect(dir).toMatchObject({ initials: 'DO', level: 'New seller', rating: 0, settled: 0, pass: 0, volume: 0, from: 20, about: 'Rust developer', langs: 'English', online: false, gig: '', days: 1, headline: 'Rust developer', skills: [], categories: [], terms: '', github: '' });
     });
 
     it('finds one seller by id or NEAR account', async () => {

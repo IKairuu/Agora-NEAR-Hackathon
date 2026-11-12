@@ -1,5 +1,7 @@
-import { useSyncExternalStore, type ReactNode } from 'react';
+import type { ReactNode } from 'react';
+import { create } from 'zustand';
 import type { AuthUser } from '../lib/auth';
+import { authConfigured } from '../lib/supabase';
 import type { Thread } from './actions';
 import { BIDS, type Bid, type FilterKey, type Order, type OtherJob } from '../data/data';
 
@@ -23,6 +25,19 @@ export type LiveSpec =
   | { state: 'loading' }
   | { state: 'none'; repo: boolean; agents: boolean | null }
   | { state: 'draft' | 'locked'; doc: SpecDoc };
+/** The seller profile editor's text fields. Kept in the store so moving between steps never loses them. */
+export interface SellForm {
+  name: string; title: string; country: string; langs: string; agent: string; model: string;
+  yrs: string; edu: string; work: string; bio: string; floor: string; max: string; terms: string; addr: string;
+}
+/** A real account starts with an empty form, filled from its saved profile; placeholders show examples. */
+export const EMPTY_SELL_FORM: SellForm = { name: '', title: '', country: '', langs: '', agent: '', model: '', yrs: '', edu: '', work: '', bio: '', floor: '', max: '', terms: '', addr: '' };
+/** The demo's sample seller. */
+export const DEMO_SELL_FORM: SellForm = {
+  name: '', title: 'Rust and NEAR contract developer', country: 'Philippines', langs: 'English, Filipino', agent: 'lumenfix', model: 'Runs in NEAR AI Cloud (TEE)',
+  yrs: 'Student or under 1 year', edu: '', work: '', bio: 'Rust contract fixes with a test for every bug.', floor: '12.00', max: '3',
+  terms: '1 to 2 days, includes one extra edge-case test', addr: '0x8b1F…4e2C',
+};
 export interface FollowUp { id: string; text: string; t: string; sending: boolean; reply?: string; link?: boolean }
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
@@ -54,6 +69,8 @@ export interface State {
   followUps: FollowUp[];
   /** Live: the followed job's spec, as stored by the spec writer. */
   liveSpec: LiveSpec;
+  /** The seller profile editor's text fields, and whether a real account's saved profile was loaded into them. */
+  sellForm: SellForm; sellLoaded: boolean;
   who: string; oj: number; exTab: 'services' | 'sellers'; ssort: 'rating' | 'jobs' | 'price'; fromHero: string;
   stars: number; dReason: string; mail: string; walletLinked: boolean;
   /** The real signed-in account from Google or GitHub; null in the simulated demo. */
@@ -69,6 +86,11 @@ export interface State {
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
   /** True once the startup load from the backend has finished, whether or not it returned anything. */
   dataReady: boolean;
+  /**
+   * True from a page load with a saved real sign-in until that account's data is in (or it turns out it can't be):
+   * the screens show "Loading your account" meanwhile, and the demo story is not filled in, so it never flashes.
+   */
+  restoring: boolean;
 }
 
 const storage = {
@@ -87,7 +109,7 @@ function loadSession(): SavedSession | null {
 }
 const saved = loadSession();
 
-let state: State = {
+const initialState: State = {
   stage: saved ? 1 : 0, tour: -1, tourMin: false,
   jobTab: 'bids', dTab: 'open', walTab: 'assets',
   specGen: false, votes: null, voting: false, attack: null,
@@ -107,20 +129,30 @@ let state: State = {
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: saved?.user ?? null,
   live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
-  modal: null, dataReady: false, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
+  modal: null, dataReady: false, restoring: !!saved?.user && authConfigured, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
+  sellForm: DEMO_SELL_FORM, sellLoaded: false,
 };
 
-const listeners = new Set<() => void>();
-const emit = () => listeners.forEach((l) => l());
+/*
+ * The app state lives in a Zustand store. The functions below are the app's API to it:
+ * - useApp(): the whole state in a component (re-renders on every change, as before);
+ *   for a narrower re-render use the store directly, e.g. useAppStore((s) => s.mode);
+ * - getState() / setState(patch) outside React, in actions and the live data loaders;
+ * - subscribe(cb) to run code after every change.
+ * setState merges a partial state, like Zustand's own; setState({}) still redraws the screens after the
+ * shared data objects in data/data.ts were changed in place.
+ */
+export const useAppStore = create<State>()(() => initialState);
+
 /** Calls cb after every state change. Returns the unsubscribe function. */
-export const subscribe = (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; };
+export const subscribe = (cb: () => void) => useAppStore.subscribe(() => cb());
 
 /**
  * Writes the session while the user is signed in and removes it once they sign out.
  * Skipped during the demo tour, which moves `stage` itself, including to 0 on its first step.
  */
 let savedRaw = saved ? JSON.stringify(saved) : '';
-listeners.add(() => {
+useAppStore.subscribe((state) => {
   if (state.tour >= 0) return;
   const raw = state.stage >= 1
     ? JSON.stringify({ via: state.signVia, role: state.role, mode: state.mode, seller: state.seller, user: state.user } satisfies SavedSession)
@@ -130,14 +162,12 @@ listeners.add(() => {
   if (raw) storage.set(SESSION_KEY, raw); else storage.remove(SESSION_KEY);
 });
 
-export const getState = () => state;
+export const getState = (): State => useAppStore.getState();
 export function setState(patch: Partial<State> | ((s: State) => Partial<State>)) {
-  const p = typeof patch === 'function' ? patch(state) : patch;
-  state = { ...state, ...p };
-  emit();
+  useAppStore.setState(patch);
 }
 export function useApp(): State {
-  return useSyncExternalStore(subscribe, getState, getState);
+  return useAppStore();
 }
 
 /* derived values */
@@ -154,18 +184,23 @@ export const paused = (s: State) => (s.live ? Boolean(s.money?.paused) : s.stage
 
 /* ---------------- toasts ---------------- */
 export interface Toast { id: number; msg: ReactNode; kind: 'ok' | 'hold' | 'block' }
-let toasts: Toast[] = [];
+/** Toasts have their own small store, so showing one does not redraw every screen. */
+const useToastStore = create<{ list: Toast[] }>()(() => ({ list: [] }));
 let toastId = 0;
-const toastListeners = new Set<() => void>();
 export function toast(msg: ReactNode, kind: Toast['kind'] = 'ok', ms = 4200) {
   const id = ++toastId;
-  toasts = [...toasts, { id, msg, kind }].slice(-2);
-  toastListeners.forEach((l) => l());
-  setTimeout(() => { toasts = toasts.filter((t) => t.id !== id); toastListeners.forEach((l) => l()); }, Math.min(ms, 4000));
+  useToastStore.setState((s) => ({ list: [...s.list, { id, msg, kind }].slice(-2) }));
+  setTimeout(() => useToastStore.setState((s) => ({ list: s.list.filter((t) => t.id !== id) })), Math.min(ms, 4000));
 }
-export function useToasts() {
-  return useSyncExternalStore((cb) => { toastListeners.add(cb); return () => { toastListeners.delete(cb); }; }, () => toasts, () => toasts);
+export function useToasts(): Toast[] {
+  return useToastStore((s) => s.list);
 }
+
+/**
+ * The seller screens (dashboard, orders, open jobs) need a published seller profile.
+ * Guests see the sign-in gate instead; the demo tour shows everything, as before.
+ */
+export const sellerLocked = (s: State) => s.tour < 0 && s.stage >= 1 && !s.seller;
 
 /* ---------------- modal ---------------- */
 export const openModal = (kind: ModalKind, props?: Record<string, string>) => setState({ modal: { kind, props } });
