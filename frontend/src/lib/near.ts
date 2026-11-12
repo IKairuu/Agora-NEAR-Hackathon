@@ -133,6 +133,14 @@ export const depositCall = (contract: string, amount: number): WalletCall =>
 export const withdrawCall = (amount: number): WalletCall =>
   ({ method: 'withdraw', args: { amount: usdcUnits(amount) }, tgas: 60, deposit: ONE_YOCTO });
 
+/** The contract's set_mandate, with the arguments the backend already checked (POST /mandates/v1/check). Owner only, 1 yocto. */
+export const mandateCall = (args: Record<string, unknown>): WalletCall =>
+  ({ method: 'set_mandate', args, tgas: 30, deposit: ONE_YOCTO });
+
+/** pause needs no deposit; unpause is owner only and needs 1 yocto. */
+export const pauseCall = (): WalletCall => ({ method: 'pause', args: {}, tgas: 30, deposit: 0n });
+export const unpauseCall = (): WalletCall => ({ method: 'unpause', args: {}, tgas: 30, deposit: ONE_YOCTO });
+
 /** Plain USDC transfer from the wallet. Registers the receiver with the token first, as NEP-141 requires. */
 export const sendCalls = (to: string, amount: number): WalletCall[] => [
   { method: 'storage_deposit', args: { account_id: to, registration_only: true }, tgas: 10, deposit: STORAGE_DEPOSIT },
@@ -150,6 +158,26 @@ async function rpcQuery<T>(params: Record<string, unknown>): Promise<T> {
   const data = (await res.json()) as { result?: T & { error?: string }; error?: { message?: string } };
   if (!data.result || data.result.error) throw new Error(data.error?.message ?? data.result?.error ?? 'RPC error');
   return data.result;
+}
+
+/** One access key on a NEAR account, as the chain reports it. */
+export interface AccessKeyRow { account: string; publicKey: string; full: boolean; receiver: string | null; methods: string[]; allowance: number | null }
+
+/** The account's real access keys (view_access_key_list). Null if the account does not exist on chain. Throws if the RPC fails. */
+export async function accessKeys(accountId: string): Promise<AccessKeyRow[] | null> {
+  type Perm = 'FullAccess' | { FunctionCall: { receiver_id: string; method_names: string[]; allowance: string | null } };
+  try {
+    const r = await rpcQuery<{ keys: { public_key: string; access_key: { permission: Perm } }[] }>({ request_type: 'view_access_key_list', account_id: accountId });
+    return r.keys.map((k) => {
+      const p = k.access_key.permission;
+      if (p === 'FullAccess') return { account: accountId, publicKey: k.public_key, full: true, receiver: null, methods: [], allowance: null };
+      const fc = p.FunctionCall;
+      return { account: accountId, publicKey: k.public_key, full: false, receiver: fc.receiver_id, methods: fc.method_names, allowance: fc.allowance === null ? null : Number(BigInt(fc.allowance) / 10n ** 20n) / 10_000 };
+    });
+  } catch (e) {
+    if (e instanceof Error && /does not exist|UNKNOWN_ACCOUNT/i.test(e.message)) return null;
+    throw e;
+  }
 }
 
 /** What the account holds in its own wallet, read from the chain: USDC (null if no token is set) and NEAR. Throws if the RPC fails. */

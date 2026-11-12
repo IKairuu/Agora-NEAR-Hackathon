@@ -89,6 +89,8 @@ export interface State {
   walletBal: { usdc: number | null; near: number } | null;
   walletErr: boolean;
   walletItems: WalletItem[];
+  /** Saved limits (live mode), from GET /mandates/v1. Null until loaded. */
+  limits: Limits | null;
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
   /** True once the startup load from the backend has finished, whether or not it returned anything. */
   dataReady: boolean;
@@ -134,7 +136,7 @@ const initialState: State = {
   who: '', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: saved?.user ?? null,
-  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null, walletErr: false, walletItems: [],
+  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null, walletErr: false, walletItems: [], limits: null,
   modal: null, dataReady: false, restoring: !!saved?.user && authConfigured, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
   sellForm: DEMO_SELL_FORM, sellLoaded: false,
 };
@@ -189,6 +191,7 @@ export const escrow = (s: State) => (s.live && s.money ? s.money.escrowed : s.st
 export const paused = (s: State) => (s.live ? Boolean(s.money?.paused) : s.stage >= 8);
 
 /** One row of the account's on-chain history, as GET /wallet/v1 returns it. */
+export interface Limits { perJobCap: number; dailyCap: number; newSellerCap: number; reviewWindowHours: number; categories: string[]; strict: boolean }
 export interface WalletItem { id: string; method: string; label: string; job: string | null; amount: number | null; status: string; error: string | null; txHash: string | null; explorer: string | null; at: string }
 
 /* ---------------- toasts ---------------- */
