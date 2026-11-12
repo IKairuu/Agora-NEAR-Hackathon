@@ -1,8 +1,9 @@
 import { ARRIVE, BIDS, DAO_COUNCIL, DONE_JOBS, NEG_LOG, SETTLED, GIGS, HELD, JOB, JOB_LISTING, KICKOFF, ME, OPEN_JOBS, OTHER_JOBS, REPLIES, REVIEWERS, SELLERS_DIR, SPEC, T_MSGS, T_TIME, THREADS, gigBy, liveOpenRef, setLiveOpenJobs, type Bid, type DemoData, type Gig, type OpenJob, type Order, type OtherJob, type SellerDir } from '../data/data';
 import type { ChatMsg } from '../store/store';
-import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type SellForm, type LiveNote, type LiveSpec, type SpecDoc } from '../store/store';
+import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type SellForm, type LiveNote, type LiveSpec, type SpecDoc, type WalletItem } from '../store/store';
 import type { Thread } from '../store/actions';
 import { api, ApiError } from './api';
+import { depositCall, sendCalls, walletBalances, walletSend, withdrawCall } from './near';
 
 /*
  * All data comes from the backend. The screens read the shared objects in data/data.ts directly:
@@ -215,7 +216,7 @@ export function leaveLive(): void {
   setLiveOpenJobs(null);
   if (likedBefore !== null) { setState({ liked: likedBefore }); likedBefore = null; }
   setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));
-  setState({ live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null });
+  setState({ live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null, walletErr: false, walletItems: [] });
 }
 
 async function refreshAll(first: boolean): Promise<void> {
@@ -690,11 +691,13 @@ export async function liveDeliver(ref: string): Promise<void> {
 
 async function loadMoney(): Promise<void> {
   const [wallet, limits] = await Promise.all([
-    liveApi<{ available: number; escrowed: number; usedToday: number }>('/wallet/v1', { quiet: true }).catch(() => null),
+    liveApi<{ available: number; escrowed: number; usedToday: number; chain?: { mode: string; network: string; contract: string; usdc: string | null }; items?: WalletItem[] }>('/wallet/v1', { quiet: true }).catch(() => null),
     liveApi<{ paused: boolean }>('/mandates/v1', { quiet: true }).catch(() => null),
   ]);
   if (!wallet) return;
-  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused) } });
+  const tokenArrived = Boolean(wallet.chain?.usdc) && wallet.chain?.usdc !== getState().chain?.usdc;
+  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused) }, chain: wallet.chain ?? null, walletItems: wallet.items ?? [] });
+  if (tokenArrived) void loadWalletBalances();
 }
 
 const usdcIn = (id: string): number | undefined => {
@@ -737,6 +740,91 @@ export async function liveWithdraw(): Promise<void> {
   if (!amount) return;
   const res = await api('/wallet/v1/withdraw', { body: { amount } }).catch(() => null);
   if (res) { toast(`${amount.toFixed(2)} USDC withdrawn with your full-access key.`); await refreshAll(false); }
+}
+
+/**
+ * Saves the user's own NEAR wallet account on their profile. The proof is a message signed in the wallet;
+ * the backend checks it on chain before it changes anything. Returns true when the account was linked.
+ */
+export async function liveLinkWallet(proof: { account_id: string; public_key: string; signature: string; message: string; nonce: string; callback_url: string }): Promise<boolean> {
+  const res = await api<{ acct: string; agents: string }>('/wallet/v1/link', { body: proof }).catch(() => null);
+  if (!res) return false;
+  Object.assign(ME, { acct: res.acct, agents: res.agents });
+  toast(`Wallet linked. ${res.acct} is now your AGORA account; your agents still cannot withdraw.`);
+  if (getState().live) await refreshAll(false);
+  return true;
+}
+
+/** True when AGORA balances are real USDC in the contract, so Add funds and Withdraw go through the user's wallet. */
+export const walletMode = (): boolean => getState().chain?.mode === 'real';
+
+/** Reads what the linked account holds in its own NEAR wallet. Quiet: a failed read just leaves the line out. */
+export async function loadWalletBalances(): Promise<void> {
+  if (!ME.acct) return;
+  try {
+    setState({ walletBal: await walletBalances(ME.acct, getState().chain?.usdc ?? null), walletErr: false });
+  } catch {
+    setState({ walletErr: true });
+  }
+}
+
+/** Sends a transaction the wallet just signed to the backend, which reads it from the chain and updates the balance. */
+async function recordWalletTx(txHash: string): Promise<void> {
+  await api('/wallet/v1/sync', { body: { tx_hash: txHash } }).catch(() => null);
+  await Promise.allSettled([refreshAll(false), loadWalletBalances()]);
+}
+
+/**
+ * Add funds or Withdraw signed in the user's own wallet (real chain mode).
+ * deposit: ft_transfer_call moves USDC from the wallet into the contract. withdraw: the contract sends free balance back.
+ */
+export async function liveWalletMove(op: 'deposit' | 'withdraw', amount: number): Promise<boolean> {
+  const chain = getState().chain;
+  if (!chain) { toast('Wallet details are still loading. Try again in a moment.', 'hold'); return false; }
+  if (op === 'deposit' && !chain.usdc) { toast('The USDC token is not set on the server (AGORA_USDC_CONTRACT_ID).', 'block'); return false; }
+  try {
+    const hash = op === 'deposit'
+      ? await walletSend(ME.acct, chain.usdc!, [depositCall(chain.contract, amount)])
+      : await walletSend(ME.acct, chain.contract, [withdrawCall(amount)]);
+    toast(`${amount.toFixed(2)} USDC ${op === 'deposit' ? 'added from' : 'sent back to'} your wallet (tx ${shortHash(hash)}).`);
+    await recordWalletTx(hash);
+    return true;
+  } catch (e) {
+    toast(e instanceof Error ? e.message : 'The wallet did not send it', 'block');
+    return false;
+  }
+}
+
+/** Send: a plain USDC transfer from the user's own wallet to any NEAR account. AGORA's balance does not change. */
+export async function liveWalletSendUsdc(to: string, amount: number): Promise<boolean> {
+  const usdc = getState().chain?.usdc;
+  if (!usdc) { toast('The USDC token is not set on the server (AGORA_USDC_CONTRACT_ID).', 'block'); return false; }
+  try {
+    const hash = await walletSend(ME.acct, usdc, sendCalls(to, amount));
+    toast(`${amount.toFixed(2)} USDC sent to ${to} from your wallet (tx ${shortHash(hash)}).`);
+    await loadWalletBalances();
+    return true;
+  } catch (e) {
+    toast(e instanceof Error ? e.message : 'The wallet did not send it', 'block');
+    return false;
+  }
+}
+
+/** Testnet only: the test USDC token's faucet registers the wallet and gives it 50 USDC, once a day. Signed in the wallet. */
+export async function liveFaucet(): Promise<boolean> {
+  const usdc = getState().chain?.usdc;
+  if (!usdc) { toast('The USDC token is not set on the server (AGORA_USDC_CONTRACT_ID).', 'block'); return false; }
+  try {
+    const hash = await walletSend(ME.acct, usdc, [{ method: 'faucet', args: {}, tgas: 30, deposit: 0n }]);
+    toast(`50 test USDC added to your NEAR wallet (tx ${shortHash(hash)}). Now use Add funds to give your agents a budget.`);
+    await loadWalletBalances();
+    return true;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : 'The wallet did not send it';
+    const wait = /try again in (\d+) minutes/.exec(msg);
+    toast(wait ? `You already claimed test USDC today. Try again in ${wait[1]} minutes.` : msg, 'block');
+    return false;
+  }
 }
 
 /** Mock chain only: adds test USDC so jobs can be funded. */

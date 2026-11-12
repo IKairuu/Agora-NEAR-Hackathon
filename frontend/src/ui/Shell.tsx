@@ -190,12 +190,11 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
             ) : <button className="btn primary sm" onClick={act.signin}>Sign in</button>}
           </div>
         </header>
-        <main className="content" id="content">
+        <main className="content" id="content" key={s.live ? 'live' : 'demo'}>
           {s.restoring && s.tour < 0
             ? <div className="empty" role="status"><span className="spin" /><b>Loading your account…</b><span>Your jobs, messages and wallet appear in a moment.</span></div>
             : children}
         </main>
-        <main className="content" id="content" key={s.live ? "live" : "demo"}>{children}</main>
       </div>
       {meOpen && <Pop anchor={meRef} onClose={meClose}><MeMenu close={meClose} cur={cur} /></Pop>}
       {noteOpen && <Pop anchor={noteRef} onClose={noteClose} wide><NoteMenu close={noteClose} /></Pop>}

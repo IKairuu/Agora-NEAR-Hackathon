@@ -7,7 +7,7 @@ export interface Onboarding { role?: 'hire' | 'work'; wallet?: boolean }
 export interface AuthUser { id: string; email: string; name: string; avatar: string; via: string; isNew: boolean; onboarding: Onboarding }
 
 /** What the app was doing when the user left for Google or GitHub, so the flow resumes after the redirect. */
-export interface PendingSignIn { via: OAuthVia; after: 'sell' | 'ask' | null; rolePick: 'hire' | 'work' | null; tour: number; draft: string }
+export interface PendingSignIn { via: OAuthVia | 'wallet' | 'email'; after: 'sell' | 'ask' | null; rolePick: 'hire' | 'work' | null; tour: number; draft: string }
 
 const PENDING_KEY = 'agora-oauth-pending';
 
@@ -52,6 +52,33 @@ export function userOf(session: Session): AuthUser {
     isNew: !u.last_sign_in_at || Math.abs(Date.parse(u.last_sign_in_at) - Date.parse(u.created_at)) < 60_000,
     onboarding: (m['agora_onboarding'] as Onboarding | undefined) ?? {},
   };
+}
+
+/**
+ * Finishes a NEAR wallet sign-in: the backend checked the wallet's signature and returned a one-time token,
+ * which Supabase swaps for a normal session (the same kind Google gives). Resolves with an error message, or null.
+ */
+export async function finishWalletSignIn(tokenHash: string): Promise<string | null> {
+  if (!supabase) return 'Sign-in is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.';
+  const { error } = await supabase.auth.verifyOtp({ token_hash: tokenHash, type: 'magiclink' });
+  return error ? error.message : null;
+}
+
+/**
+ * Email sign-in, step 1: Supabase emails a one-time code (and a sign-in link) to the address.
+ * Signing in this way creates the account the first time. Resolves with an error message, or null.
+ */
+export async function sendEmailCode(email: string): Promise<string | null> {
+  if (!supabase) return 'Sign-in is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.';
+  const { error } = await supabase.auth.signInWithOtp({ email, options: { shouldCreateUser: true, emailRedirectTo: window.location.origin + window.location.pathname } });
+  return error ? error.message : null;
+}
+
+/** Email sign-in, step 2: the code from the email becomes a normal Supabase session. Resolves with an error message, or null. */
+export async function verifyEmailCode(email: string, code: string): Promise<string | null> {
+  if (!supabase) return 'Sign-in is not configured. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY.';
+  const { error } = await supabase.auth.verifyOtp({ email, token: code, type: 'email' });
+  return error ? error.message : null;
 }
 
 /** A provider error comes back in the URL (for example when the user presses Cancel on GitHub). */

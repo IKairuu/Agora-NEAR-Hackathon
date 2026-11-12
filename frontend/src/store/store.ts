@@ -42,7 +42,7 @@ export interface FollowUp { id: string; text: string; t: string; sending: boolea
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
-  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick' | 'discard' | 'removejob';
+  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick' | 'linkwallet' | 'walletmove' | 'discard' | 'removejob';
 export interface LiveNote { id: string; kind: string; text: string; link: string | null; time: string; read: boolean }
 export interface State {
   stage: number;
@@ -83,6 +83,12 @@ export interface State {
   notes: { unread: number; items: LiveNote[] };
   /** Live balances and pause state from the wallet and limits API. */
   money: { available: number; escrowed: number; usedToday: number; paused: boolean } | null;
+  /** Which chain the backend uses: in mock mode AGORA balances are test numbers, in real mode they live in the contract. */
+  chain: { mode: string; network: string; contract: string; usdc: string | null } | null;
+  /** What the linked NEAR account holds in its own wallet, read from the chain (outside AGORA's contract). */
+  walletBal: { usdc: number | null; near: number } | null;
+  walletErr: boolean;
+  walletItems: WalletItem[];
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
   /** True once the startup load from the backend has finished, whether or not it returned anything. */
   dataReady: boolean;
@@ -128,7 +134,7 @@ const initialState: State = {
   who: '', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: saved?.user ?? null,
-  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
+  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null, walletErr: false, walletItems: [],
   modal: null, dataReady: false, restoring: !!saved?.user && authConfigured, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
   sellForm: DEMO_SELL_FORM, sellLoaded: false,
 };
@@ -178,9 +184,12 @@ export const hb = (s: State): Bid => BIDS.find((b) => b.key === s.hire) || BIDS[
 /** A seller's price drops to the negotiated `final` once the agent has negotiated (the demo data sets it lower for one seller). */
 export const priceOf = (s: State, b: Bid) => (s.stage >= 4 && !s.preNeg ? b.final : b.price);
 export const hPrice = (s: State) => priceOf(s, hb(s));
-export const free = (s: State) => (s.live && s.money ? s.money.available : s.stage >= 5 ? 120 - hPrice(s) : s.stage >= 1 ? 120 : 0);
+export const free = (s: State) => (s.live ? s.money?.available ?? 0 : s.stage >= 5 ? 120 - hPrice(s) : s.stage >= 1 ? 120 : 0);
 export const escrow = (s: State) => (s.live && s.money ? s.money.escrowed : s.stage >= 5 && s.stage < 7 ? hPrice(s) : 0);
 export const paused = (s: State) => (s.live ? Boolean(s.money?.paused) : s.stage >= 8);
+
+/** One row of the account's on-chain history, as GET /wallet/v1 returns it. */
+export interface WalletItem { id: string; method: string; label: string; job: string | null; amount: number | null; status: string; error: string | null; txHash: string | null; explorer: string | null; at: string }
 
 /* ---------------- toasts ---------------- */
 export interface Toast { id: number; msg: ReactNode; kind: 'ok' | 'hold' | 'block' }
