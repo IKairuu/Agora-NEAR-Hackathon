@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { Account, actions, JsonRpcProvider, KeyPairSigner, KeyPairString, teraToGas } from 'near-api-js';
+import { verifyMessage } from 'near-api-js/nep413';
 import { IndexerService, jobKeyOf, jobRefOf, bondJobOf, MockCall, ownerOf, usdcOf } from '../indexer/indexer.service.js';
 import { ChainRepository } from './chain.repository.js';
 import { mockIdMethods, mockViews } from './mock-state.js';
@@ -186,6 +187,29 @@ export class ChainService {
             account_id: `${name}.${this.network}`,
             agents_account_id: `agents.${name}.${this.network}`,
         };
+    }
+
+    networkId(): string {
+        return this.network;
+    }
+
+    async verifyWalletSignature(p: { accountId: string; publicKey: string; signature: Uint8Array; message: string; nonce: Uint8Array; recipient: string; callbackUrl?: string }): Promise<void> {
+        const attempt = (callbackUrl?: string) => verifyMessage({
+            signerAccountId: p.accountId,
+            signerPublicKey: p.publicKey,
+            signature: p.signature,
+            payload: { message: p.message, nonce: p.nonce, recipient: p.recipient, ...(callbackUrl ? { callbackUrl } : {}) },
+            provider: this.rpc(),
+        });
+        try {
+            await attempt();
+        } catch (first) {
+            const why = first instanceof Error ? first.message : 'unknown error';
+            if (!p.callbackUrl || !/Signature verification failed/.test(why)) {
+                throw new BadRequestException(/FullAccess/.test(why) ? 'That key is not a full-access key of this account' : `Could not verify the wallet signature: ${why}`);
+            }
+            await attempt(p.callbackUrl).catch(() => { throw new BadRequestException('The wallet signature does not match'); });
+        }
     }
 
     isMock(): boolean {

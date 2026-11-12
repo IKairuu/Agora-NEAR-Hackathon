@@ -144,6 +144,7 @@ export function Wallet() {
       <div className="wal">
         <div className="wal-card panel">
           <button className="acct" onClick={act.copyacct} aria-label="Copy account name">{ME.acct}<Icon name="copy" /></button>
+          {s.live && <button className="lk small" onClick={() => setState({ modal: { kind: 'linkwallet' } })}><Icon name="wallet" />Link your own NEAR wallet</button>}
           <span className="lbl">Total balance</span>
           <span className="total num">${d}<span className="c">.{c}</span></span>
           <span className="sub">{usd(free(s))} available{escrow(s) ? `, ${usd(escrow(s))} protected` : ''}</span>

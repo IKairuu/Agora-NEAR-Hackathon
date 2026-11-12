@@ -739,6 +739,19 @@ export async function liveWithdraw(): Promise<void> {
   if (res) { toast(`${amount.toFixed(2)} USDC withdrawn with your full-access key.`); await refreshAll(false); }
 }
 
+/**
+ * Saves the user's own NEAR wallet account on their profile. The proof is a message signed in the wallet;
+ * the backend checks it on chain before it changes anything. Returns true when the account was linked.
+ */
+export async function liveLinkWallet(proof: { account_id: string; public_key: string; signature: string; message: string; nonce: string; callback_url: string }): Promise<boolean> {
+  const res = await api<{ acct: string; agents: string }>('/wallet/v1/link', { body: proof }).catch(() => null);
+  if (!res) return false;
+  Object.assign(ME, { acct: res.acct, agents: res.agents });
+  toast(`Wallet linked. ${res.acct} is now your AGORA account; your agents still cannot withdraw.`);
+  if (getState().live) await refreshAll(false);
+  return true;
+}
+
 /** Mock chain only: adds test USDC so jobs can be funded. */
 export async function liveAddFunds(): Promise<void> {
   const amount = Number((window.prompt('Add how many test USDC?', '100') ?? '').replace(/[^\d.]/g, ''));

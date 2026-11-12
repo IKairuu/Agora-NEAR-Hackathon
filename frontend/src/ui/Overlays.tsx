@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { DONE_JOBS, gigBy, ME, OTHER_JOBS, ROLES, usd, VIA } from '../data/data';
 import { act, go, orderAct, TOUR } from '../store/actions';
-import { liveRemoveJob } from '../lib/live';
+import { liveLinkWallet, liveRemoveJob } from '../lib/live';
+import { connectedAccount, disconnectWallet, NEAR_NETWORK, pickWallet, proveOwnership } from '../lib/near';
 import { closeModal, free, hPrice, setState, useApp, useToasts } from '../store/store';
 import { authConfigured } from '../lib/supabase';
 import { GoogleIcon, Icon, Tile } from './icons';
@@ -109,6 +110,54 @@ function Wallets({ onPick, back }: { onPick: () => void; back: () => void }) {
           </button>
         ))}
       </div>
+      <div className="acts"><button className="btn" onClick={back}>Back</button></div>
+    </Frame>
+  );
+}
+
+/**
+ * Links the user's real NEAR wallet (signed-in accounts only). Two clicks on purpose: one to connect a wallet,
+ * one to sign the ownership message, because wallets open popups that browsers only allow straight after a click.
+ */
+function LinkWallet({ onDone, back }: { onDone: () => void; back: () => void }) {
+  const { user } = useApp();
+  const [acct, setAcct] = useState<string | null>(null);
+  const [busy, setBusy] = useState<'' | 'load' | 'pick' | 'sign'>('load');
+  const [err, setErr] = useState('');
+  useEffect(() => {
+    let on = true;
+    connectedAccount().then((a) => { if (on) setAcct(a); }, () => { if (on) setErr('Could not load the wallet list. Check your connection and try again.'); }).finally(() => { if (on) setBusy(''); });
+    return () => { on = false; };
+  }, []);
+  const pick = async () => {
+    setErr(''); setBusy('pick');
+    try { setAcct(await pickWallet()); } catch (e) { setErr(e instanceof Error ? e.message : 'Could not open the wallet'); }
+    setBusy('');
+  };
+  const other = async () => { await disconnectWallet().catch(() => undefined); setAcct(null); await pick(); };
+  const link = async () => {
+    if (!user) return;
+    setErr(''); setBusy('sign');
+    try {
+      const proof = await proveOwnership(user.id);
+      if (await liveLinkWallet(proof)) { onDone(); return; }
+    } catch (e) { setErr(e instanceof Error ? e.message : 'The wallet did not sign'); }
+    setBusy('');
+  };
+  return (
+    <Frame>
+      <h2>Connect a NEAR wallet</h2>
+      <p className="muted">Your wallet keeps its own keys. AGORA never sees your seed phrase. Use a {NEAR_NETWORK} account.</p>
+      {acct ? (
+        <>
+          <div className="banner"><Icon name="wallet" /><div className="grow"><b className="mono" style={{ fontWeight: 500 }}>{acct}</b><span className="muted small">Sign a short message to prove this account is yours. It is not a transaction and costs nothing.</span></div></div>
+          <button className="btn primary wide" disabled={!!busy} aria-busy={busy === 'sign'} onClick={() => void link()}>{busy === 'sign' ? 'Waiting for your wallet…' : 'Sign and link'}</button>
+          <button className="lk" disabled={!!busy} onClick={() => void other()}>Use another wallet</button>
+        </>
+      ) : (
+        <button className="btn primary wide" disabled={!!busy} aria-busy={busy === 'pick'} onClick={() => void pick()}><Icon name="wallet" />{busy === 'load' ? 'Loading wallets…' : busy === 'pick' ? 'Waiting for your wallet…' : 'Choose a wallet'}</button>
+      )}
+      {err && <p className="small" role="alert" style={{ color: 'var(--block, #c0392b)' }}>{err}</p>}
       <div className="acts"><button className="btn" onClick={back}>Back</button></div>
     </Frame>
   );
@@ -296,13 +345,14 @@ function Offer({ id }: { id: string }) {
 }
 
 export function ModalHost() {
-  const { modal } = useApp();
+  const { modal, user } = useApp();
   if (!modal) return null;
   switch (modal.kind) {
     case 'signin': return <SignIn />;
     case 'code': return <Code />;
     case 'walletstep': return <WalletStep />;
-    case 'walletpick': return <Wallets onPick={act.walletlinked} back={act.walletstep} />;
+    case 'walletpick': return user ? <LinkWallet onDone={() => act.walletlinked(true)} back={act.walletstep} /> : <Wallets onPick={act.walletlinked} back={act.walletstep} />;
+    case 'linkwallet': return <LinkWallet onDone={closeModal} back={closeModal} />;
     case 'wallets': return <Wallets onPick={() => act.signVia('wallet')} back={act.signin} />;
     case 'role': return <RolePicker />;
     case 'send': return <Send />;

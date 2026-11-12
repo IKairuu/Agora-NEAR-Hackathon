@@ -261,7 +261,8 @@ export const act = {
   passkey: () => { setState({ signVia: 'passkey' }); toast('Passkey confirmed with your device. Nothing to remember.'); act.walletstep(); },
   walletstep: () => openModal('walletstep'),
   walletpick: () => openModal('walletpick'),
-  walletlinked: () => { setState({ walletLinked: true }); remember({ wallet: true }); toast('Wallet linked. It can fund jobs; your agents still cannot withdraw.'); act.signin2(); },
+  /** `real`: a real wallet was linked and already said so; the demo picker passes a click event, not true. */
+  walletlinked: (real?: unknown) => { setState({ walletLinked: true }); remember({ wallet: true }); if (real !== true) toast('Wallet linked. It can fund jobs; your agents still cannot withdraw.'); act.signin2(); },
   signsell: () => {
     if (getState().stage >= 1) { setState({ sellStep: 0 }); go('sell'); return; }
     setState({ after: 'sell', rolePick: 'work' }); openModal('signin');

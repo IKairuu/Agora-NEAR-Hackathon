@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service.js';
 import { ChainService } from '../chain/chain.service.js';
 import { CreateDeposit } from './dto/CreateDeposit.dto.js';
 import { CreateWithdrawal } from './dto/CreateWithdrawal.dto.js';
+import { LinkWallet } from './dto/LinkWallet.dto.js';
 import { WalletRepository } from './wallet.repository.js';
 
 const LABELS: Record<string, string> = {
@@ -38,6 +39,12 @@ const usdc = (value: unknown): number | null => {
     const n = Number(value);
     return typeof value === 'string' && Number.isFinite(n) ? n / 1_000_000 : null;
 };
+export const LINK_RECIPIENT = 'agora';
+const LINK_MAX_AGE_MS = 10 * 60 * 1000;
+
+export const linkMessage = (accountId: string, userId: string, issuedAt: string): string =>
+    `Link NEAR account ${accountId} to AGORA user ${userId}. Issued at ${issuedAt}`;
+
 const sameDay = (a: Date | null): boolean => a !== null && a.toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10);
 
 @Injectable()
@@ -108,6 +115,44 @@ export class WalletService {
         }
         const tx = await this.chainService.callAs('owner', acct, 'deposit', { amount: units(body.amount) });
         return { message: 'Test Deposit Successfully Added', amount: body.amount, txHash: tx.tx_hash, explorer: tx.explorer_url };
+    }
+
+    async linkWallet(token: string, body: LinkWallet) {
+        const authId = await this.authId(token);
+        const network = this.chainService.networkId();
+        const implicit = /^[0-9a-f]{64}$/.test(body.account_id);
+        if (!implicit && !body.account_id.endsWith(`.${network}`)) {
+            throw new BadRequestException(`Connect a ${network} account (it ends in .${network})`);
+        }
+        const issuedAt = /Issued at (\S+)$/.exec(body.message)?.[1] ?? '';
+        const age = Date.now() - Date.parse(issuedAt);
+        if (body.message !== linkMessage(body.account_id, authId, issuedAt) || !(age >= -60_000 && age <= LINK_MAX_AGE_MS)) {
+            throw new BadRequestException('The signed message is not for this account or has expired. Try linking again');
+        }
+        const nonce = Buffer.from(body.nonce, 'base64');
+        if (nonce.length !== 32) throw new BadRequestException('Nonce must be 32 bytes');
+
+        await this.chainService.verifyWalletSignature({
+            accountId: body.account_id,
+            publicKey: body.public_key,
+            signature: Buffer.from(body.signature, 'base64'),
+            message: body.message,
+            nonce,
+            recipient: LINK_RECIPIENT,
+            callbackUrl: body.callback_url,
+        });
+
+        const account = await this.walletRepository.getAccount(authId);
+        if (!account) throw new BadRequestException('Open your account first');
+        if (await this.walletRepository.findAccountOwner(body.account_id, authId)) {
+            throw new ConflictException(`${body.account_id} is already linked to another AGORA account`);
+        }
+        const agents = implicit ? (account.agentsAccountId ?? '') : `agents.${body.account_id}`;
+        if (agents && (await this.walletRepository.findAccountOwner(agents, authId))) {
+            throw new ConflictException(`${agents} is already used by another AGORA account`);
+        }
+        await this.walletRepository.setAccountIds(authId, body.account_id, agents);
+        return { message: 'Wallet Successfully Linked', acct: body.account_id, agents, previous: account.nearAccountId ?? null };
     }
 
     private async authId(token: string): Promise<string> {

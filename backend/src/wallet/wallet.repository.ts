@@ -13,6 +13,13 @@ export class WalletRepository {
         );
     }
 
+    async findAccountOwner(accountId: string, exceptUserId: string) {
+        return prisma.profile.findFirst({
+            where: { id: { not: exceptUserId }, OR: [{ nearAccountId: accountId }, { agentsAccountId: accountId }] },
+            select: { id: true },
+        });
+    }
+
     async getBalance(accountId: string) {
         return prisma.balance.findUnique({ where: { accountId }, select: { available: true, escrowed: true, spentToday: true, dayStarted: true } });
     }

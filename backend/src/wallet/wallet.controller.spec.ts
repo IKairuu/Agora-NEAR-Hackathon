@@ -8,7 +8,7 @@ import { WalletService } from './wallet.service';
 
 describe('WalletController', () => {
     it('passes the token and body through to the service', async () => {
-        const service = { getWallet: jest.fn().mockResolvedValue({}), createWithdrawal: jest.fn().mockResolvedValue({}), createDeposit: jest.fn().mockResolvedValue({}) };
+        const service = { getWallet: jest.fn().mockResolvedValue({}), createWithdrawal: jest.fn().mockResolvedValue({}), createDeposit: jest.fn().mockResolvedValue({}), linkWallet: jest.fn().mockResolvedValue({}) };
         const module = await Test.createTestingModule({
             controllers: [WalletController],
             providers: [{ provide: WalletService, useValue: service }],
@@ -20,5 +20,8 @@ describe('WalletController', () => {
         expect(service.createWithdrawal).toHaveBeenCalledWith('Bearer t', { amount: 1 });
         await controller.createDeposit('Bearer t', { amount: 2 });
         expect(service.createDeposit).toHaveBeenCalledWith('Bearer t', { amount: 2 });
+        const link = { account_id: 'kairu.testnet', public_key: 'ed25519:x', signature: 'c2ln', message: 'm', nonce: 'bm9uY2U=' };
+        await controller.linkWallet('Bearer t', link);
+        expect(service.linkWallet).toHaveBeenCalledWith('Bearer t', link);
     });
 });
