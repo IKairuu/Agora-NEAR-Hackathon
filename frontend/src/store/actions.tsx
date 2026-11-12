@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, BIDS, gigBy, JOB, KICKOFF, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, THREADS, usd, type Order } from '../data/data';
-import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
+import { finishWalletSignIn, saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
+import { api } from '../lib/api';
+import type { OwnershipProof } from '../lib/near';
+import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveWithdraw as liveMockWithdraw, walletMode, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg, type State } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -272,6 +274,19 @@ export const act = {
     if ((via === 'google' || via === 'github') && authConfigured) { void act.oauth(via); return; }
     setState({ signVia: via }); if (via === 'wallet') act.signin2(); else act.walletstep();
   },
+  /**
+   * Real sign-in with a NEAR wallet alone: the backend checks the signed message, finds the account the wallet is
+   * linked to (or makes one), and returns a one-time token that becomes a Supabase session. Returns an error or null.
+   */
+  walletSignIn: async (proof: OwnershipProof): Promise<string | null> => {
+    const s = getState();
+    savePending({ via: 'wallet', after: s.after, rolePick: s.rolePick, tour: s.tour, draft: s.draft });
+    const res = await api<{ token_hash: string; created: boolean }>('/wallet/v1/sign-in', { body: proof, quiet: true }).catch((e: unknown) => e instanceof Error ? e : new Error('Could not sign in'));
+    if (res instanceof Error) { takePending(); return res.message; }
+    const err = await finishWalletSignIn(res.token_hash);
+    if (err) { takePending(); return err; }
+    return null;
+  },
   /** Real Google or GitHub sign-in: remember where the user was, then leave for the provider's own page. */
   oauth: async (via: OAuthVia) => {
     const s = getState();
@@ -369,14 +384,15 @@ export const act = {
   fund: () => hire(getState().hire || hb(getState()).key),
   send: () => openModal('send'),
   receive: () => openModal('receive'),
-  addfunds: () => { if (isLive()) { void liveAddFunds(); return; } openModal('addfunds'); },
+  /** Live: real chain mode signs in the user's wallet; mock mode adds test USDC. Demo: the NEAR Intents screen. */
+  addfunds: () => { if (isLive()) { if (walletMode()) openModal('walletmove', { op: 'deposit' }); else void liveAddFunds(); return; } openModal('addfunds'); },
   dispute: () => openModal('dispute'),
   unpause: () => openModal('unpause'),
   overcap: () => toast(<><b>Rejected by contract.</b> fund_job 400.00 USDC is over your per-job cap of 50.00. 0 USDC moved.</>, 'block', 5200),
   wrongcat: () => toast(<><b>Rejected by contract.</b> Category "Design" is not on your allowed list.</>, 'block'),
   withdraw: () => toast(<><b>Rejected by NEAR.</b> The agent key has no permission to call withdraw.</>, 'block'),
   deletekey: () => toast('Deleting a key needs your full-access key. You would confirm with Google sign-in here.', 'hold'),
-  withdrawme: () => isLive() ? void liveWithdraw() : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
+  withdrawme: () => isLive() ? (walletMode() ? openModal('walletmove', { op: 'withdraw' }) : void liveMockWithdraw()) : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
   send2: () => { closeModal(); toast('In the prototype nothing is sent. On testnet this is a full-access key transfer.', 'hold'); },
   copyacct: () => { try { void navigator.clipboard.writeText(ME.acct); } catch { /* ignore */ } toast(`Copied ${ME.acct}.`); },
   intents: () => toast('Quote refreshed: 100.00 USDC on Base becomes 99.71 USDC on NEAR.'),

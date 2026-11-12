@@ -1451,3 +1451,5 @@ body:has(.achat) #toasts, body:has(.inbox) #toasts { bottom: 104px; }
 @media (prefers-reduced-motion: reduce) { .ask, .achat, .ac-log > * { animation: none; } }
 /* NEAR Wallet Selector picker: above AGORA modals (its own stylesheet loads later, hence the extra specificity) */
 body .nws-modal-wrapper { z-index: calc(var(--z-modal) + 50); }
+/* the picker uses a .content class too: undo AGORA's page layout for it */
+body .nws-modal-wrapper .content { display: block; padding: 0; max-width: none; gap: 0; animation: none; }

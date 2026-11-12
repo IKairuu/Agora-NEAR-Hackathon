@@ -1,5 +1,7 @@
 import { agentPick, ATTACK, CATS, HELD, JOB, ME, usd } from '../data/data';
+import { useEffect } from 'react';
 import { act } from '../store/actions';
+import { loadWalletBalances } from '../lib/live';
 import { escrow, free, hb, hPrice, paused, setState, useApp } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
 import { Check, Feed, Gate, Head, RLink, SignInButton, T } from '../ui/parts';
@@ -129,6 +131,7 @@ export function Mandate() {
 /* ---------------- wallet, simple like a NEAR wallet ---------------- */
 export function Wallet() {
   const s = useApp();
+  useEffect(() => { if (s.live) void loadWalletBalances(); }, [s.live]);
   if (s.stage < 1) return <Shell cur="wallet"><Head title="Wallet" /><Gate msg="Sign in to see your wallet"><SignInButton /></Gate></Shell>;
   const total = free(s) + escrow(s);
   const [d, c] = usd(total).split('.');
@@ -148,6 +151,7 @@ export function Wallet() {
           <span className="lbl">Total balance</span>
           <span className="total num">${d}<span className="c">.{c}</span></span>
           <span className="sub">{usd(free(s))} available{escrow(s) ? `, ${usd(escrow(s))} protected` : ''}</span>
+          {s.live && s.chain && <span className="sub">{s.chain.mode === 'real' ? 'USDC held by the AGORA contract' : 'Test money: the server runs in mock mode'}{s.walletBal ? ` · in your NEAR wallet: ${s.walletBal.usdc === null ? '' : `${usd(s.walletBal.usdc)} USDC, `}${s.walletBal.near.toFixed(2)} NEAR` : ''}</span>}
           <div className="wal-acts">
             <button className="pri" onClick={act.addfunds}><i><Icon name="plus" /></i>Add funds</button>
             <button onClick={act.send}><i><Icon name="up" /></i>Send</button>

@@ -42,7 +42,7 @@ export interface FollowUp { id: string; text: string; t: string; sending: boolea
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
-  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick' | 'linkwallet' | 'discard' | 'removejob';
+  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick' | 'linkwallet' | 'walletmove' | 'discard' | 'removejob';
 export interface LiveNote { id: string; kind: string; text: string; link: string | null; time: string; read: boolean }
 export interface State {
   stage: number;
@@ -83,6 +83,10 @@ export interface State {
   notes: { unread: number; items: LiveNote[] };
   /** Live balances and pause state from the wallet and limits API. */
   money: { available: number; escrowed: number; usedToday: number; paused: boolean } | null;
+  /** Which chain the backend uses: in mock mode AGORA balances are test numbers, in real mode they live in the contract. */
+  chain: { mode: string; network: string; contract: string; usdc: string | null } | null;
+  /** What the linked NEAR account holds in its own wallet, read from the chain (outside AGORA's contract). */
+  walletBal: { usdc: number | null; near: number } | null;
   modal: { kind: ModalKind; props?: Record<string, string> } | null;
   /** True once the startup load from the backend has finished, whether or not it returned anything. */
   dataReady: boolean;
@@ -128,7 +132,7 @@ const initialState: State = {
   who: '', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: saved?.user ?? null,
-  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
+  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null,
   modal: null, dataReady: false, restoring: !!saved?.user && authConfigured, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
   sellForm: DEMO_SELL_FORM, sellLoaded: false,
 };

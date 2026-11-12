@@ -64,12 +64,21 @@ export interface OwnershipProof { account_id: string; public_key: string; signat
  * The backend checks the signature and that the key is a full-access key of the account.
  * Call it straight from a click: some wallets open a popup, and browsers block popups that don't come from a click.
  */
-export async function proveOwnership(userId: string): Promise<OwnershipProof> {
+export function proveOwnership(userId: string): Promise<OwnershipProof> {
+  return signForAgora((accountId) => `Link NEAR account ${accountId} to AGORA user ${userId}. Issued at ${new Date().toISOString()}`);
+}
+
+/** Same check, used to sign in with the wallet alone. The backend accepts it for 5 minutes. */
+export function proveSignIn(): Promise<OwnershipProof> {
+  return signForAgora((accountId) => `Sign in to AGORA as ${accountId}. Issued at ${new Date().toISOString()}`);
+}
+
+async function signForAgora(text: (accountId: string) => string): Promise<OwnershipProof> {
   const { selector } = await load();
   const wallet = await selector.wallet();
   const accountId = await connectedAccount();
   if (!accountId) throw new Error('Connect a wallet first');
-  const message = `Link NEAR account ${accountId} to AGORA user ${userId}. Issued at ${new Date().toISOString()}`;
+  const message = text(accountId);
   const nonce = Buffer.from(crypto.getRandomValues(new Uint8Array(32)));
   const callbackUrl = window.location.origin + window.location.pathname;
   const signed = await wallet.signMessage({ message, recipient: RECIPIENT, nonce, callbackUrl });
@@ -83,4 +92,74 @@ export async function disconnectWallet(): Promise<void> {
   const { selector } = await load();
   const wallet = await selector.wallet().catch(() => null);
   await wallet?.signOut();
+}
+
+/* ---------------- money moved by the user's own wallet ---------------- */
+
+const TGAS = 10n ** 12n;
+const ONE_YOCTO = 1n;
+/** What the USDC contract asks to register a new holder (refunded when the account is already registered). */
+const STORAGE_DEPOSIT = 1_250_000_000_000_000_000_000n;
+
+export interface WalletCall { method: string; args: Record<string, unknown>; tgas: number; deposit: bigint }
+
+/** USDC has 6 decimals: 12.5 becomes "12500000". */
+export const usdcUnits = (amount: number): string => String(Math.round(amount * 1_000_000));
+
+/**
+ * Asks the connected wallet to sign one transaction and waits for the result. Returns the transaction hash.
+ * Throws when the wallet is not the linked AGORA account, so money never moves from the wrong account.
+ */
+export async function walletSend(expectAccount: string, receiverId: string, calls: WalletCall[]): Promise<string> {
+  const { selector } = await load();
+  const signer = await connectedAccount();
+  if (!signer) throw new Error('Connect your NEAR wallet first');
+  if (expectAccount && signer !== expectAccount) throw new Error(`Your wallet is signed in as ${signer}, but this AGORA account is linked to ${expectAccount}. Switch accounts in the wallet or link ${signer}`);
+  const [{ actionCreators }, wallet] = await Promise.all([import('@near-js/transactions'), selector.wallet()]);
+  const actions = calls.map((c) => actionCreators.functionCall(c.method, c.args, BigInt(c.tgas) * TGAS, c.deposit));
+  const outcome = await wallet.signAndSendTransaction({ signerId: signer, receiverId, actions });
+  const hash = outcome ? (outcome.transaction_outcome?.id ?? (outcome.transaction as { hash?: string } | undefined)?.hash) : undefined;
+  if (!hash) throw new Error('The wallet did not return a transaction');
+  const failure = outcome && typeof outcome.status === 'object' && 'Failure' in outcome.status ? outcome.status.Failure : null;
+  if (failure) throw new Error(`NEAR refused the transaction: ${JSON.stringify(failure).slice(0, 200)}`);
+  return hash;
+}
+
+/** ft_transfer_call into the marketplace contract: USDC leaves the wallet and becomes AGORA balance. */
+export const depositCall = (contract: string, amount: number): WalletCall =>
+  ({ method: 'ft_transfer_call', args: { receiver_id: contract, amount: usdcUnits(amount), msg: 'deposit' }, tgas: 100, deposit: ONE_YOCTO });
+
+/** The contract's withdraw: free AGORA balance goes back to the wallet as USDC. */
+export const withdrawCall = (amount: number): WalletCall =>
+  ({ method: 'withdraw', args: { amount: usdcUnits(amount) }, tgas: 60, deposit: ONE_YOCTO });
+
+/** Plain USDC transfer from the wallet. Registers the receiver with the token first, as NEP-141 requires. */
+export const sendCalls = (to: string, amount: number): WalletCall[] => [
+  { method: 'storage_deposit', args: { account_id: to, registration_only: true }, tgas: 10, deposit: STORAGE_DEPOSIT },
+  { method: 'ft_transfer', args: { receiver_id: to, amount: usdcUnits(amount), memo: 'Sent from AGORA' }, tgas: 30, deposit: ONE_YOCTO },
+];
+
+/** The public RPC. Reading balances does not need the wallet library, so it is not loaded for this. */
+const RPC_URL = (import.meta.env.VITE_NEAR_RPC_URL as string | undefined) || `https://rpc.${NEAR_NETWORK}.near.org`;
+
+async function rpcQuery<T>(params: Record<string, unknown>): Promise<T> {
+  const res = await fetch(RPC_URL, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ jsonrpc: '2.0', id: 'agora', method: 'query', params: { finality: 'final', ...params } }),
+  });
+  const data = (await res.json()) as { result?: T & { error?: string }; error?: { message?: string } };
+  if (!data.result || data.result.error) throw new Error(data.error?.message ?? data.result?.error ?? 'RPC error');
+  return data.result;
+}
+
+/** What the account holds in its own wallet, read from the chain: USDC (null if no token is set) and NEAR. */
+export async function walletBalances(accountId: string, usdc: string | null): Promise<{ usdc: number | null; near: number }> {
+  const near = rpcQuery<{ amount: string }>({ request_type: 'view_account', account_id: accountId })
+    .then((r) => Number(BigInt(r.amount) / 10n ** 18n) / 1_000_000, () => 0);
+  const token = usdc
+    ? rpcQuery<{ result: number[] }>({ request_type: 'call_function', account_id: usdc, method_name: 'ft_balance_of', args_base64: btoa(JSON.stringify({ account_id: accountId })) })
+      .then((r) => Number(JSON.parse(new TextDecoder().decode(new Uint8Array(r.result))) as string) / 1_000_000, () => 0)
+    : Promise.resolve(null);
+  const [n, u] = await Promise.all([near, token]);
+  return { usdc: u, near: n };
 }

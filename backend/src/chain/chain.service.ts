@@ -193,6 +193,10 @@ export class ChainService {
         return this.network;
     }
 
+    walletChainInfo(): { mode: string; network: string; contract: string; usdc: string | null } {
+        return { mode: this.mode, network: this.network, contract: this.contractId, usdc: process.env['AGORA_USDC_CONTRACT_ID'] || null };
+    }
+
     async verifyWalletSignature(p: { accountId: string; publicKey: string; signature: Uint8Array; message: string; nonce: Uint8Array; recipient: string; callbackUrl?: string }): Promise<void> {
         const attempt = (callbackUrl?: string) => verifyMessage({
             signerAccountId: p.accountId,

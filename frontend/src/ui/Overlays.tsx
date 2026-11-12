@@ -1,9 +1,9 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { DONE_JOBS, gigBy, ME, OTHER_JOBS, ROLES, usd, VIA } from '../data/data';
 import { act, go, orderAct, TOUR } from '../store/actions';
-import { liveLinkWallet, liveRemoveJob } from '../lib/live';
-import { connectedAccount, disconnectWallet, NEAR_NETWORK, pickWallet, proveOwnership } from '../lib/near';
-import { closeModal, free, hPrice, setState, useApp, useToasts } from '../store/store';
+import { liveLinkWallet, liveRemoveJob, liveWalletMove, liveWalletSendUsdc, loadWalletBalances } from '../lib/live';
+import { connectedAccount, disconnectWallet, NEAR_NETWORK, pickWallet, proveOwnership, proveSignIn } from '../lib/near';
+import { closeModal, free, hPrice, setState, toast, useApp, useToasts } from '../store/store';
 import { authConfigured } from '../lib/supabase';
 import { GoogleIcon, Icon, Tile } from './icons';
 import { Check, T } from './parts';
@@ -119,7 +119,7 @@ function Wallets({ onPick, back }: { onPick: () => void; back: () => void }) {
  * Links the user's real NEAR wallet (signed-in accounts only). Two clicks on purpose: one to connect a wallet,
  * one to sign the ownership message, because wallets open popups that browsers only allow straight after a click.
  */
-function LinkWallet({ onDone, back }: { onDone: () => void; back: () => void }) {
+function LinkWallet({ onDone, back, signIn = false }: { onDone: () => void; back: () => void; signIn?: boolean }) {
   const { user } = useApp();
   const [acct, setAcct] = useState<string | null>(null);
   const [busy, setBusy] = useState<'' | 'load' | 'pick' | 'sign'>('load');
@@ -136,22 +136,25 @@ function LinkWallet({ onDone, back }: { onDone: () => void; back: () => void }) 
   };
   const other = async () => { await disconnectWallet().catch(() => undefined); setAcct(null); await pick(); };
   const link = async () => {
-    if (!user) return;
+    if (!signIn && !user) return;
     setErr(''); setBusy('sign');
     try {
-      const proof = await proveOwnership(user.id);
-      if (await liveLinkWallet(proof)) { onDone(); return; }
+      if (signIn) {
+        const fail = await act.walletSignIn(await proveSignIn());
+        if (!fail) { onDone(); return; }
+        setErr(fail);
+      } else if (await liveLinkWallet(await proveOwnership(user!.id))) { onDone(); return; }
     } catch (e) { setErr(e instanceof Error ? e.message : 'The wallet did not sign'); }
     setBusy('');
   };
   return (
     <Frame>
-      <h2>Connect a NEAR wallet</h2>
-      <p className="muted">Your wallet keeps its own keys. AGORA never sees your seed phrase. Use a {NEAR_NETWORK} account.</p>
+      <h2>{signIn ? 'Sign in with a NEAR wallet' : 'Connect a NEAR wallet'}</h2>
+      <p className="muted">Your wallet keeps its own keys. AGORA never sees your seed phrase. Use a {NEAR_NETWORK} account.{signIn ? ' If this wallet is linked to an AGORA account you open that account; otherwise a new one is made for it.' : ''}</p>
       {acct ? (
         <>
           <div className="banner"><Icon name="wallet" /><div className="grow"><b className="mono" style={{ fontWeight: 500 }}>{acct}</b><span className="muted small">Sign a short message to prove this account is yours. It is not a transaction and costs nothing.</span></div></div>
-          <button className="btn primary wide" disabled={!!busy} aria-busy={busy === 'sign'} onClick={() => void link()}>{busy === 'sign' ? 'Waiting for your wallet…' : 'Sign and link'}</button>
+          <button className="btn primary wide" disabled={!!busy} aria-busy={busy === 'sign'} onClick={() => void link()}>{busy === 'sign' ? 'Waiting for your wallet…' : signIn ? 'Sign and sign in' : 'Sign and link'}</button>
           <button className="lk" disabled={!!busy} onClick={() => void other()}>Use another wallet</button>
         </>
       ) : (
@@ -182,8 +185,67 @@ function RolePicker() {
   );
 }
 
+/** The number typed in an amount box, or 0. */
+const amountIn = (v: string): number => { const n = Number(v.replace(/[^\d.]/g, '')); return Number.isFinite(n) && n > 0 ? n : 0; };
+
+/** "In your wallet" line, read from the chain. Shows nothing until the read comes back. */
+function WalletLine() {
+  const { walletBal } = useApp();
+  useEffect(() => { void loadWalletBalances(); }, []);
+  if (!walletBal) return null;
+  return <span className="hint">In your NEAR wallet: {walletBal.usdc === null ? 'USDC token not set' : `${usd(walletBal.usdc)} USDC`}, {walletBal.near.toFixed(2)} NEAR for gas</span>;
+}
+
+/** Real chain mode: Add funds (ft_transfer_call from the wallet) or Withdraw (contract back to the wallet), signed in the wallet. */
+function WalletMove({ op }: { op: 'deposit' | 'withdraw' }) {
+  const s = useApp();
+  const [amt, setAmt] = useState('10.00');
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    const n = amountIn(amt);
+    if (!n) { toast('Enter an amount above 0.', 'hold'); return; }
+    if (op === 'withdraw' && n > free(s)) { toast(`You have ${usd(free(s))} USDC free to withdraw.`, 'hold'); return; }
+    setBusy(true);
+    if (await liveWalletMove(op, n)) closeModal(); else setBusy(false);
+  };
+  return (
+    <Frame>
+      <h2>{op === 'deposit' ? 'Add funds from your wallet' : 'Withdraw to your wallet'}</h2>
+      <p className="muted">{op === 'deposit' ? 'Moves USDC from your NEAR wallet into your AGORA balance with ft_transfer_call. Your agents can spend it only inside your limits.' : 'Sends free USDC from your AGORA balance back to your NEAR wallet. Money locked in Protected payment stays put.'}</p>
+      <div className="field"><label htmlFor="wm-amt">Amount (USDC)</label><input className="input num" id="wm-amt" inputMode="decimal" value={amt} onChange={(e) => setAmt(e.target.value)} />
+        {op === 'deposit' ? <WalletLine /> : <span className="hint">{usd(free(s))} USDC free in AGORA</span>}</div>
+      <div className="banner hold"><Icon name="lock" /><div className="grow"><span>Your wallet opens to confirm. It needs your full-access key, so agent keys can never do this.</span></div></div>
+      <div className="acts"><Cancel /><button className="btn primary" disabled={busy} aria-busy={busy} onClick={() => void go()}>{busy ? 'Waiting for your wallet…' : 'Confirm in your wallet'}</button></div>
+    </Frame>
+  );
+}
+
+/** Live: a plain USDC transfer from the user's own NEAR wallet. */
+function LiveSend() {
+  const [to, setTo] = useState('');
+  const [amt, setAmt] = useState('10.00');
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    const n = amountIn(amt);
+    if (!/^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/.test(to.trim())) { toast('Enter a NEAR account, like name.testnet.', 'hold'); return; }
+    if (!n) { toast('Enter an amount above 0.', 'hold'); return; }
+    setBusy(true);
+    if (await liveWalletSendUsdc(to.trim(), n)) closeModal(); else setBusy(false);
+  };
+  return (
+    <Frame>
+      <h2>Send USDC</h2>
+      <div className="field"><label htmlFor="snd-to">To</label><input className="input mono" id="snd-to" placeholder="name.testnet" value={to} onChange={(e) => setTo(e.target.value.toLowerCase())} /></div>
+      <div className="field"><label htmlFor="snd-amt">Amount</label><input className="input num" id="snd-amt" inputMode="decimal" value={amt} onChange={(e) => setAmt(e.target.value)} /><WalletLine /></div>
+      <div className="banner hold"><Icon name="lock" /><div className="grow"><span>Sends from your NEAR wallet, not from your AGORA balance. Your wallet opens to confirm; agent keys can't send.</span></div></div>
+      <div className="acts"><Cancel /><button className="btn primary" disabled={busy} aria-busy={busy} onClick={() => void go()}>{busy ? 'Waiting for your wallet…' : 'Confirm in your wallet'}</button></div>
+    </Frame>
+  );
+}
+
 function Send() {
   const s = useApp();
+  if (s.live) return <LiveSend />;
   return (
     <Frame>
       <h2>Send USDC</h2>
@@ -195,12 +257,24 @@ function Send() {
   );
 }
 
+/** A scannable QR code of the account name. The QR library loads only when this opens. */
+function AccountQr({ acct }: { acct: string }) {
+  const [src, setSrc] = useState('');
+  useEffect(() => {
+    let on = true;
+    void import('qrcode').then((q) => q.toDataURL(acct, { margin: 1, width: 176 })).then((u) => { if (on) setSrc(u); }, () => undefined);
+    return () => { on = false; };
+  }, [acct]);
+  return src ? <img src={src} width={176} height={176} alt={`QR code for ${acct}`} style={{ borderRadius: 12, background: '#fff' }} /> : <span className="avatar lg"><Icon name="qr" /></span>;
+}
+
 function Receive() {
+  const { live, chain } = useApp();
   return (
     <Frame>
       <h2>Receive</h2>
-      <p className="muted">Send USDC on NEAR to this account. To pay in from another chain, use Add funds.</p>
-      <div className="panel" style={{ padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}><span className="avatar lg"><Icon name="qr" /></span><span className="mono">{ME.acct}</span></div>
+      <p className="muted">{live ? <>Ask people to send USDC on NEAR {chain?.usdc ? <>(token <span className="mono">{chain.usdc}</span>)</> : null} to this account. It lands in your NEAR wallet; use Add funds to move it into AGORA.</> : 'Send USDC on NEAR to this account. To pay in from another chain, use Add funds.'}</p>
+      <div className="panel" style={{ padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>{live && ME.acct ? <AccountQr acct={ME.acct} /> : <span className="avatar lg"><Icon name="qr" /></span>}<span className="mono">{ME.acct}</span>{live && <WalletLine />}</div>
       <div className="acts"><button className="btn" onClick={act.copyacct}><Icon name="copy" />Copy account</button><button className="btn primary" onClick={closeModal}>Done</button></div>
     </Frame>
   );
@@ -353,7 +427,8 @@ export function ModalHost() {
     case 'walletstep': return <WalletStep />;
     case 'walletpick': return user ? <LinkWallet onDone={() => act.walletlinked(true)} back={act.walletstep} /> : <Wallets onPick={act.walletlinked} back={act.walletstep} />;
     case 'linkwallet': return <LinkWallet onDone={closeModal} back={closeModal} />;
-    case 'wallets': return <Wallets onPick={() => act.signVia('wallet')} back={act.signin} />;
+    case 'walletmove': return <WalletMove op={modal.props?.op === 'withdraw' ? 'withdraw' : 'deposit'} />;
+    case 'wallets': return authConfigured ? <LinkWallet signIn onDone={closeModal} back={act.signin} /> : <Wallets onPick={() => act.signVia('wallet')} back={act.signin} />;
     case 'role': return <RolePicker />;
     case 'send': return <Send />;
     case 'receive': return <Receive />;
