@@ -15,6 +15,7 @@ const jobSelect = {
     baseCommit: true,
     budgetLabel: true,
     agreedPrice: true,
+    acceptedBidId: true,
     postedAt: true,
     createdAt: true,
     buyerId: true,
@@ -108,6 +109,32 @@ export class JobsRepository {
         return prisma.$transaction(async (tx) => {
             const updated = await tx.job.updateMany({ where: { id, buyerId: userId, onchainId: null }, data: { onchainId, postedTx: txHash } });
             await tx.chainTx.updateMany({ where: { txHash, jobId: null }, data: { jobId: id } });
+            return updated.count;
+        });
+    }
+
+    /** Deletes the buyer's own draft. The status is part of the filter, so a job posted meanwhile is left alone. */
+    async deleteDraft(userId: string, id: string) {
+        return prisma.$transaction(async (tx) => {
+            const deleted = await tx.job.deleteMany({ where: { id, buyerId: userId, status: 'draft' } });
+            return deleted.count;
+        });
+    }
+
+    /**
+     * Cancels the buyer's own open job before any offer is accepted. A hire offer still waiting for the seller is
+     * declined in the same transaction, so a seller accepting at the same moment either wins (the job is agreed and
+     * this changes nothing) or finds the offer declined.
+     */
+    async cancelJob(userId: string, id: string) {
+        return prisma.$transaction(async (tx) => {
+            const updated = await tx.job.updateMany({
+                where: { id, buyerId: userId, status: { in: ['open', 'negotiating'] }, acceptedBidId: null },
+                data: { status: 'cancelled' },
+            });
+            if (updated.count === 0) return 0;
+            await tx.hireOffer.updateMany({ where: { jobId: id, status: 'sent' }, data: { status: 'declined' } });
+            await tx.bid.updateMany({ where: { jobId: id, status: { in: ['pending_check', 'live', 'held', 'shortlisted'] } }, data: { status: 'rejected' } });
             return updated.count;
         });
     }
