@@ -112,6 +112,8 @@ export async function goLive(opts: { keepMode?: boolean } = {}): Promise<void> {
   let me: MeView;
   try { me = await api<MeView>('/me/v1', { quiet: true }); } catch (e) {
     if (e instanceof ApiError && e.status !== 0) toast(e.message, 'block');
+    /* the saved account could not be loaded: show the demo story, as before, instead of waiting forever */
+    if (!stale(s)) stopRestoring();
     return;
   }
   if (stale(s)) return;
@@ -121,10 +123,17 @@ export async function goLive(opts: { keepMode?: boolean } = {}): Promise<void> {
   const mode = opts.keepMode ? getState().mode : me.mode === 'sell' ? 'sell' : 'buy';
   /* the account learns a mode kept from this device only if it differs (savedMode = what the server has) */
   savedMode = me.mode === 'sell' ? 'sell' : 'buy';
-  setState((s) => ({ live: true, seller: me.seller, role: s.role ?? me.role, mode, orders: [], newJobs: [], extra: [], tLog: {}, chatLog: {} }));
+  setState((s) => ({ live: true, restoring: false, seller: me.seller, role: s.role ?? me.role, mode, orders: [], newJobs: [], extra: [], tLog: {}, chatLog: {} }));
   await Promise.allSettled([loadMarket(), loadSaved()]);
   await refreshAll(true);
   if (!timer) timer = setInterval(() => { void refreshAll(false); }, 8000);
+}
+
+/** The saved account is not coming (signed out, server unreachable, demo tour): fill in the demo story after all. */
+export function stopRestoring(): void {
+  if (!getState().restoring) return;
+  setState({ restoring: false });
+  if (!isLive()) restoreDemo();
 }
 
 /** Empties every container the demo story fills, so a real account sees only its own data. */
@@ -173,8 +182,8 @@ async function loadAll(): Promise<void> {
   ]);
   if (demo) {
     DEMO = demo;
-    /* a real sign-in may already have filled the shared objects with the account's own data */
-    if (!isLive()) restoreDemo();
+    /* a real sign-in may already have filled the shared objects with the account's own data, or be on its way */
+    if (!isLive() && !getState().restoring) restoreDemo();
   }
   setState({ dataReady: true });
 }
@@ -192,6 +201,7 @@ export function leaveLive(): void {
   agentsOn = null;
   if (timer) { clearInterval(timer); timer = null; }
   restoreDemo();
+  setState({ restoring: false });
   setLiveOpenJobs(null);
   if (likedBefore !== null) { setState({ liked: likedBefore }); likedBefore = null; }
   setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));

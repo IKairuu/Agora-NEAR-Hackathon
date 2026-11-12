@@ -6,6 +6,9 @@ import { escrow, free, hb, hPrice, paused, useApp } from '../store/store';
 import { Icon, Logo, type IconName } from './icons';
 import { Pop, RLink, usePop } from './parts';
 
+/** Initials from a display name, for the avatar while the account's own data is still loading. */
+const initialsOf = (name?: string) => (name ?? '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
+
 function NavItem({ r, label, icon, cur, count, onClick }: { r: string; label: string; icon: IconName; cur: string; count?: string; onClick?: () => void }) {
   const on = cur === r;
   return (
@@ -157,13 +160,17 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
                 <RLink r="saved" className="btn icon ghost dot-host" aria-label={`Saved, ${s.liked.length}`}><Icon name="heart" />{s.liked.length > 0 && <i className="num-dot">{s.liked.length}</i>}</RLink>
                 <RLink r={s.mode === 'sell' ? 'orders' : 'jobs'} className="btn sm ghost orders">{s.mode === 'sell' ? 'Orders' : 'Job requests'}</RLink>
                 <button ref={meRef} className="me-btn" onClick={meToggle} aria-label="Account menu" aria-haspopup="menu" aria-expanded={meOpen}>
-                  <span className="avatar">{ME.initials}</span><i className="online" aria-hidden="true" />
+                  <span className="avatar">{ME.initials || initialsOf(s.user?.name)}</span><i className="online" aria-hidden="true" />
                 </button>
               </>
             ) : <button className="btn primary sm" onClick={act.signin}>Sign in</button>}
           </div>
         </header>
-        <main className="content" id="content">{children}</main>
+        <main className="content" id="content">
+          {s.restoring && s.tour < 0
+            ? <div className="empty" role="status"><span className="spin" /><b>Loading your account…</b><span>Your jobs, messages and wallet appear in a moment.</span></div>
+            : children}
+        </main>
       </div>
       {meOpen && <Pop anchor={meRef} onClose={meClose}><MeMenu close={meClose} cur={cur} /></Pop>}
       {noteOpen && <Pop anchor={noteRef} onClose={noteClose} wide><NoteMenu close={noteClose} /></Pop>}

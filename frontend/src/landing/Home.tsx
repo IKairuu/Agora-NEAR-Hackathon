@@ -32,7 +32,6 @@ function LandingNav() {
           <>
             <RLink r="jobs" className="lk">Job requests</RLink>
             <RLink r="ask" className="btn primary">Open the app</RLink>
-            <RLink r="profile" className="me-btn" aria-label="Your profile"><span className="avatar">{ME.initials}</span><i className="online" aria-hidden="true" /></RLink>
           </>
         ) : (
           <>
@@ -181,7 +180,7 @@ function Drill({ reduce }: { reduce: boolean }) {
 }
 
 export function Home() {
-  const { stage } = useApp();
+  const { stage, user, restoring } = useApp();
   const reduce = usePrefersReducedMotion();
   return (
     <div className="land">
@@ -191,7 +190,7 @@ export function Home() {
         <AgentNetwork reduce={reduce} />
         <div className="fieldstill" aria-hidden="true" />
         <div className="container hero-c">
-          {stage >= 1 && <span className="wb">Welcome back, {ME.name}</span>}
+          {stage >= 1 && <span className="wb">Welcome back{(restoring ? user?.name : ME.name || user?.name) ? `, ${restoring ? user?.name : ME.name || user?.name}` : ''}</span>}
           <h1><span className="l">Pay only when</span><span className="l">the tests pass.</span></h1>
           <HeroSearch />
           <div className="built"><span>Built on</span><b>NEAR</b><b>USDC</b><b>NEAR AI Cloud</b><b>Sputnik DAO</b><b>NEAR Intents</b></div>

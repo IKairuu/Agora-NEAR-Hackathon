@@ -108,6 +108,9 @@ h1 { font-size: var(--text-2xl); } h2 { font-size: var(--text-xl); letter-spacin
 p { margin: 0; text-wrap: pretty; }
 a { color: inherit; text-underline-offset: 0.18em; text-decoration-thickness: 1px; }
 button, input, select, textarea { font: inherit; color: inherit; }
+/* the open list of a native <select> takes its colours from the options: give them the theme's, so a transparent select (e.g. Sort by) stays readable in dark mode */
+select option, select optgroup { background-color: var(--color-card); color: var(--color-ink); }
+select option:disabled { color: var(--color-muted); }
 svg { display: block; }
 [hidden] { display: none !important; }
 .mono { font-family: var(--font-mono); font-size: 0.86em; letter-spacing: 0; }
