@@ -1,9 +1,10 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { agentPick, ARRIVE, ATT, BIDS, DONE_JOBS, FILTERS, gigBy, GIGS, HELD, JF, JOB, ME, openJobs, OTHER_JOBS, SELLERS_DIR, usd, type FilterKey, type Gig, type OpenJob, type OtherJob } from '../data/data';
 import { acScroll, act, hire, newRequest, openRequest } from '../store/actions';
-import { escrow, free, getState, hb, hPrice, paused, priceOf, setState, toast, useApp, type State } from '../store/store';
+import { JOB_BUDGET, NO_REPO, removalFor } from '../lib/live';
+import { escrow, free, getState, hb, hPrice, paused, priceOf, setState, toast, useApp, type SpecDoc, type State } from '../store/store';
 import { Icon } from '../ui/icons';
-import { Feed, feedItems, Gate, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, RLink, SellerReviews, SignInButton, SName, Thumb, useReputation } from '../ui/parts';
+import { Feed, feedItems, Gate, RemoveJobButton, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, RLink, SellerReviews, SignInButton, SName, Thumb, useReputation } from '../ui/parts';
 import { Shell } from '../ui/Shell';
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; };
@@ -42,6 +43,89 @@ function SpecCard({ locked }: { locked: boolean }) {
         ? <span className="muted xsmall">Spec hash <span className="mono">{JOB.specHash}</span> stored with the job. Nobody can change these tests now.</span>
         : <div className="cc-acts"><button className="btn primary" onClick={act.lockspec}><Icon name="lock" />Approve and lock the tests</button><button className="btn ghost" onClick={act.editspec}>Change something</button></div>}
     </div>
+  );
+}
+
+/* ---- live: the spec writer's real output for the followed job, never the demo's sample ---- */
+const MAX_LINES = 40;
+const excerpt = (t: string) => { const l = t.trim().split('\n')[0] ?? ''; return l.length > 80 ? l.slice(0, 78) + '…' : l; };
+const shortHash = (h: string) => (h.length > 12 ? `${h.slice(0, 6)}…${h.slice(-4)}` : h);
+const hasRepo = () => !!JOB.repo && JOB.repo !== NO_REPO;
+
+function LiveSpecCard({ doc }: { doc: SpecDoc }) {
+  return (
+    <div className="ccard">
+      <div className="cc-h"><Icon name="flask" /><b>Tests that decide when it's done</b>{doc.locked ? <span className="pill acc"><Icon name="lock" />Locked</span> : <span className="pill">Draft{doc.version > 1 ? ` v${doc.version}` : ''}</span>}</div>
+      {doc.testFiles.length
+        ? doc.testFiles.map((f) => {
+          const lines = f.content.replace(/\s+$/, '').split('\n'), more = lines.length - MAX_LINES;
+          return (
+            <div key={f.path} className="code">
+              <span className="cm">{`// ${f.path}, written by the spec writer for ${JOB.id}`}</span>
+              {'\n' + lines.slice(0, MAX_LINES).join('\n')}
+              {more > 0 && <span className="cm">{`\n// … ${more} more line${more === 1 ? '' : 's'}`}</span>}
+            </div>
+          );
+        })
+        : <p className="muted small">This draft adds no new test files. It is checked with the repository's own tests.</p>}
+      <dl className="kv">
+        <dt>Repository</dt><dd className="mono">{hasRepo() ? `${JOB.repo} at ${JOB.base}` : NO_REPO}</dd>
+        <dt>Test command</dt><dd className="mono">{doc.testCommand}</dd>
+        {doc.buildCommand && <><dt>Build command</dt><dd className="mono">{doc.buildCommand}</dd></>}
+        <dt>Must pass</dt><dd className="mono">{doc.failingTests.length ? doc.failingTests.join(', ') : 'The full test suite'}</dd>
+        <dt>Files the seller may change</dt><dd className="mono">{doc.allowedPaths.length ? doc.allowedPaths.join(', ') : 'Any file'}</dd>
+        <dt>Budget</dt><dd className="num">{JOB_BUDGET.label || 'Not set'}</dd>
+      </dl>
+      {doc.rows.length > 0 && (
+        <dl className="kv">
+          {doc.rows.map(([name, how, weight], i) => <Fragment key={i}><dt>{name}</dt><dd>{how} <span className={`pill ${weight === 'Required' ? 'acc' : ''}`}>{weight}</span></dd></Fragment>)}
+        </dl>
+      )}
+      {doc.locked
+        ? <span className="muted xsmall">Spec hash <span className="mono">{shortHash(doc.specHash ?? '')}</span> stored with the job. Nobody can change these tests now.</span>
+        : <div className="cc-acts"><button className="btn primary" onClick={act.lockspec}><Icon name="lock" />Approve and lock the tests</button><button className="btn ghost" onClick={act.editspec}>Change something</button></div>}
+    </div>
+  );
+}
+
+/** The spec writer's message in a live request: an honest status until a real draft is stored, then that draft. */
+function LiveSpecMsg() {
+  const s = useApp();
+  const ref = s.liveJob?.ref ?? JOB.id, sp = s.liveSpec, req = excerpt(s.askText || JOB.plain);
+  const where = <><span className="mono">{JOB.repo}</span> at <span className="mono">{JOB.base}</span></>;
+  const status = (pill: ReactNode, line: string, acts?: ReactNode) => (
+    <div className="ccard spec-wait">
+      <div className="cc-h"><Icon name="flask" /><b>Tests that decide when it's done</b>{pill}</div>
+      <p className="muted small">{line}</p>
+      {acts && <div className="cc-acts">{acts}</div>}
+    </div>
+  );
+  if (sp.state === 'loading') return <AgentMsg who="Spec writer"><p className="muted">Checking {ref} for draft tests…</p></AgentMsg>;
+  if (sp.state === 'none') {
+    if (!sp.repo) return (
+      <AgentMsg who="Spec writer">
+        <p>I opened <b>{ref}</b> for "{req}". To write tests that fail today and pass once the work is done, I need your code. Add the repository and I'll start drafting.</p>
+        {status(<span className="pill hold">Waiting for a repository</span>, 'No tests yet. Nothing is sent to sellers until you approve and lock them.', <button className="btn" onClick={act.attachrepo}><Icon name="repo" />Add repository</button>)}
+      </AgentMsg>
+    );
+    if (sp.agents === false) return (
+      <AgentMsg who="Spec writer">
+        <p>Your request "{req}" is saved as <b>{ref}</b> with {where}.</p>
+        {status(<span className="pill hold">Spec writer not connected yet</span>, `The spec writer agent is not connected on this server, so no tests have been drafted for ${ref}. Drafting starts once it is connected, and the tests will appear here.`)}
+      </AgentMsg>
+    );
+    return (
+      <AgentMsg who="Spec writer">
+        <p>Spec writer is drafting tests for <b>{ref}</b> from {where}, for "{req}".</p>
+        {status(<span className="pill info"><span className="spin" />Drafting</span>, 'This usually takes a few minutes. The tests appear here as soon as they are stored. You can add details below meanwhile.')}
+      </AgentMsg>
+    );
+  }
+  return (
+    <AgentMsg who="Spec writer">
+      <p>For "{req}", I read {hasRepo() ? where : 'your request'}. Here are the tests a seller must make pass.{sp.state === 'draft' && ' Nothing is sent to anyone until you lock them.'}</p>
+      <LiveSpecCard doc={sp.doc} />
+    </AgentMsg>
   );
 }
 
@@ -138,6 +222,7 @@ export function Ask() {
             <div className="ask-acts">
               <RLink r="jobs" className="btn sm ghost"><Icon name="job" />Job requests</RLink>
               <button type="button" className="btn sm" onClick={newRequest}><Icon name="spark" />New request</button>
+              {s.live && s.liveJob && <RemoveJobButton id={s.liveJob.ref} title={JOB.title} kind={removalFor(s.liveJob.ref)} />}
             </div>
           )}
         </div>
@@ -147,7 +232,7 @@ export function Ask() {
             <MeMsg text={s.askText || JOB.plain} />
             {s.pendingAsk
               ? <AgentMsg who="Spec writer"><p className="muted">Reading your request and creating the job…</p></AgentMsg>
-              : <AgentMsg who="Spec writer" t={s.live ? undefined : '16:02'}><p>I read <span className="mono">{JOB.repo.split('/').pop()}</span> at <span className="mono">{JOB.base}</span>. Here are the tests a seller must make pass. Nothing is sent to anyone until you lock them.</p><SpecCard locked={s.stage >= 2} /></AgentMsg>}
+              : s.live ? <LiveSpecMsg /> : <AgentMsg who="Spec writer" t={s.live ? undefined : '16:02'}><p>I read <span className="mono">{JOB.repo.split('/').pop()}</span> at <span className="mono">{JOB.base}</span>. Here are the tests a seller must make pass. Nothing is sent to anyone until you lock them.</p><SpecCard locked={s.stage >= 2} /></AgentMsg>}
             {s.stage >= 2 && <AgentMsg who="Buyer agent" t={s.live ? undefined : '16:03'}><p>Tests locked. I sent the job privately to 9 sellers and bidding agents whose skills match. Their offers appear below as they arrive, lowest price first.</p><OffersCard /></AgentMsg>}
             {s.stage >= 4 && <AgentMsg who="Buyer agent" t={s.live ? undefined : '16:11'}><p>{s.preNeg ? 'You chose before I negotiated, so the listed price stands.' : <>Three valid offers were in, so I negotiated within your private limit. {agentPick()?.name} came down from {usd(agentPick()?.price ?? 0)} to <b>{usd(agentPick()?.final ?? 0)} USDC</b>, under the 35.50 median, and has the best track record.</>} Choose any offer above. I'll send the hire offer in your chat room and wait for the seller to accept.</p></AgentMsg>}
             {s.stage >= 5 && <AgentMsg who="Transaction agent" t={s.live ? undefined : '16:12'}><p>{H.name} accepted. {usd(hPrice(s))} USDC is in <b>Protected payment</b>, held by the contract until 2 of 3 reviewers pass the tests.</p><div className="cc-acts"><RLink r="chat" className="btn"><Icon name="chat" />Open chat room</RLink><RLink r="room" className="btn"><Icon name="lock" />Protected payment</RLink></div></AgentMsg>}
@@ -215,12 +300,14 @@ function allJobs(s: State) {
 }
 
 function JobBig({ j }: { j: JobView }) {
+  const { live } = useApp();
   return (
     <article className="jbig">
       <div className="jb-l">
         <div className="jb-top">
           <h3>{j.href ? <RLink r={j.href} onClick={j.href === 'ask' ? openRequest : undefined}>{j.title}</RLink> : <button className="as-link" onClick={() => setState({ modal: { kind: 'ojob', props: { id: j.id } } })}>{j.title}</button>}</h3>
           <span className={`pill ${j.status[0]}`}>{j.status[1]}</span>
+          <RemoveJobButton id={j.id} title={j.title} kind={live ? j.remove ?? removalFor(j.id) : null} />
         </div>
         <div className="jb-meta"><span>{j.cat}</span><span className="num">Budget {j.budget} USDC</span><span>{j.due}</span>{j.who && <span>Seller: {j.who}</span>}<span className="mono">{j.id}</span></div>
         {j.ev && j.ev.length > 0 && (

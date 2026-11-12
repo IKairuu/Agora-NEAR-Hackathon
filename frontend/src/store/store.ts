@@ -8,11 +8,26 @@ import { BIDS, type Bid, type FilterKey, type Order, type OtherJob } from '../da
  * `stage` drives the scripted demo: 0 signed out, 1 signed in, 2 job posted, 3 bids in,
  * 4 negotiated, 5 funded, 6 bad delivery rejected, 7 released and settled, 8 paused by guardian.
  */
+/** A stored spec as /specs/v1 returns it. */
+export interface SpecDoc {
+  id: string; version: number; locked: boolean; specHash: string | null;
+  testCommand: string; buildCommand: string | null; failingTests: string[]; allowedPaths: string[];
+  testFiles: { path: string; content: string }[]; rows: [string, string, string][];
+}
+/**
+ * Live: what the spec writer has produced for the followed job.
+ * loading: not asked yet · none: no spec stored (repo says whether one is attached, agents whether the
+ * spec writer workflow is connected on this server) · draft / locked: the stored spec.
+ */
+export type LiveSpec =
+  | { state: 'loading' }
+  | { state: 'none'; repo: boolean; agents: boolean | null }
+  | { state: 'draft' | 'locked'; doc: SpecDoc };
 export interface FollowUp { id: string; text: string; t: string; sending: boolean; reply?: string; link?: boolean }
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
-  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick';
+  | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick' | 'removejob';
 export interface LiveNote { id: string; kind: string; text: string; link: string | null; time: string; read: boolean }
 export interface State {
   stage: number;
@@ -37,6 +52,8 @@ export interface State {
   pendingAsk: boolean;
   /** Live: messages sent after the first one, about the same job, and the agent's answer to each. */
   followUps: FollowUp[];
+  /** Live: the followed job's spec, as stored by the spec writer. */
+  liveSpec: LiveSpec;
   who: string; oj: number; exTab: 'services' | 'sellers'; ssort: 'rating' | 'jobs' | 'price'; fromHero: string;
   stars: number; dReason: string; mail: string; walletLinked: boolean;
   /** The real signed-in account from Google or GitHub; null in the simulated demo. */
@@ -90,12 +107,13 @@ let state: State = {
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: saved?.user ?? null,
   live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
-  modal: null, dataReady: false, pendingAsk: false, followUps: [],
+  modal: null, dataReady: false, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
 };
 
 const listeners = new Set<() => void>();
 const emit = () => listeners.forEach((l) => l());
-const subscribe = (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; };
+/** Calls cb after every state change. Returns the unsubscribe function. */
+export const subscribe = (cb: () => void) => { listeners.add(cb); return () => { listeners.delete(cb); }; };
 
 /**
  * Writes the session while the user is signed in and removes it once they sign out.
