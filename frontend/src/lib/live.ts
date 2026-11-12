@@ -1,6 +1,6 @@
 import { ARRIVE, BIDS, DAO_COUNCIL, DONE_JOBS, NEG_LOG, SETTLED, GIGS, HELD, JOB, JOB_LISTING, KICKOFF, ME, OPEN_JOBS, OTHER_JOBS, REPLIES, REVIEWERS, SELLERS_DIR, SPEC, T_MSGS, T_TIME, THREADS, gigBy, liveOpenRef, setLiveOpenJobs, type Bid, type DemoData, type Gig, type OpenJob, type Order, type OtherJob, type SellerDir } from '../data/data';
 import type { ChatMsg } from '../store/store';
-import { getState, setState, subscribe, toast, type FollowUp, type LiveNote, type LiveSpec, type SpecDoc } from '../store/store';
+import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type SellForm, type LiveNote, type LiveSpec, type SpecDoc } from '../store/store';
 import type { Thread } from '../store/actions';
 import { api, ApiError } from './api';
 
@@ -123,10 +123,20 @@ export async function goLive(opts: { keepMode?: boolean } = {}): Promise<void> {
   const mode = opts.keepMode ? getState().mode : me.mode === 'sell' ? 'sell' : 'buy';
   /* the account learns a mode kept from this device only if it differs (savedMode = what the server has) */
   savedMode = me.mode === 'sell' ? 'sell' : 'buy';
-  setState((s) => ({ live: true, restoring: false, seller: me.seller, role: s.role ?? me.role, mode, orders: [], newJobs: [], extra: [], tLog: {}, chatLog: {} }));
+  setState((s) => ({ live: true, restoring: false, sellForm: { ...EMPTY_SELL_FORM, name: me.name }, sellLoaded: false, seller: me.seller, role: s.role ?? me.role, mode, orders: [], newJobs: [], extra: [], tLog: {}, chatLog: {} }));
   await Promise.allSettled([loadMarket(), loadSaved()]);
   await refreshAll(true);
   if (!timer) timer = setInterval(() => { void refreshAll(false); }, 8000);
+}
+
+/**
+ * A real account is signing in or being restored (a reload, the page Google or GitHub sends the user back to):
+ * hide the demo story and show "Loading your account" until goLive has the account's data, or gives up.
+ */
+export function beginRestoring(): void {
+  if (isLive() || getState().tour >= 0) return;
+  clearDemo();
+  setState({ restoring: true });
 }
 
 /** The saved account is not coming (signed out, server unreachable, demo tour): fill in the demo story after all. */
@@ -201,7 +211,7 @@ export function leaveLive(): void {
   agentsOn = null;
   if (timer) { clearInterval(timer); timer = null; }
   restoreDemo();
-  setState({ restoring: false });
+  setState({ restoring: false, sellForm: DEMO_SELL_FORM, sellLoaded: false });
   setLiveOpenJobs(null);
   if (likedBefore !== null) { setState({ liked: likedBefore }); likedBefore = null; }
   setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));
@@ -529,11 +539,6 @@ export async function liveReadNotes(): Promise<void> {
   await loadNotes().catch(() => undefined);
 }
 
-interface SellProfileView {
-  id: string | null; step: number; published: boolean; skills: string[]; categories: string[];
-  coder: 'me' | 'agent'; payoutChain: string;
-}
-
 const fieldValue = (id: string): string | undefined => {
   const el = document.getElementById(id) as HTMLInputElement | HTMLSelectElement | null;
   return el ? el.value.trim() : undefined;
@@ -547,8 +552,22 @@ let sellSave: Promise<unknown> = Promise.resolve();
 
 /** Fills the wizard's toggles from the saved seller profile. */
 export async function liveLoadSellProfile(): Promise<void> {
-  const p = await api<SellProfileView>('/seller-profile/v1', { quiet: true }).catch(() => null);
-  if (!p?.id) return;
+  const s0 = session;
+  const p = await api<SellerProfileView>('/seller-profile/v1', { quiet: true }).catch(() => null);
+  if (stale(s0) || !p) return;
+  /* text the user typed while this was loading wins over the saved value */
+  const typed = getState().sellForm;
+  const saved: SellForm = {
+    name: p.name, title: p.headline, country: p.country, langs: p.langs.join(', '), agent: p.agentName, model: p.agentModel,
+    yrs: '', edu: '', work: '', bio: p.about, floor: p.priceFrom !== null ? p.priceFrom.toFixed(2) : '', max: p.id ? String(p.maxJobs) : '',
+    terms: p.deliveryTerms, addr: p.payoutAddress,
+  };
+  const sellForm = Object.fromEntries(Object.keys(saved).map((k) => {
+    const key = k as keyof SellForm;
+    return [key, typed[key] && typed[key] !== (key === 'name' ? ME.name : '') ? typed[key] : saved[key] || typed[key]];
+  })) as unknown as SellForm;
+  setState({ sellForm, sellLoaded: true });
+  if (!p.id) return;
   setState((s) => ({
     sellCoder: p.coder,
     sellPay: p.payoutChain,
@@ -558,51 +577,84 @@ export async function liveLoadSellProfile(): Promise<void> {
 }
 
 /** Saves the wizard step being left. Reads the inputs now, before they unmount. */
-export function liveSaveSellStep(step: number): void {
-  const s = getState();
-  let body: Record<string, unknown> | null = null;
-  if (step === 1) {
-    const langs = fieldValue('sl-lang');
-    body = {
-      display_name: fieldValue('sl-name') || undefined,
-      headline: fieldValue('sl-title') || undefined,
-      country: fieldValue('sl-country') || undefined,
-      langs: langs === undefined ? undefined : langs.split(',').map((l) => l.trim()).filter(Boolean),
-      coder: s.sellCoder,
-      agent_name: s.sellCoder === 'agent' ? fieldValue('sl-ag')?.toLowerCase() || undefined : undefined,
-      agent_model: s.sellCoder === 'agent' ? fieldValue('sl-model') || undefined : undefined,
+/** Avatar initials for a name, as the API accepts them (1 to 3 letters A to Z); undefined to keep the saved ones. */
+const initialsFor = (name: string): string | undefined => {
+  const i = name.trim().split(/\s+/).map((w) => w.normalize('NFD').replace(/[^A-Za-z]/g, '').charAt(0).toUpperCase()).filter(Boolean).slice(0, 2).join('');
+  return i || undefined;
+};
+/** What a wizard step saves, read from the form in the store (never from inputs that may already be gone). */
+function sellStepBody(step: number): Record<string, unknown> | null {
+  const s = getState(), f = s.sellForm;
+  const text = (v: string) => v.trim() || undefined;
+  if (step === 1) return {
+    display_name: text(f.name), headline: text(f.title), country: text(f.country),
+    /* the avatar follows the name */
+    initials: initialsFor(f.name),
+    langs: f.langs.trim() ? f.langs.split(',').map((l) => l.trim()).filter(Boolean) : undefined,
+    coder: s.sellCoder,
+    agent_name: s.sellCoder === 'agent' ? text(f.agent.toLowerCase()) : undefined,
+    agent_model: s.sellCoder === 'agent' ? text(f.model) : undefined,
+  };
+  if (step === 2) return { about: text(f.bio) };
+  if (step === 3) {
+    const max = numberOf(f.max);
+    return {
+      skills: picked(s.skills), categories: picked(s.cats), price_from: numberOf(f.floor),
+      max_jobs: max === undefined ? undefined : Math.round(max), delivery_terms: text(f.terms),
     };
-  } else if (step === 2) {
-    body = { about: fieldValue('sl-bio') || undefined };
-  } else if (step === 3) {
-    const max = numberOf(fieldValue('sl-max'));
-    body = {
-      skills: picked(s.skills),
-      categories: picked(s.cats),
-      price_from: numberOf(fieldValue('sl-floor')),
-      max_jobs: max === undefined ? undefined : Math.round(max),
-      delivery_terms: fieldValue('sl-terms') || undefined,
-    };
-  } else if (step === 4) {
-    body = { payout_chain: s.sellPay, payout_address: s.sellPay === 'near' ? undefined : fieldValue('sl-addr') || undefined };
   }
+  if (step === 4) return { payout_chain: s.sellPay, payout_address: s.sellPay === 'near' ? undefined : text(f.addr) };
+  return null;
+}
+/** Saves the wizard step being left. */
+export function liveSaveSellStep(step: number): void {
+  const body = sellStepBody(step);
   if (!body) return;
-  sellSave = api('/seller-profile/v1', { method: 'PATCH', body: { step, ...body } }).catch(() => null);
+  sellSave = sellSave.then(() => api('/seller-profile/v1', { method: 'PATCH', body: { step, ...body } }).catch(() => null));
+}
+/** Saves every step at once, so publishing always sends exactly what the editor shows. */
+function liveSaveSellAll(): Promise<unknown> {
+  const body = Object.assign({}, ...[1, 2, 3, 4].map((st) => sellStepBody(st) ?? {})) as Record<string, unknown>;
+  for (const k of Object.keys(body)) if (body[k] === undefined) delete body[k];
+  sellSave = sellSave.then(() => api('/seller-profile/v1', { method: 'PATCH', body: { step: 5, ...body } }).catch(() => null));
+  return sellSave;
 }
 
 /** Publishes the seller profile once the last save has landed. */
+/** Set right after a publish, so the seller dashboard can say the profile is now live. */
+export const justPublished: { acct: string; updated: boolean; at: number } = { acct: '', updated: false, at: 0 };
+
+/**
+ * Publishes the seller profile. Resolves as soon as the API accepted it, so the caller can open the seller
+ * dashboard right away; the optional starter stake and the data refresh carry on in the background.
+ */
 export async function livePublishSeller(): Promise<boolean> {
-  await sellSave;
+  await liveSaveSellAll();
   const res = await api<{ message: string; acct: string }>('/seller-profile/v1/publish', { method: 'POST' }).catch(() => null);
   if (!res) return false;
-  setState({ seller: true });
+  Object.assign(justPublished, { acct: res.acct, updated: /Updated/i.test(res.message), at: Date.now() });
+  setState({ seller: true, mode: 'sell' });
   toast(`${res.message}. Selling as ${res.acct}.`);
-  if (getState().stake) {
-    const staked = await api<{ stake: number }>('/seller-profile/v1/stake', { body: { amount: 10 } }).catch(() => null);
-    if (staked) toast(`Starter stake of 10.00 USDC added. Your starter cap is now 60 USDC.`);
-  }
-  await refreshAll(false);
+  void (async () => {
+    if (getState().stake) {
+      const staked = await api<{ stake: number }>('/seller-profile/v1/stake', { body: { amount: 10 } }).catch(() => null);
+      if (staked) toast(`Starter stake of 10.00 USDC added. Your starter cap is now 60 USDC.`);
+    }
+    await Promise.allSettled([refreshAll(false), loadMarket()]);
+    setState({});
+  })();
   return true;
+}
+
+/** The seller profile as GET /seller-profile/v1 returns it, for the seller dashboard. */
+export interface SellerProfileView {
+  id: string | null; published: boolean; publishedAt: string | null; name: string; initials: string; headline: string;
+  country: string; about: string; langs: string[]; githubUsername: string; skills: string[]; categories: string[];
+  priceFrom: number | null; days: number | null; coder: 'me' | 'agent'; agentName: string; agentModel: string;
+  maxJobs: number; deliveryTerms: string; payoutChain: string; payoutAddress: string; level: string; acct: string;
+}
+export async function liveSellerProfile(): Promise<SellerProfileView | null> {
+  return api<SellerProfileView>('/seller-profile/v1', { quiet: true }).catch(() => null);
 }
 
 /** Hands in a commit for a funded job. The runner checks it against the locked tests. */

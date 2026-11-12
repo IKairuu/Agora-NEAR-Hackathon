@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
-import { CATS, COUNTRIES, DAO_COUNCIL, gigBy, GIGS, ME, PAYOUTS, SELL_STEPS, sellerDir, SETTLED, SKILLS, usd } from '../data/data';
+import { CATS, COUNTRIES, DAO_COUNCIL, gigBy, GIGS, ME, O_ST, PAYOUTS, SELL_STEPS, sellerDir, SETTLED, SKILLS, usd } from '../data/data';
 import { act, newRequest } from '../store/actions';
-import { isLive, liveDisputeNext, liveLoadDispute, liveSaveSellStep, type DisputeView } from '../lib/live';
-import { getState, hb, hPrice, setState, toast, useApp, type State } from '../store/store';
+import { isLive, justPublished, liveDisputeNext, liveLoadDispute, liveLoadSellProfile, liveSaveSellStep, liveSellerProfile, type DisputeView, type SellerProfileView } from '../lib/live';
+import { getState, hb, hPrice, sellerLocked, setState, toast, useApp, type SellForm, type State } from '../store/store';
 import { Icon, Tile, type IconName } from '../ui/icons';
 import { Gate, Head, levelClass, Review, RLink, SellerReviews, SignInButton, T, Thumb, useReputation } from '../ui/parts';
-import { Shell } from '../ui/Shell';
+import { SellerLock, Shell } from '../ui/Shell';
 
 /* ---------------- a seller's profile: the sellers directory plus their reputation from the backend ---------------- */
 export function Profile() {
@@ -39,8 +39,11 @@ export function Profile() {
           <span className={`avatar xl ${p.kind === 'agent' ? 'ag' : ''}`}>{p.initials}</span>
           <div style={{ flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div className="row"><span className={`pill ${p.kind === 'agent' ? 'info' : 'acc'}`}>{p.kind === 'agent' ? 'AI agent' : 'Developer'}</span><span className={`lvl ${levelClass(p.level)}`}>{p.level}</span><span className="mono muted xsmall">{p.acct}</span></div>
-            <span className="muted">{p.about}</span>
-            <div className="row"><T name="NEP-171" tip="Non-transferable completion records" /><span className="muted xsmall">Speaks {p.langs} · {p.online ? 'Online now' : 'Replies within a day'}</span></div>
+            {p.headline && p.headline !== p.about && <b>{p.headline}</b>}
+            {p.about && <span className="muted">{p.about}</span>}
+            {!!p.skills?.length && <div className="chips">{p.skills.map((k) => <span key={k} className="chip">{k}</span>)}</div>}
+            <div className="row"><T name="NEP-171" tip="Non-transferable completion records" /><span className="muted xsmall">{p.country ? `${p.country} · ` : ''}Speaks {p.langs} · {p.online ? 'Online now' : 'Replies within a day'}</span></div>
+            {(!!p.categories?.length || p.terms || p.github) && <span className="muted xsmall">{[p.categories?.length ? `Takes ${p.categories.map((c) => CATS.find(([k]) => k === c)?.[1] ?? c).join(', ')}` : '', p.terms, p.github ? `GitHub: ${p.github}` : ''].filter(Boolean).join(' · ')}</span>}
           </div>
         </div>
       </div>
@@ -69,6 +72,8 @@ export function Profile() {
 }
 
 /* ---------------- become a seller ---------------- */
+/** A price typed as "12", "12.00" or "12.00 USDC"; undefined when there is no number. */
+const numberText = (v: string) => { const n = Number(v.replace(/[^\d.]/g, '')); return v.trim() && n > 0 ? n : undefined; };
 const goStep = (n: number) => { if (isLive()) liveSaveSellStep(getState().sellStep); setState({ sellStep: Math.max(0, Math.min(5, n)) }); window.scrollTo(0, 0); };
 
 /** Reads an image file into the store as a data URL (prototype: preview only, nothing is uploaded). */
@@ -201,6 +206,11 @@ function CvUpload() {
 
 export function Sell() {
   const s = useApp();
+  /* a real account's saved profile goes into the form once per session, also when the editor is opened directly */
+  useEffect(() => { if (s.live && !s.sellLoaded) void liveLoadSellProfile(); }, [s.live, s.sellLoaded]);
+  const f = s.sellForm;
+  const field = (k: keyof SellForm) => ({ value: f[k], onChange: (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { const v = e.target.value; setState((st) => ({ sellForm: { ...st.sellForm, [k]: v } })); } });
+  const eg = (t: string) => (s.live ? `e.g. ${t}` : t);
   if (s.stage < 1) return <Shell cur="sell"><Head title="Become a seller" /><Gate msg="Sign in to become a seller"><SignInButton /></Gate></Shell>;
   if (s.sellStep === 0) return <Shell cur="sell"><SellLanding /></Shell>;
   const st = s.sellStep, agent = s.sellCoder === 'agent';
@@ -217,12 +227,12 @@ export function Sell() {
     <div className="panel prof-edit"><CoverBox edit /><div className="panel-b">
       <div className="pf-row"><AvatarBox edit /><div className="muted small">A clear photo of your face, or your agent's logo. Buyers hire people they can picture.</div></div>
       <div className="grid g-2">
-        <div className="field"><label htmlFor="sl-name">Display name</label><input className="input" id="sl-name" defaultValue={ME.name} /></div>
-        <div className="field"><label htmlFor="sl-title">Professional title</label><input className="input" id="sl-title" defaultValue="Rust and NEAR contract developer" /></div>
+        <div className="field"><label htmlFor="sl-name">Display name</label><input className="input" id="sl-name" {...field('name')} placeholder={ME.name || 'Your name'} /></div>
+        <div className="field"><label htmlFor="sl-title">Professional title</label><input className="input" id="sl-title" {...field('title')} placeholder={eg('Rust and NEAR contract developer')} /></div>
       </div>
       <div className="grid g-2">
-        <div className="field"><label htmlFor="sl-country">Country</label><select className="input" id="sl-country">{COUNTRIES.map((c) => <option key={c}>{c}</option>)}</select></div>
-        <div className="field"><label htmlFor="sl-lang">Languages</label><input className="input" id="sl-lang" defaultValue="English, Filipino" /></div>
+        <div className="field"><label htmlFor="sl-country">Country</label><select className="input" id="sl-country" {...field('country')}><option value="">Choose a country</option>{COUNTRIES.map((c) => <option key={c}>{c}</option>)}{f.country && !COUNTRIES.includes(f.country) && <option>{f.country}</option>}</select></div>
+        <div className="field"><label htmlFor="sl-lang">Languages</label><input className="input" id="sl-lang" {...field('langs')} placeholder={eg('English, Filipino')} /></div>
       </div>
       <div className="field"><span className="lab">Who does the coding?</span>
         <div className="seg" role="group" aria-label="Who does the coding">
@@ -232,8 +242,8 @@ export function Sell() {
         {agent && <span className="hint">Your agent gets its own sub-account and a key that can only bid and deliver. You stay its operator.</span>}
       </div>
       {agent && <div className="grid g-2">
-        <div className="field"><label htmlFor="sl-ag">Agent name</label><input className="input" id="sl-ag" defaultValue="lumenfix" /></div>
-        <div className="field"><label htmlFor="sl-model">Model and where it runs</label><input className="input" id="sl-model" defaultValue="Runs in NEAR AI Cloud (TEE)" /></div>
+        <div className="field"><label htmlFor="sl-ag">Agent name</label><input className="input" id="sl-ag" {...field('agent')} placeholder={eg('lumenfix')} /></div>
+        <div className="field"><label htmlFor="sl-model">Model and where it runs</label><input className="input" id="sl-model" {...field('model')} placeholder={eg('Runs in NEAR AI Cloud (TEE)')} /></div>
       </div>}
       {nav(true)}
     </div></div>
@@ -257,11 +267,11 @@ export function Sell() {
       </Acc>
       <Acc id="man" title="Fill out manually" time="5 min" icon="edit">
         <div className="grid g-2">
-          <div className="field"><label htmlFor="sl-yrs">Years of coding</label><select className="input" id="sl-yrs"><option>Student or under 1 year</option><option>1 to 3 years</option><option>3 to 5 years</option><option>5+ years</option></select></div>
-          <div className="field"><label htmlFor="sl-edu">School or bootcamp, optional</label><input className="input" id="sl-edu" placeholder="University or course name" /></div>
+          <div className="field"><label htmlFor="sl-yrs">Years of coding</label><select className="input" id="sl-yrs" {...field('yrs')}><option value="">Choose</option><option>Student or under 1 year</option><option>1 to 3 years</option><option>3 to 5 years</option><option>5+ years</option></select></div>
+          <div className="field"><label htmlFor="sl-edu">School or bootcamp, optional</label><input className="input" id="sl-edu" {...field('edu')} placeholder="University or course name" /></div>
         </div>
-        <div className="field"><label htmlFor="sl-work">Links to past work</label><input className="input" id="sl-work" placeholder="A repo, a pull request or a deployed app" /></div>
-        <div className="field"><label htmlFor="sl-bio">One line about your work</label><input className="input" id="sl-bio" defaultValue="Rust contract fixes with a test for every bug." /></div>
+        <div className="field"><label htmlFor="sl-work">Links to past work</label><input className="input" id="sl-work" {...field('work')} placeholder="A repo, a pull request or a deployed app" /></div>
+        <div className="field"><label htmlFor="sl-bio">One line about your work</label><input className="input" id="sl-bio" {...field('bio')} placeholder={eg('Rust contract fixes with a test for every bug.')} /></div>
       </Acc>
       <div className="panel"><div className="panel-b">{nav(true)}</div></div>
     </div>
@@ -272,10 +282,10 @@ export function Sell() {
       <div className="field"><span className="lab">Skills</span><ChipSet items={SKILLS.map((k) => [k, k])} state={s.skills} onToggle={toggleSkill} /></div>
       <div className="field"><span className="lab">Categories you take</span><ChipSet items={CATS} state={s.cats} onToggle={toggleCat} /></div>
       <div className="grid g-2">
-        <div className="field"><label htmlFor="sl-floor">Minimum price</label><input className="input num" id="sl-floor" defaultValue="12.00 USDC" /><span className="hint">Your bidding agent never bids below this.</span></div>
-        <div className="field"><label htmlFor="sl-max">Jobs at once</label><input className="input num" id="sl-max" defaultValue="3" /></div>
+        <div className="field"><label htmlFor="sl-floor">Minimum price, USDC</label><input className="input num" id="sl-floor" inputMode="decimal" {...field('floor')} placeholder={eg('12.00')} /><span className="hint">Your bidding agent never bids below this.</span></div>
+        <div className="field"><label htmlFor="sl-max">Jobs at once</label><input className="input num" id="sl-max" inputMode="numeric" {...field('max')} placeholder={eg('3')} /></div>
       </div>
-      <div className="field"><label htmlFor="sl-terms">Delivery terms</label><input className="input" id="sl-terms" defaultValue="1 to 2 days, includes one extra edge-case test" /></div>
+      <div className="field"><label htmlFor="sl-terms">Delivery terms</label><input className="input" id="sl-terms" {...field('terms')} placeholder={eg('1 to 2 days, includes one extra edge-case test')} /></div>
       <div className="banner info"><Icon name="bot" /><div className="grow"><b style={{ fontWeight: 500 }}>Your bidding agent</b><span className="muted">It watches matching jobs and bids inside these rules. Its key can call place_bid and submit_delivery only.</span></div></div>
       {nav(true)}
     </div></div>
@@ -285,8 +295,8 @@ export function Sell() {
     <div className="panel"><div className="panel-h"><h2>Get paid</h2><div className="r"><T name="Chain Signatures" tip="Your NEAR account signs a payout on another chain" /></div></div><div className="panel-b">
       <div className="field"><span className="lab">Payout</span><div className="seg" role="group" aria-label="Payout chain">{PAYOUTS.map(([k, label]) => <button key={k} className={s.sellPay === k ? 'on' : ''} aria-pressed={s.sellPay === k} onClick={() => setState({ sellPay: k })}>{label}</button>)}</div></div>
       {s.sellPay === 'near'
-        ? <p className="muted">Released milestones land in <span className="mono">{agent ? `lumenfix.${ME.agents}` : ME.acct}</span>. Only your full-access key can withdraw.</p>
-        : <div className="field"><label htmlFor="sl-addr">Payout address</label><input className="input mono" id="sl-addr" defaultValue="0x8b1F…4e2C" /><span className="hint">Your NEAR account signs the transfer on {s.sellPay === 'eth' ? 'Ethereum' : 'Base'}. No bridge, no second wallet.</span></div>}
+        ? <p className="muted">Released milestones land in <span className="mono">{agent ? `${f.agent.toLowerCase() || 'your-agent'}.${ME.agents}` : ME.acct}</span>. Only your full-access key can withdraw.</p>
+        : <div className="field"><label htmlFor="sl-addr">Payout address</label><input className="input mono" id="sl-addr" {...field('addr')} placeholder="0x…" /><span className="hint">Your NEAR account signs the transfer on {s.sellPay === 'eth' ? 'Ethereum' : 'Base'}. No bridge, no second wallet.</span></div>}
       <div className="row" style={{ flexWrap: 'nowrap', alignItems: 'flex-start' }}>
         <button className={`switch ${s.stake ? 'on' : ''}`} onClick={() => setState({ stake: !s.stake })} aria-label="Optional starter stake" aria-pressed={s.stake} />
         <div><b style={{ fontWeight: 500 }}>Optional starter stake, 10.00 USDC</b><div className="muted xsmall">Raises your starter cap from 25 to 60 USDC before your 3rd settled job. Returned after clean jobs.</div></div>
@@ -299,10 +309,17 @@ export function Sell() {
     <div className="grid g-main">
       <div className="panel"><div className="panel-h"><h2>Review and publish</h2></div><div className="panel-b">
         <dl className="kv">
-          <dt>Coding by</dt><dd>{agent ? `lumenfix, a coding agent operated by ${ME.name}` : 'You'}</dd>
-          <dt>Experience</dt><dd>{s.cvFile || 'Not uploaded'}{s.ghLinked ? ', GitHub connected' : ''}</dd>
+          <dt>Name</dt><dd>{f.name || ME.name || 'Not set'}</dd>
+          <dt>Title</dt><dd>{f.title || 'Not set'}</dd>
+          {(f.country || f.langs) && <><dt>Country, languages</dt><dd>{[f.country, f.langs].filter(Boolean).join(' · ')}</dd></>}
+          <dt>Coding by</dt><dd>{agent ? `${f.agent || 'your coding agent'}, a coding agent operated by ${f.name || ME.name}` : 'You'}</dd>
+          <dt>Experience</dt><dd>{[f.yrs, f.edu, s.cvFile, s.ghLinked ? 'GitHub connected' : ''].filter(Boolean).join(', ') || 'Not added'}</dd>
+          {f.bio && <><dt>About</dt><dd>{f.bio}</dd></>}
           <dt>Skills</dt><dd>{picked.join(', ') || 'None picked'}</dd>
-          <dt>Minimum price</dt><dd className="num">12.00 USDC</dd>
+          <dt>Categories</dt><dd>{CATS.filter(([k]) => s.cats[k]).map(([, l]) => l).join(', ') || 'None picked'}</dd>
+          <dt>Minimum price</dt><dd className="num">{numberText(f.floor) ? `${usd(numberText(f.floor)!)} USDC` : 'Not set'}</dd>
+          {f.max && <><dt>Jobs at once</dt><dd className="num">{f.max}</dd></>}
+          {f.terms && <><dt>Delivery terms</dt><dd>{f.terms}</dd></>}
           <dt>Payout</dt><dd>{PAYOUTS.find((p) => p[0] === s.sellPay)![1]}</dd>
           <dt>Starter cap</dt><dd className="num">{s.stake ? '60.00 USDC, staked' : '25.00 USDC'}</dd>
         </dl>
@@ -310,7 +327,7 @@ export function Sell() {
         {nav(false, 'Publish seller profile')}
       </div></div>
       <div className="panel prof-card"><CoverBox /><div className="panel-b">
-        <AvatarBox /><b>{agent ? 'lumenfix' : ME.name}</b><span className="muted small">Rust and NEAR contract developer</span>
+        <AvatarBox /><b>{agent ? f.agent || 'your coding agent' : f.name || ME.name}</b><span className="muted small">{f.title || 'Add a professional title'}</span>
         <div className="chips">{picked.slice(0, 4).map((k) => <span key={k} className="chip">{k}</span>)}</div>
         <span className="muted xsmall">How buyers will see you</span>
       </div></div>
@@ -327,8 +344,65 @@ export function Sell() {
 }
 
 /* ---------------- seller desk ---------------- */
+/* live: the seller's own published profile and orders, never the demo desk */
+function LiveSeller() {
+  const s = useApp();
+  const [p, setP] = useState<SellerProfileView | null | undefined>(undefined);
+  useEffect(() => { let on = true; void liveSellerProfile().then((x) => { if (on) setP(x); }); return () => { on = false; }; }, [s.seller]);
+  const fresh = justPublished.acct && Date.now() - justPublished.at < 10 * 60_000;
+  const head = <Head title="Seller dashboard" sub="Your published seller profile and the orders buyers sent you." actions={<>{p?.published && p.acct && <RLink r="profile" className="btn ghost" onClick={() => setState({ who: p.acct })}>View public profile</RLink>}<RLink r="sell" className="btn" onClick={() => setState({ sellStep: 1 })}>Edit seller profile</RLink></>} />;
+  if (p === undefined) return <Shell cur="seller">{head}<div className="empty" role="status"><span className="spin" /><b>Loading your seller profile…</b></div></Shell>;
+  if (!p || !p.published) return (
+    <Shell cur="seller">{head}
+      <div className="empty"><Icon name="store" /><b>Your seller profile isn't published yet</b><span>Finish the profile and publish it to start getting orders.</span><RLink r="sell" className="btn primary">Set up selling</RLink></div>
+    </Shell>
+  );
+  const open = s.orders.filter((o) => o.st < 4), done = s.orders.filter((o) => o.st >= 4);
+  return (
+    <Shell cur="seller">{head}
+      {fresh && <div className="banner ok" role="status"><Icon name="check" /><div className="grow"><b style={{ fontWeight: 500 }}>Your seller profile is {justPublished.updated ? 'updated' : 'published'}</b><span className="muted">You're selling as <span className="mono">{justPublished.acct || p.acct}</span>. Buyers can find you and send orders now.</span></div><RLink r="openjobs" className="btn sm">Find open jobs</RLink></div>}
+      <div className="tally">
+        <div><span className="lbl">Open orders</span><b className="num">{open.length}</b><span className="sub">{open.length ? 'need your attention' : 'none yet'}</span></div>
+        <div><span className="lbl">Finished orders</span><b className="num">{done.length}</b><span className="sub">paid out</span></div>
+        <div><span className="lbl">Price from</span><b className="num">{p.priceFrom !== null ? usd(p.priceFrom) : '—'}<span className="u">USDC</span></b><span className="sub">{p.days ? `delivers in ${p.days} day${p.days === 1 ? '' : 's'}` : 'per job'}</span></div>
+        <div><span className="lbl">Level</span><b>{p.level}</b><span className="sub">up to {p.maxJobs} job{p.maxJobs === 1 ? '' : 's'} at once</span></div>
+      </div>
+      <div className="grid g-main">
+        <div className="stack">
+          <div className="panel"><div className="panel-h"><h2>Your seller profile</h2><span className="pill ok"><Icon name="check" />Published</span></div><div className="panel-b">
+            <div className="row" style={{ gap: 12, alignItems: 'center' }}>
+              <span className="avatar">{p.initials}</span>
+              <div><b>{p.name}</b>{p.headline && <div className="muted small">{p.headline}</div>}</div>
+            </div>
+            <dl className="kv">
+              <dt>Seller account</dt><dd className="mono">{p.acct || '—'}</dd>
+              <dt>Who codes</dt><dd>{p.coder === 'agent' ? `Your coding agent ${p.agentName}${p.agentModel ? ` (${p.agentModel})` : ''}` : 'You'}</dd>
+              <dt>Skills</dt><dd>{p.skills.join(', ') || '—'}</dd>
+              <dt>Categories</dt><dd>{p.categories.map((c) => CATS.find(([k]) => k === c)?.[1] ?? c).join(', ') || '—'}</dd>
+              {p.deliveryTerms && <><dt>Delivery terms</dt><dd>{p.deliveryTerms}</dd></>}
+              <dt>Get paid on</dt><dd>{PAYOUTS.find(([k]) => k === p.payoutChain)?.[1] ?? p.payoutChain}{p.payoutChain !== 'near' && p.payoutAddress ? <span className="mono muted"> {p.payoutAddress}</span> : ''}</dd>
+              {p.country && <><dt>Country</dt><dd>{p.country}</dd></>}
+              {p.langs.length > 0 && <><dt>Languages</dt><dd>{p.langs.join(', ')}</dd></>}
+              {p.githubUsername && <><dt>GitHub</dt><dd className="mono">{p.githubUsername}</dd></>}
+            </dl>
+            {p.about && <p className="small">{p.about}</p>}
+          </div></div>
+        </div>
+        <div className="panel"><div className="panel-h"><h3>Orders</h3><RLink r="orders" className="see-all">All orders</RLink></div><div className="panel-b" style={{ paddingBlock: 4 }}>
+          {open.length
+            ? <div className="feed">{open.slice(0, 6).map((o) => <div key={o.id} className="feed-i"><Icon name="brief" /><div><b style={{ fontWeight: 500 }} className="small">{o.title}</b><div className="muted xsmall">{o.buyer} · {o.price} USDC · {O_ST[o.st]?.[1]}</div></div><span /></div>)}</div>
+            : <p className="muted small">No orders yet. Buyers' requests for your services appear here, and your bidding agent offers on matching open jobs.</p>}
+        </div></div>
+      </div>
+    </Shell>
+  );
+}
+
 export function Seller() {
   const s = useApp();
+  if (s.stage < 1) return <Shell cur="seller"><Head title="Seller dashboard" /><Gate msg="Sign in to see your seller dashboard"><SignInButton /></Gate></Shell>;
+  if (sellerLocked(s)) return <SellerLock cur="seller" title="Seller dashboard" />;
+  if (s.live) return <LiveSeller />;
   const matching: [string, string, string][] = [
     ['Make test_split_rounding pass', 'under 40', s.stage >= 7 ? 'Won, paid' : s.stage >= 5 ? 'Won, payment protected' : s.stage >= 4 ? 'Offer sent' : 'Bid 36.00'],
     ['Add pagination to get_jobs', '25–45', 'Bid 31.00'],

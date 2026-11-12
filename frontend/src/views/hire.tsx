@@ -2,10 +2,10 @@ import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNo
 import { agentPick, ARRIVE, ATT, BIDS, DONE_JOBS, FILTERS, gigBy, GIGS, HELD, JF, JOB, ME, openJobs, OTHER_JOBS, SELLERS_DIR, usd, type FilterKey, type Gig, type OpenJob, type OtherJob } from '../data/data';
 import { acScroll, act, hire, newRequest, openRequest } from '../store/actions';
 import { JOB_BUDGET, NO_REPO, removalFor } from '../lib/live';
-import { escrow, free, getState, hb, hPrice, paused, priceOf, setState, toast, useApp, type SpecDoc, type State } from '../store/store';
+import { escrow, free, getState, hb, hPrice, paused, priceOf, sellerLocked, setState, toast, useApp, type SpecDoc, type State } from '../store/store';
 import { Icon } from '../ui/icons';
 import { Feed, feedItems, Gate, RemoveJobButton, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, RLink, SellerReviews, SignInButton, SName, Thumb, useReputation } from '../ui/parts';
-import { Shell } from '../ui/Shell';
+import { SellerLock, Shell } from '../ui/Shell';
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; };
 /* the demo's suggestions name its sample repo; a real account gets the same ideas in general terms */
@@ -517,6 +517,7 @@ function SellersList() {
 export function Explore({ sell = false }: { sell?: boolean }) {
   const s = useApp();
   useEffect(() => { setState({ mode: sell ? 'sell' : 'buy' }); }, [sell]);
+  if (sell && sellerLocked(s)) return <SellerLock cur="openjobs" title="Open jobs" />;
   const list = gigList(s);
   const tab = s.exTab;
   if (sell) {
@@ -589,6 +590,7 @@ function OpenJobCard({ j, i }: { j: OpenJob; i: number }) {
 export function Ojob() {
   const s = useApp();
   useEffect(() => { setState({ mode: 'sell' }); }, []);
+  if (sellerLocked(s)) return <SellerLock cur="openjobs" title="Open jobs" />;
   const J = openJobs(s.stage); const j = J[s.oj] || J[0];
   if (!j) return (
     <Shell cur="openjobs">

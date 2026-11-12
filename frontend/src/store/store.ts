@@ -25,6 +25,19 @@ export type LiveSpec =
   | { state: 'loading' }
   | { state: 'none'; repo: boolean; agents: boolean | null }
   | { state: 'draft' | 'locked'; doc: SpecDoc };
+/** The seller profile editor's text fields. Kept in the store so moving between steps never loses them. */
+export interface SellForm {
+  name: string; title: string; country: string; langs: string; agent: string; model: string;
+  yrs: string; edu: string; work: string; bio: string; floor: string; max: string; terms: string; addr: string;
+}
+/** A real account starts with an empty form, filled from its saved profile; placeholders show examples. */
+export const EMPTY_SELL_FORM: SellForm = { name: '', title: '', country: '', langs: '', agent: '', model: '', yrs: '', edu: '', work: '', bio: '', floor: '', max: '', terms: '', addr: '' };
+/** The demo's sample seller. */
+export const DEMO_SELL_FORM: SellForm = {
+  name: '', title: 'Rust and NEAR contract developer', country: 'Philippines', langs: 'English, Filipino', agent: 'lumenfix', model: 'Runs in NEAR AI Cloud (TEE)',
+  yrs: 'Student or under 1 year', edu: '', work: '', bio: 'Rust contract fixes with a test for every bug.', floor: '12.00', max: '3',
+  terms: '1 to 2 days, includes one extra edge-case test', addr: '0x8b1F…4e2C',
+};
 export interface FollowUp { id: string; text: string; t: string; sending: boolean; reply?: string; link?: boolean }
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
@@ -56,6 +69,8 @@ export interface State {
   followUps: FollowUp[];
   /** Live: the followed job's spec, as stored by the spec writer. */
   liveSpec: LiveSpec;
+  /** The seller profile editor's text fields, and whether a real account's saved profile was loaded into them. */
+  sellForm: SellForm; sellLoaded: boolean;
   who: string; oj: number; exTab: 'services' | 'sellers'; ssort: 'rating' | 'jobs' | 'price'; fromHero: string;
   stars: number; dReason: string; mail: string; walletLinked: boolean;
   /** The real signed-in account from Google or GitHub; null in the simulated demo. */
@@ -115,6 +130,7 @@ const initialState: State = {
   user: saved?.user ?? null,
   live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
   modal: null, dataReady: false, restoring: !!saved?.user && authConfigured, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
+  sellForm: DEMO_SELL_FORM, sellLoaded: false,
 };
 
 /*
@@ -179,6 +195,12 @@ export function toast(msg: ReactNode, kind: Toast['kind'] = 'ok', ms = 4200) {
 export function useToasts(): Toast[] {
   return useToastStore((s) => s.list);
 }
+
+/**
+ * The seller screens (dashboard, orders, open jobs) need a published seller profile.
+ * Guests see the sign-in gate instead; the demo tour shows everything, as before.
+ */
+export const sellerLocked = (s: State) => s.tour < 0 && s.stage >= 1 && !s.seller;
 
 /* ---------------- modal ---------------- */
 export const openModal = (kind: ModalKind, props?: Record<string, string>) => setState({ modal: { kind, props } });
