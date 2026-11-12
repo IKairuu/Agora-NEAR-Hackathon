@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { JwtModule } from '@nestjs/jwt';
+import { AgentsModule } from '../agents/agents.module.js';
 import { AuthModule } from '../auth/auth.module.js';
 import { AuthService } from '../auth/auth.service.js';
 import { constants } from '../auth/constants.js';
@@ -10,7 +11,7 @@ import { JobsRepository } from './jobs.repository.js';
 import { JobsService } from './jobs.service.js';
 
 @Module({
-    imports: [JwtModule.register({ secret: constants.secret }), AuthModule, ChainModule],
+    imports: [JwtModule.register({ secret: constants.secret }), AuthModule, ChainModule, AgentsModule],
     controllers: [JobsController, OpenJobsController],
     providers: [JobsService, JobsRepository, AuthService],
 })

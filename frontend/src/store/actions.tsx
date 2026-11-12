@@ -1,10 +1,10 @@
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
-import { ARRIVE, ATTACK, gigBy, JOB, KICKOFF, KICKOFF_DEFAULT, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, usd, type Order } from '../data/sample';
+import { ARRIVE, ATTACK, BIDS, gigBy, JOB, KICKOFF, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, THREADS, usd, type Order } from '../data/data';
 import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { goLive, isLive, leaveLive, liveAddFunds, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSubmitAsk } from '../lib/live';
-import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg } from './store';
+import { appDataLoaded, demoLoaded, goLive, isLive, leaveLive, liveAddFunds, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
+import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg, type State } from './store';
 
 /* ---------------- navigation ---------------- */
 type NavFn = (to: string) => void;
@@ -26,13 +26,14 @@ export function scrollMsgs() {
 }
 /** Bring the newest New request message into view. */
 export function acScroll() {
-  requestAnimationFrame(() => document.getElementById('aclog')?.lastElementChild?.scrollIntoView({ block: 'end', behavior: 'auto' }));
+  requestAnimationFrame(() => document.getElementById('aclog')?.lastElementChild?.scrollIntoView({ block: 'end', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' }));
 }
 
 /* ---------------- chat with the hired seller ---------------- */
 /** After the seller accepts, they write first. */
 export function chatLog(key: string): ChatMsg[] {
-  return getState().chatLog[key] ?? [{ from: 'them', text: KICKOFF[key] || KICKOFF_DEFAULT }];
+  const first = KICKOFF[key] || KICKOFF[''];
+  return getState().chatLog[key] ?? (first ? [{ from: 'them', text: first }] : []);
 }
 export function sendChat(raw: string) {
   const text = raw.trim();
@@ -44,7 +45,8 @@ export function sendChat(raw: string) {
   setState((s) => ({ chatLog: { ...s.chatLog, [key]: log }, typing: true }));
   scrollMsgs();
   setTimeout(() => {
-    setState((s) => ({ typing: false, chatLog: { ...s.chatLog, [key]: [...chatLog(key), { from: 'them', text: REPLIES[key] }] } }));
+    const reply = REPLIES[key];
+    setState((s) => ({ typing: false, chatLog: { ...s.chatLog, [key]: reply ? [...chatLog(key), { from: 'them', text: reply }] : chatLog(key) } }));
     scrollMsgs();
   }, 1100);
 }
@@ -74,10 +76,21 @@ export function threads(): Thread[] {
     out.push({ ...t, msgs, last: l ? l.text : '', time: time ?? T_TIME[t.k] ?? '' });
   };
   s.newJobs.filter((j) => j.who).forEach((j) => add({ k: 'n' + j.id, mode: 'buy', who: j.who, job: j.id, title: j.title, st: j.status, amt: j.budget }, [['me', `Request sent: ${j.title}`], ['sys', 'Waiting for the seller to answer with an offer.']], 'Now'));
-  add({ k: 't1041', mode: 'buy', who: 'Ines Varga', job: 'J-1041', title: OTHER_JOBS[0].title, st: OTHER_JOBS[0].status, amt: '45.00', unread: true });
-  add({ k: 't1040', mode: 'buy', who: 'Your buyer agent', ag: true, job: 'J-1040', title: OTHER_JOBS[1].title, st: OTHER_JOBS[1].status, amt: '15–25' });
+  /* sample threads from the demo data; each one belongs to one of the demo's other job requests */
+  THREADS.forEach((th) => {
+    const j = OTHER_JOBS.find((x) => x.id === th.job); if (!j) return;
+    add({ k: th.k, mode: 'buy', who: th.who, ag: th.ag, job: th.job, title: j.title, st: j.status, amt: th.amt, unread: th.unread });
+  });
   s.orders.filter((o) => o.st < 4).forEach((o) => add({ k: o.buyer, mode: 'sell', who: o.buyer, job: o.id, title: o.title, st: O_ST[o.st], amt: o.price, order: o, unread: o.st === 0 }));
   return out;
+}
+/** True while a thread has news the user has not opened yet. */
+export const isUnread = (t: Thread) => !!t.unread && !getState().seenThreads.includes(t.k);
+/** Unread conversations across buying and selling; drives the Messages badges. */
+export const unreadThreads = () => threads().filter(isUnread).length;
+/** Mark a thread as read once it is opened. */
+export function markSeen(k: string) {
+  if (k && !getState().seenThreads.includes(k)) setState((s) => ({ seenThreads: [...s.seenThreads, k] }));
 }
 /** Send a message in a non-demo thread. */
 export function sendThread(raw: string) {
@@ -118,7 +131,8 @@ export const orderAct = {
     const o = getState().orders.find((x) => x.id === id); if (!o) return;
     const p = (priceText.match(/[\d.]+/) || ['42'])[0];
     const price = (+p).toFixed(2);
-    patchOrder(id, { st: 1, id: 'J-1045', price, note: `Your offer: ${price} USDC in ${days}. The buyer accepts to lock the tests.` });
+    const nid = 'J-' + getState().nextJob; setState((s) => ({ nextJob: s.nextJob + 1 }));
+    patchOrder(id, { st: 1, id: nid, price, note: `Your offer: ${price} USDC in ${days}. The buyer accepts to lock the tests.` });
     setState({ modal: null, oTab: 'active' });
     toast('Offer sent to ' + o.buyer + '.');
   },
@@ -132,13 +146,13 @@ export const TOUR: TourStep[] = [
   { r: 'ask', st: 1, t: 'Tests become the definition of done', p: 'The spec writer reads the repo and answers with tests that fail today. Nothing goes to sellers until the buyer locks them.', d: <>Click <b>Approve and lock the tests</b>.</>, act: () => setState((s) => ({ asked: true, askText: s.askText || JOB.plain, offerSt: '' })) },
   { r: 'ask', st: 3, t: 'Offers arrive, lowest price first', p: 'Matching sellers and bidding agents answer privately. The 2.00 USDC bait offer and the off-platform request are tagged Held by the fraud and lure agent, so nobody can choose them.', d: <>Look at the two <b>Held</b> rows at the top.</>, act: () => setState({ asked: true, offerSt: '', preNeg: false }) },
   { r: 'ask', st: 4, t: 'Your agent negotiates, you choose', p: 'It waited for 3 valid offers, then talked patchsmith down from 36.00 to 32.00, under the 35.50 median. The buyer can still choose any valid offer.', d: <>Click <b>Choose</b> on any offer.</>, act: () => setState({ asked: true, offerSt: '', preNeg: false }) },
-  { r: 'chat', st: 4, t: 'The seller accepts in the chat room', p: 'The agent sends the hire offer for you and waits. Money locks only when the seller accepts, and each step lands as a timestamped card.', d: <>Click <b>Seller accepts, demo</b>.</>, act: () => setState((s) => ({ hire: s.hire || 'patchsmith', offerSt: 'wait', thread: 'demo', inboxF: 'buy' })) },
+  { r: 'chat', st: 4, t: 'The seller accepts in the chat room', p: 'The agent sends the hire offer for you and waits. Money locks only when the seller accepts, and each step lands as a timestamped card.', d: <>Click <b>Seller accepts, demo</b>.</>, act: () => setState((s) => ({ hire: s.hire || hb(s).key, offerSt: 'wait', thread: 'demo', inboxF: 'buy' })) },
   { r: 'jobs', st: 5, t: 'Job requests keep the record', p: 'Ongoing jobs come first as large cards with a node for each stage. Finished ones sit below. Filter pills pick a status in one tap.', d: <>Open <b>Activity</b> on the first card.</>, act: () => setState({ offerSt: 'accepted', jf: 'all' }) },
   { r: 'mandate', st: 5, t: 'The contract enforces the limits', p: 'Try something the limits forbid. The contract refuses a 400 USDC job because the per-job cap is 50.', d: <>Click <b>Fund 400 USDC job</b>.</> },
   { r: 'room', st: 5, t: 'Money waits in Protected payment', p: 'When the seller accepted, the transaction agent called fund_job. Nine checks passed and 32.00 USDC is held in escrow by the contract, not by AGORA or any agent.', d: <>Click <b>Simulate a bad delivery</b>.</> },
   { r: 'room', st: 6, t: 'A cheating delivery is rejected', p: 'The first commit edited the locked test to make it pass. All three reviewers rejected it and nothing was paid.', d: <>Click <b>Run review on this commit</b> for the real fix.</> },
   { r: 'room', st: 7, t: 'Two approvals release payment', p: 'Three reviewers on different models ran the tests in TEEs. After the second approval the contract released 32.00 USDC and minted a completion record.', d: <>Press <b>Next</b> to see the seller's record.</>, act: () => setState({ votes: [2, 2, 2] }) },
-  { r: 'profile', st: 7, t: 'Reputation only from settled jobs', p: 'Record #412 and the review exist because money actually moved. Objective outcomes come first, ratings second.', d: '', act: () => setState({ who: 'patchsmith' }) },
+  { r: 'profile', st: 7, t: 'Reputation only from settled jobs', p: 'Record #412 and the review exist because money actually moved. Objective outcomes come first, ratings second.', d: '', act: () => setState((s) => ({ who: hb(s).name })) },
   { r: 'agents', st: 7, t: 'Someone steals the agent key', p: 'The attacker tries to drain the account. The protocol and the contract reject every call, and the guardian pauses the team.', d: <>Click <b>Run the drill</b>.</> },
   { r: 'sell', st: 7, t: 'Become a seller', p: 'Clicking Selling opens a short welcome, then a profile you can fill from LinkedIn, a CV or GitHub. The coding can be done by you or by a coding agent you run.', d: <>Click <b>Let's do this</b>.</>, act: () => setState({ sellStep: 0 }) },
   { r: 'dispute', st: 8, t: 'Disputes are a re-check first', p: "A dispute freezes the payment and 3 fresh reviewers re-run every test for free. Only if that doesn't settle it does the DAO vote, and the side that asks puts down a small bond it gets back if right.", d: <>Press <b>Next</b>.</> },
@@ -152,6 +166,66 @@ export function tourGo(i: number) {
   if (s.st === 8) setState({ attack: { n: ATTACK.length } });
   go(s.r);
 }
+/**
+ * The tour drives `stage` itself, up to 8, which the app treats as signed in to the sample account.
+ * Remember who the visitor was when it started, and put that back when it ends, so a guest leaves as a guest.
+ */
+/* The whole app state when the tour started: everything done inside the demo is thrown away at the end. */
+let beforeTour: State | null = null;
+function startTour() {
+  const s = getState();
+  /* the tour's story is demo data from the backend */
+  if (!demoLoaded()) {
+    /* still loading: start once it arrives */
+    if (!s.dataReady) { toast('Loading the demo…', 'hold'); void appDataLoaded().then(() => { if (demoLoaded() && getState().tour < 0) startTour(); else if (!demoLoaded()) toast('The demo could not be loaded. Check that the AGORA server is running, then try again.', 'block'); }); return; }
+    toast('The demo could not be loaded. Check that the AGORA server is running, then try again.', 'block'); return;
+  }
+  if (s.tour < 0) beforeTour = { ...s };
+  tourGo(0);
+}
+function endTour(finished: boolean) {
+  const s = getState();
+  /* no snapshot after a reload mid-tour (a real Google or GitHub sign-in): signed in only with a real
+     account, and nothing the demo did is kept */
+  const snap: Partial<State> = beforeTour ?? {
+    stage: s.user ? 1 : 0, role: s.user ? s.role : null, signVia: s.user ? s.signVia : '', user: s.user,
+    liked: [], newJobs: [], chatLog: {}, tLog: {}, seenThreads: [], thread: '', hire: '', who: '', votes: null,
+    dTab: 'open', stars: 0, dReason: '', jobTab: 'bids',
+  };
+  beforeTour = null;
+  const guest = (snap.stage ?? 0) < 1;
+  setState({
+    ...snap, tour: -1, tourMin: false, attack: null, voting: false, modal: null,
+    /* settings and loading state belong to now, not to the snapshot; live data reloads below */
+    dataReady: s.dataReady, fold: s.fold, live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null,
+  });
+  resetRequest();
+  if (guest) { go('home'); toast(finished ? 'Demo finished. Sign in to post your own job.' : 'Demo closed. You are not signed in.'); return; }
+  if (snap.user && authConfigured) void goLive();
+
+  if (finished) toast('Demo finished. Everything stays clickable.');
+}
+/* ---------------- New request: which conversation the page shows ---------------- */
+/**
+ * Clears the request conversation and the demo job's hire state, so New request opens on the empty composer.
+ * For a new session: sign-in, sign-out and the end of the tour. Also stops offers still streaming in.
+ * `keepDraft` keeps text typed into the composer before signing in.
+ */
+export function resetRequest(keepDraft = false) {
+  setState((s) => ({
+    asked: false, askText: '', draft: keepDraft ? s.draft : '', extra: [], bidsShown: 0, pendingAsk: false, followUps: [],
+    offerSt: '', preNeg: false, declined: [], streamId: s.streamId + 1,
+  }));
+}
+/** New request from anywhere: the empty composer. The earlier job keeps its state and stays in Job requests. */
+export function newRequest() {
+  if (getState().tour >= 0) return; /* the tour drives this page itself */
+  setState({ asked: false, draft: '', extra: [], followUps: [] });
+}
+/** Reopens the current job's conversation on New request, from its card or a "Back to the offers" link. */
+export function openRequest() {
+  setState({ asked: true });
+}
 /** Advance the tour when the visitor does what the current step asks. */
 export const tourStep = (from: number, to: number) => { if (getState().tour === from) setState({ tour: to }); };
 
@@ -162,7 +236,7 @@ export function hire(key: string) {
   if (s.live) { void liveHire(key).then((ok) => { if (ok) go('chat'); }); return; }
   setState({ preNeg: s.stage === 3 ? true : s.preNeg, stage: Math.max(s.stage, 4), hire: key, offerSt: 'wait', thread: 'demo', inboxF: 'buy' });
   go('chat');
-  toast(`Your agent sent the hire offer to ${sellerBy(key)!.name}.`);
+  toast(`Your agent sent the hire offer to ${sellerBy(key)?.name ?? 'the seller'}.`);
   tourStep(4, 5);
 }
 
@@ -204,9 +278,10 @@ export const act = {
     if (err) { takePending(); toast(`Could not reach ${via === 'google' ? 'Google' : 'GitHub'}: ${err}`, 'block'); }
   },
   signin2: () => {
-    setState((s) => ({ stage: Math.max(s.stage, 1) }));
+    if (getState().tour < 0) { setState({ stage: 1 }); resetRequest(getState().after === 'ask'); }
+    else setState((s) => ({ stage: Math.max(s.stage, 1) }));
     const u = getState().user;
-    toast(!u ? 'Signed in as lumen.testnet. Agent sub-account created.' : u.isNew ? `Signed in as ${u.email || u.name}. Agent sub-account created.` : `Welcome back, ${u.name}.`);
+    toast(!u ? `Signed in as ${ME.acct || 'your account'}. Agent sub-account created.` : u.isNew ? `Signed in as ${u.email || u.name}. Agent sub-account created.` : `Welcome back, ${u.name}.`);
     const s = getState();
     if (s.tour === 0) { closeModal(); tourGo(1); return; }
     const known = u?.onboarding.role;
@@ -227,7 +302,7 @@ export const act = {
     goRole(r);
   },
   roleskip: () => { setState((s) => ({ role: s.role || 'hire', modal: null })); go('ask'); },
-  signout: () => { leaveLive(); signOutRemote(); setState({ stage: 0, role: null, tour: -1, user: null, signVia: '' }); go('home'); toast('Signed out.'); },
+  signout: () => { leaveLive(); signOutRemote(); setState({ stage: 0, role: null, tour: -1, user: null, signVia: '' }); resetRequest(); go('home'); toast('Signed out.'); },
   /** Approve and lock the tests: offers then arrive one by one, lowest price first. */
   lockspec: () => {
     if (isLive()) { void liveLockSpec().then(() => tourStep(2, 3)); acScroll(); return; }
@@ -260,6 +335,18 @@ export const act = {
     });
     acScroll(); toast(`${x.id} posted on Open jobs.`);
   },
+  newask: () => {
+    window.scrollTo({ top: 0 });
+    if (isLive()) { liveLeaveAsk(); toast('Started a new request. The last one is still in Job requests.'); return; }
+    if (getState().stage < 2) { setState({ asked: false, askText: '', draft: '' }); return; }
+    toast('The demo job keeps running. Type a new request below and your agent starts it separately.');
+    requestAnimationFrame(() => document.getElementById('ask-in')?.focus());
+  },
+  discardask: () => {
+    if (isLive()) { const job = getState().liveJob; if (!job?.id) { liveLeaveAsk(); return; } openModal('discard', { job: job.ref }); return; }
+    setState({ asked: false, askText: '', draft: '' }); toast('Request discarded. Nothing was sent to sellers.');
+  },
+  discardask2: () => { closeModal(); void liveDiscardAsk(); },
   keepwait: () => isLive() ? void liveKeepWait() : toast('Your agent keeps the job private and checks again in 30 minutes.'),
   heroask: () => { const s = getState(); setState({ draft: s.q || '' }); if (s.stage >= 1) { go('ask'); return; } setState({ after: 'ask' }); act.signin(); },
   selleraccept: () => {
@@ -274,10 +361,10 @@ export const act = {
     setState({ declined: s.declined.includes(s.hire) ? s.declined : [...s.declined, s.hire], offerSt: 'declined' }); scrollMsgs();
     toast(`${hb(s).name} declined. Nothing was locked.`, 'hold');
   },
-  attachrepo: () => isLive() ? void liveAttachRepo() : toast('In the prototype the repository is github.com/lumen-labs/payroll-vault at a41c9e2.'),
+  attachrepo: () => isLive() ? void liveAttachRepo() : toast(`In the demo the repository is ${JOB.repo} at ${JOB.base}.`),
   bids: () => { if (isLive()) { setState({ jobTab: 'bids' }); return; } setState((s) => ({ stage: Math.max(s.stage, 3), jobTab: 'bids' })); toast('2 offers held by the fraud and lure agent.', 'hold'); },
   negotiate: () => { if (isLive()) { setState({ jobTab: 'neg' }); toast('Pick an offer and your buyer agent sends the counter-offer in its chat.', 'hold'); return; } setState((s) => ({ stage: Math.max(s.stage, 4), jobTab: 'neg' })); toast('Your agent negotiated patchsmith down to 32.00 USDC. Choose any offer to hire.'); },
-  fund: () => hire(getState().hire || 'patchsmith'),
+  fund: () => hire(getState().hire || hb(getState()).key),
   send: () => openModal('send'),
   receive: () => openModal('receive'),
   addfunds: () => { if (isLive()) { void liveAddFunds(); return; } openModal('addfunds'); },
@@ -289,12 +376,13 @@ export const act = {
   deletekey: () => toast('Deleting a key needs your full-access key. You would confirm with Google sign-in here.', 'hold'),
   withdrawme: () => isLive() ? void liveWithdraw() : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
   send2: () => { closeModal(); toast('In the prototype nothing is sent. On testnet this is a full-access key transfer.', 'hold'); },
-  copyacct: () => { try { void navigator.clipboard.writeText(ME.acct); } catch { /* ignore */ } toast('Copied lumen.testnet.'); },
+  copyacct: () => { try { void navigator.clipboard.writeText(ME.acct); } catch { /* ignore */ } toast(`Copied ${ME.acct}.`); },
   intents: () => toast('Quote refreshed: 100.00 USDC on Base becomes 99.71 USDC on NEAR.'),
   intentspay: () => { closeModal(); toast(<><b>Sent through NEAR Intents.</b> In the demo this is the real 1 USDC mainnet payment, with its explorer link in the README.</>, 'ok', 5200); },
   refundexp: () => toast("After the deadline, refund_expired returns the protected money to you. Anyone can call it, so it can't be blocked.", 'hold', 5200),
-  baddeliver: () => { setState((s) => ({ stage: Math.max(s.stage, 6) })); toast(<><b>Delivery rejected.</b> Commit 3b9c2aa edited a locked test. 0 of 3 approved.</>, 'block', 5200); },
+  baddeliver: () => { if (isLive()) { toast('Deliveries come from your seller. Reviewers run as soon as they submit a commit.', 'hold'); return; } setState((s) => ({ stage: Math.max(s.stage, 6) })); toast(<><b>Delivery rejected.</b> Commit 3b9c2aa edited a locked test. 0 of 3 approved.</>, 'block', 5200); },
   gooddeliver: () => {
+    if (isLive()) { toast('Deliveries come from your seller. Reviewers run as soon as they submit a commit.', 'hold'); return; }
     setState((s) => ({ stage: s.stage < 6 ? 6 : s.stage, voting: true, votes: [1, 0, 0] }));
     const steps: [number, number[]][] = [[700, [1, 1, 0]], [1400, [2, 1, 1]], [2100, [2, 2, 1]]];
     steps.forEach(([ms, v]) => setTimeout(() => {
@@ -365,7 +453,7 @@ export const act = {
   },
   reqsvc: () => { if (getState().stage < 1) { act.signin(); return; } openModal('reqsvc'); },
   reqsvc2: (what: string) => {
-    const s = getState(); const gg = gigBy(s.svc)!; const id = 'J-' + s.nextJob;
+    const s = getState(); const gg = gigBy(s.svc); if (!gg) return; const id = 'J-' + s.nextJob;
     const title = what || gg.prompt;
     if (s.live) { void liveRequestService(title, gg.id).then((ok) => { if (ok) { setState({ modal: null }); go('jobs'); } }); return; }
     setState({
@@ -376,8 +464,8 @@ export const act = {
     toast(`${id} sent to ${gg.seller}. The spec writer is drafting the tests.`);
   },
   msgsvc: () => {
-    const s = getState(); const gg = gigBy(s.svc)!;
-    const k = ({ patchsmith: 'patchsmith', 'Dana Okafor': 'dana', rustwright: 'rustwright' } as Record<string, string>)[gg.seller];
+    const s = getState(); const gg = gigBy(s.svc); if (!gg) return;
+    const k = BIDS.find((b) => b.name === gg.seller)?.key;
     if (k && s.stage >= 5 && k === s.hire) { setState({ thread: 'demo' }); go('chat'); return; }
     toast(`Message sent to ${gg.seller}. Replies arrive in Messages.`);
   },
@@ -388,12 +476,16 @@ export const act = {
     setState({ mode: m }); go(m === 'sell' ? (s.seller ? 'orders' : 'sell') : 'dash');
     toast(m === 'sell' ? 'Switched to selling. Orders buyers sent you are here.' : 'Switched to buying.');
   },
-  flatcmp: (v: boolean) => setState({ flat: v }),
   fold: () => {
     // the page grows into the freed space, slid in with a FLIP transform
     const m0 = document.querySelector<HTMLElement>('.main'); const x0 = m0 ? m0.getBoundingClientRect().left : 0;
     const fold = !getState().fold; storage.set('agora-fold', fold ? '1' : '0');
     flushSync(() => setState({ fold }));
+    const side = document.querySelector<HTMLElement>('.side');
+    if (side && fold) {
+      side.classList.add('hold'); (document.activeElement as HTMLElement | null)?.blur();
+      side.addEventListener('mouseleave', () => side.classList.remove('hold'), { once: true });
+    } else side?.classList.remove('hold');
     const m = document.querySelector<HTMLElement>('.main');
     if (!m || matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const dx = x0 - m.getBoundingClientRect().left; if (!dx) return;
@@ -405,7 +497,7 @@ export const act = {
     if (isLive()) { void liveLike(id); return; }
     const s = getState();
     if (s.liked.includes(id)) setState({ liked: s.liked.filter((x) => x !== id) });
-    else { setState({ liked: [...s.liked, id] }); toast(`Saved ${gigBy(id)!.seller}. Your buyer agent will ask them first on matching jobs.`); }
+    else { setState({ liked: [...s.liked, id] }); toast(`Saved ${gigBy(id)?.seller ?? 'this seller'}. Your buyer agent will ask them first on matching jobs.`); }
   },
   openGig: (id: string) => { if (isLive()) void liveOpenGig(id); setState({ svc: id }); go('svc'); tourStep(1, 2); },
   /** A seller's name anywhere opens their profile. */
@@ -418,14 +510,14 @@ export const act = {
     const nx = cur === 'dark' ? 'light' : 'dark';
     r.setAttribute('data-theme', nx); storage.set('agora-theme', nx);
   },
-  tour: () => tourGo(0),
+  tour: () => startTour(),
   tournext: () => {
     const t = getState().tour;
-    if (t >= TOUR.length - 1) { setState({ tour: -1 }); toast('Demo finished. Everything stays clickable.'); return; }
+    if (t >= TOUR.length - 1) { endTour(true); return; }
     tourGo(t + 1);
   },
   tourback: () => { const t = getState().tour; if (t > 0) tourGo(t - 1); },
-  tourend: () => setState({ tour: -1 }),
+  tourend: () => endTour(false),
   /** Hero search: signed in, it drafts a request; signed out, it searches services. */
   heroGo: (v: string, focusInput: () => void) => {
     if (!v) { toast('Type what you need first, or pick a suggestion.', 'hold'); focusInput(); return; }
@@ -437,8 +529,8 @@ export const act = {
     if (!v) { toast('Describe the job first, or pick a popular service.', 'hold'); return; }
     const s = getState();
     if (s.stage < 1) { setState({ draft: v, after: 'ask' }); act.signin(); return; }
+    if (s.live) { requestAnimationFrame(acScroll); void liveSend(v).then(() => acScroll()); return; }
     setState({ draft: '' });
-    if (s.live) { void liveSubmitAsk(v).then(() => acScroll()); return; }
     if (!s.asked && s.stage < 2) { setState({ asked: true, askText: v }); acScroll(); tourStep(1, 2); return; }
     if (s.stage < 2) { toast('The spec writer will fold that into the tests before you lock them.'); return; }
     setState({ nextJob: s.nextJob + 1, extra: [...s.extra, { id: 'J-' + s.nextJob, text: v, t: clock(), posted: false }] });
@@ -465,6 +557,8 @@ export function initAuth(): () => void {
   if (!supabase) return () => {};
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
     if (event === 'SIGNED_OUT') { leaveLive(); setState({ user: null }); return; }
+    /* a saved Google or GitHub sign-in whose Supabase session has expired: back to guest */
+    if (event === 'INITIAL_SESSION' && !session && getState().user) { setState({ stage: 0, user: null, role: null, signVia: '' }); return; }
     if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;
     const user = userOf(session);
     setTimeout(() => {
@@ -475,7 +569,9 @@ export function initAuth(): () => void {
         void goLive();
         return;
       }
-      setState((s) => ({ user, signVia: s.signVia || user.via, stage: Math.max(s.stage, 1), role: s.role || user.onboarding.role || null }));
+      const fresh = getState().user?.id !== user.id && getState().tour < 0;
+      setState((s) => ({ user, signVia: s.signVia || user.via, stage: fresh ? 1 : Math.max(s.stage, 1), role: s.role || user.onboarding.role || null }));
+      if (fresh) resetRequest();
       if (getState().tour < 0) void goLive();
     }, 0);
   });

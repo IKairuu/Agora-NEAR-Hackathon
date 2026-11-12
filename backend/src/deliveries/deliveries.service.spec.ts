@@ -31,7 +31,7 @@ describe('DeliveriesService', () => {
     beforeEach(() => {
         repo = {
             getJobForDelivery: jest.fn().mockResolvedValue(job()), createDelivery: jest.fn().mockResolvedValue({ id: DELIVERY, attempt: 1 }),
-            setRunStatus: jest.fn(), listDeliveries: jest.fn(), isParty: jest.fn(), getProof: jest.fn(),
+            setRunStatus: jest.fn(), extraAttempts: jest.fn().mockResolvedValue(0), listDeliveries: jest.fn(), isParty: jest.fn(), getProof: jest.fn(),
         } as unknown as jest.Mocked<DeliveriesRepository>;
         chain = {
             callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-submit_delivery-1', explorer_url: 'https://testnet.nearblocks.io/txns/mock-submit_delivery-1', result: null }),
@@ -65,6 +65,21 @@ describe('DeliveriesService', () => {
             callbackUrl: 'http://api:3000/api/internal/v1/runner/result', testFiles: [{ path: 'tests/split_rounding.rs', content: 'x' }],
         });
         expect(repo.setRunStatus.mock.calls[0]?.slice(1)).toEqual(['running', null]);
+    });
+
+    it('sends the sealed hidden tests and their committed hash to the runner', async () => {
+        const holdout = { holdoutHash: 'ef'.repeat(32), ciphertext: new Uint8Array(Buffer.from('{"v":1,"ct":"sealed"}')) };
+        repo.getJobForDelivery.mockResolvedValue(job({ acceptanceSpecs: [{ ...job().acceptanceSpecs[0], holdoutHash: 'ef'.repeat(32), holdout }] }) as never);
+        await service.createDelivery('Bearer t', body);
+        const sent = JSON.parse((fetchMock.mock.calls[0] as [string, { body: string }])[1].body) as Record<string, unknown>;
+        expect(sent).toMatchObject({ holdoutRef: 'ef'.repeat(32), holdoutBlob: '{"v":1,"ct":"sealed"}' });
+    });
+
+    it('sends no holdout fields for a spec without hidden tests', async () => {
+        await service.createDelivery('Bearer t', body);
+        const sent = JSON.parse((fetchMock.mock.calls[0] as [string, { body: string }])[1].body) as Record<string, unknown>;
+        expect(sent).not.toHaveProperty('holdoutRef');
+        expect(sent).not.toHaveProperty('holdoutBlob');
     });
 
     it('keeps the delivery but marks the run failed when the runner is down', async () => {

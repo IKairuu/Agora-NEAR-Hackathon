@@ -1,4 +1,4 @@
-import { O_ST, usd, type Order } from '../data/sample';
+import { O_ST, usd, type Order } from '../data/data';
 import { orderAct } from '../store/actions';
 import { setState, useApp, type State } from '../store/store';
 import { Icon } from '../ui/icons';

@@ -1,0 +1,609 @@
+{
+  "name": "Agora 07: spec writer",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agora/spec-writer",
+        "authentication": "headerAuth",
+        "options": {}
+      },
+      "id": "6d5648eb-0f02-49ed-88d5-392bb228e1ec",
+      "name": "Webhook",
+      "webhookId": "9bbb6fe3-2c0b-4ad1-8a36-ed1d097b5807",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dA2tJ7bHduzivKol",
+          "name": "X-Agora-Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Webhook output has the request body under $json.body.\n// Flatten the envelope and its payload into one item.\nconst b = $input.first().json.body || {};\nif (!b.runId) throw new Error('Missing runId in the request body');\nreturn [{\n  json: {\n    runId: b.runId,\n    ownerId: b.ownerId ?? null,\n    jobId: b.jobId ?? null,\n    agentId: b.agentId ?? null,\n    ...(b.payload || {}),\n  },\n}];"
+      },
+      "id": "c2c0a9ac-a1f4-4bc6-b7e3-8038284916ce",
+      "name": "Read envelope",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT id, title, description, category, repo_url, base_commit,\n       (SELECT coalesce(max(version), 0) FROM acceptance_specs WHERE job_id = $1::uuid) AS last_version\nFROM jobs WHERE id = $1::uuid;",
+        "options": {
+          "queryReplacement": "={{ [ $json.jobId ] }}"
+        }
+      },
+      "id": "1d56d96e-fb08-4394-9622-9639bfd38d4c",
+      "name": "Load job",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        448,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Works for public GitHub repos: https://github.com/OWNER/REPO\nconst j = $input.first().json;\nif (!j.id) throw new Error('Job not found');\nconst m = String(j.repo_url || '').match(/github\\.com\\/([^/]+)\\/([^/#?]+)/);\nif (!m) throw new Error('repo_url must be a public GitHub repo URL');\nconst repo = m[2].replace(/\\.git$/, '');\nconst ref = j.base_commit || 'main';\nreturn [{ json: {\n  ...j,\n  treeUrl: `https://api.github.com/repos/${m[1]}/${repo}/git/trees/${ref}?recursive=1`,\n  rawBase: `https://raw.githubusercontent.com/${m[1]}/${repo}/${ref}/`,\n} }];"
+      },
+      "id": "b8f5f153-826b-4545-a282-bcd5e57026aa",
+      "name": "Repo file URLs",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.treeUrl }}",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "47c2e2d5-fe43-4fe2-b780-eeae5478aec9",
+      "name": "Get file tree",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        896,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {
+          "response": {
+            "response": {
+              "responseFormat": "text"
+            }
+          },
+          "timeout": 20000
+        }
+      },
+      "id": "680dc637-037c-4f36-a464-8f9f6b67baa0",
+      "name": "Download files",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1344,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const j = $('Repo file URLs').first().json;\nconst paths = $('Pick files').all().map((i) => i.json.path);\nconst bodies = $input.all().map((i) => String(i.json.data ?? ''));\nlet files = '';\npaths.forEach((p, k) => { files += `\\n--- ${p}\\n${bodies[k].slice(0, 4000)}`; });\nfiles = files.slice(0, 30000);\n\nconst system = `You write acceptance tests for small software jobs.\nGiven a job post and repository files, write NEW test files that FAIL on the current code\nand PASS once the job is done. Use the repo's existing test framework.\nNever edit existing tests. The seller may only change source files.\nReturn JSON with keys:\ntestCommand (string), buildCommand (string), failingTests (array of test names),\nallowedPaths (array of globs the seller may change, never test folders),\ntestFiles (array of {path, content}),\nchecks (array of {name, howVerified, weight: \"required\" | \"advisory\"}).`;\nconst user = `Job title: ${j.title}\n<untrusted>\n${j.description}\n</untrusted>\nRepository files:\n<untrusted>${files}\n</untrusted>`;\nreturn [{ json: { provider: 'general', system, user,\n  required: ['testCommand', 'failingTests', 'allowedPaths', 'testFiles'] } }];"
+      },
+      "id": "4ee8bf3b-2e4c-4c1d-a86f-3f136bf2e0c6",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Keep the prompt small: package.json, source and test files, max ~30 KB\nconst j = $('Repo file URLs').first().json;\nconst tree = ($input.first().json.tree || []).filter((t) => t.type === 'blob');\nconst wanted = tree\n  .map((t) => t.path)\n  .filter((p) => /^(package\\.json|src\\/.*\\.(js|ts|mjs)|test\\/.*\\.(js|ts|mjs))$/.test(p))\n  .slice(0, 12);\nif (wanted.length === 0) wanted.push('package.json');\nreturn wanted.map((path) => ({ json: { path, url: j.rawBase + path } }));"
+      },
+      "id": "9ed5de70-79b8-44e3-9822-87c09a0294ed",
+      "name": "Pick files",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "GgJgGRBgpwaXrfGx",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/GgJgGRBgpwaXrfGx",
+          "cachedResultName": "Agora lib: llm-json"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "provider": "={{ $json.provider }}",
+            "system": "={{ $json.system }}",
+            "user": "={{ $json.user }}",
+            "required": "={{ $json.required }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "provider",
+              "displayName": "provider",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "system",
+              "displayName": "system",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "user",
+              "displayName": "user",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "required",
+              "displayName": "required",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "9f2e1705-5549-45c8-aa96-d62e8c033258",
+      "name": "Ask LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        1792,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const s = $input.first().json.data;\nconst j = $('Repo file URLs').first().json;\nconst isTest = (p) => /(^|\\/)(test|tests|__tests__)\\/|\\.(test|spec)\\./.test(p);\n// Files that already exist in the repo: the spec must never overwrite them\nconst existing = new Set(($('Get file tree').first().json.tree || []).map((t) => t.path));\nif (!Array.isArray(s.testFiles) || s.testFiles.length === 0) throw new Error('No test files');\nif (!s.testFiles.every((f) => f.path && typeof f.content === 'string' && isTest(f.path))) {\n  throw new Error('Every test file needs a path inside a test folder and string content');\n}\n// A new test file that reuses an existing name gets its own name instead\nconst testFiles = s.testFiles.map((f) => {\n  let p = f.path;\n  if (existing.has(p)) p = p.replace(/(\\.(test|spec))?\\.(m?[jt]s)$/, '.agora.test.$3');\n  return { path: p, content: f.content };\n});\nconst allowed = (s.allowedPaths || []).filter((g) => !isTest(g));\nif (allowed.length === 0) allowed.push('src/**');\nconst checks = (s.checks && s.checks.length) ? s.checks : [\n  { name: 'Named failing tests now pass', howVerified: 'Run the test command on the delivered commit', weight: 'required' },\n  { name: 'No regressions', howVerified: 'Full suite passes', weight: 'required' },\n  { name: 'Scope', howVerified: 'Diff touches only allowed paths and no tests', weight: 'required' },\n  { name: 'No planted instructions', howVerified: 'Scan diff and logs for agent-directed text', weight: 'required' },\n  { name: 'Quality notes', howVerified: 'Model-judged, shown to the buyer', weight: 'advisory' },\n];\nreturn [{ json: {\n  jobId: j.id, version: Number(j.last_version) + 1,\n  testCommand: s.testCommand || 'npm test',\n  // The runner's default install step is used. A model-invented build script\n  // (for example \"npm run build\" when package.json has none) would fail every run.\n  buildCommand: null,\n  failingTests: s.failingTests || [],\n  allowedPaths: allowed,\n  testFiles,\n  checks,\n  // for the runner: tests must FAIL on the base commit\n  repoUrl: j.repo_url, commit: j.base_commit || 'main', baseCommit: j.base_commit || 'main',\n} }];"
+      },
+      "id": "faa8fbbb-4bb6-4cba-84f0-aaba05eccc6d",
+      "name": "Validate spec",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2016,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "zLG2zuDEJ0kE82Ni",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/zLG2zuDEJ0kE82Ni",
+          "cachedResultName": "Agora lib: run-tests"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "repoUrl": "={{ $json.repoUrl }}",
+            "commit": "={{ $json.commit }}",
+            "baseCommit": "={{ $json.baseCommit }}",
+            "testCommand": "={{ $json.testCommand }}",
+            "buildCommand": "={{ $json.buildCommand }}",
+            "testFiles": "={{ $json.testFiles }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "repoUrl",
+              "displayName": "repoUrl",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "commit",
+              "displayName": "commit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "baseCommit",
+              "displayName": "baseCommit",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "testCommand",
+              "displayName": "testCommand",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "buildCommand",
+              "displayName": "buildCommand",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "testFiles",
+              "displayName": "testFiles",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "95d334f6-15ab-4cdf-9ec3-c42a592865e4",
+      "name": "Run tests on base",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        2240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const spec = $('Validate spec').first().json;\nconst r = $input.first().json;\nif (r.error) throw new Error('Runner error: ' + JSON.stringify(r.error).slice(0, 300));\n// exitCode 0 means the new tests already pass: the spec would prove nothing\nconst failsOnBase = r.exitCode !== 0 && r.installExit === 0;\nreturn [{ json: { ...spec, failsOnBase, baseExit: r.exitCode, baseLogHash: r.logSha256 } }];"
+      },
+      "id": "ff1b999a-ce2c-45fb-a041-21d34a1c8de2",
+      "name": "Must fail on base",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2464,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "WITH spec AS (\n  INSERT INTO acceptance_specs\n    (job_id, version, test_command, build_command, failing_tests, allowed_paths, test_files)\n  VALUES ($1::uuid, $2::int, $3, $4,\n        ARRAY(SELECT jsonb_array_elements_text($5::jsonb)),\n        ARRAY(SELECT jsonb_array_elements_text($6::jsonb)), $7::jsonb)\n  RETURNING id\n)\nINSERT INTO spec_checks (spec_id, position, name, how_verified, weight)\nSELECT spec.id, (c.ord - 1)::smallint, c.v->>'name', c.v->>'howVerified',\n       coalesce(c.v->>'weight', 'required')::check_weight\nFROM spec, jsonb_array_elements($8::jsonb) WITH ORDINALITY AS c(v, ord)\nRETURNING spec_id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.jobId, $json.version, $json.testCommand, $json.buildCommand, JSON.stringify($json.failingTests), JSON.stringify($json.allowedPaths), JSON.stringify($json.testFiles), JSON.stringify($json.checks) ] }}"
+        }
+      },
+      "id": "83d57eda-f75d-41a1-8ff5-c40e92ffa5d8",
+      "name": "Save spec",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        2688,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const env = $('Read envelope').first().json;\nconst s = $('Must fail on base').first().json;\nconst specId = $input.first().json.spec_id ?? null;\nconst msg = s.failsOnBase\n  ? `Drafted ${s.testFiles.length} failing test file(s) for this job; waiting for your approval`\n  : 'Draft spec is weak: the new tests already pass (or did not build) on the base commit. Please review.';\nreturn [{ json: {\n  runId: env.runId, ownerId: env.ownerId, agentId: env.agentId, jobId: env.jobId,\n  actorLabel: 'Spec writer', message: msg, severity: s.failsOnBase ? 'ok' : 'hold',\n  data: { specId, version: s.version, failsOnBase: s.failsOnBase, baseExit: s.baseExit },\n  notify: { runId: env.runId, role: 'spec_writer', ok: true, jobId: env.jobId,\n            result: { specId, version: s.version, failsOnBase: s.failsOnBase }, error: null },\n} }];"
+      },
+      "id": "7a3c645e-ec2c-4f38-8368-a69af0411cd3",
+      "name": "Finish",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "koU3lJvPFjQvlFkl",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/koU3lJvPFjQvlFkl",
+          "cachedResultName": "Agora lib: log-event"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "ab9af354-cf5b-458a-9ffd-e33e9879fb73",
+      "name": "Log event",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        3104,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "r3JfXTsdFLB8aMM0",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/r3JfXTsdFLB8aMM0",
+          "cachedResultName": "Agora lib: notify-nest"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "4c2b91fb-38b5-45a0-9e52-e9323f74737b",
+      "name": "Notify Nest",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        3328,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Read envelope",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read envelope": {
+      "main": [
+        [
+          {
+            "node": "Load job",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Load job": {
+      "main": [
+        [
+          {
+            "node": "Repo file URLs",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Repo file URLs": {
+      "main": [
+        [
+          {
+            "node": "Get file tree",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Get file tree": {
+      "main": [
+        [
+          {
+            "node": "Pick files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Download files": {
+      "main": [
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Pick files": {
+      "main": [
+        [
+          {
+            "node": "Download files",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "Ask LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask LLM": {
+      "main": [
+        [
+          {
+            "node": "Validate spec",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate spec": {
+      "main": [
+        [
+          {
+            "node": "Run tests on base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Run tests on base": {
+      "main": [
+        [
+          {
+            "node": "Must fail on base",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Must fail on base": {
+      "main": [
+        [
+          {
+            "node": "Save spec",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Save spec": {
+      "main": [
+        [
+          {
+            "node": "Finish",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Finish": {
+      "main": [
+        [
+          {
+            "node": "Log event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log event": {
+      "main": [
+        [
+          {
+            "node": "Notify Nest",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "3db8229d-f5b9-4278-be89-ba48673269fb",
+  "meta": {
+    "instanceId": "5bc1f41ff2889bec057c4b16904248e981cf8fde880ea6ae71e5a4721ead5080"
+  },
+  "nodeGroups": [],
+  "id": "trFnbiKXmuLYtH9V",
+  "tags": []
+}

@@ -1,0 +1,92 @@
+{
+  "name": "Agora lib: log-event",
+  "nodes": [
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "INSERT INTO agent_events\n  (owner_id, agent_id, job_id, actor_label, message, severity, data)\nVALUES ($1::uuid, $2::uuid, $3::uuid, $4, $5, $6::event_severity, $7::jsonb)\nRETURNING id;",
+        "options": {
+          "queryReplacement": "={{ [ $json.ownerId || null, $json.agentId || null, $json.jobId || null, $json.actorLabel || 'agent', $json.message || '', $json.severity || 'info', JSON.stringify({ ...($json.data || {}), runId: $json.runId || null }) ] }}"
+        }
+      },
+      "id": "fdbb0c69-eca2-489a-a46f-a704bb31ad5b",
+      "name": "Insert event",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "alwaysOutputData": true,
+      "position": [
+        224,
+        0
+      ],
+      "credentials": {
+        "postgres": {
+          "id": "POG2JEry8B8qAyP2",
+          "name": "Agora Supabase"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "acdf75dc-f71b-4db4-9c25-744bad883bd4",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $('Start').first().json;\nreturn [{ json: { ...input, eventId: $input.first().json.id ?? null } }];"
+      },
+      "id": "ee6e2301-f1b4-4240-af8f-536569628f24",
+      "name": "Return Input",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Insert event": {
+      "main": [
+        [
+          {
+            "node": "Return Input",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "Insert event",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "9eeaffba-e062-43f1-86c4-b6793004aa29",
+  "meta": {
+    "instanceId": "5bc1f41ff2889bec057c4b16904248e981cf8fde880ea6ae71e5a4721ead5080"
+  },
+  "nodeGroups": [],
+  "id": "koU3lJvPFjQvlFkl",
+  "tags": []
+}

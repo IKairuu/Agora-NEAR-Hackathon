@@ -99,4 +99,14 @@ export class RequestsRepository {
             return updated.count;
         });
     }
+
+    async cancelRequest(userId: string, id: string) {
+        return prisma.$transaction(async (tx) => {
+            const updated = await tx.job.updateMany({
+                where: { id, buyerId: userId, status: { in: ['draft', 'open'] } },
+                data: { status: 'cancelled' },
+            });
+            return updated.count;
+        });
+    }
 }

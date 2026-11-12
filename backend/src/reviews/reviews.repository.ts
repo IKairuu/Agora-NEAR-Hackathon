@@ -64,7 +64,7 @@ const evidenceSelect = {
         where: { lockedAt: { not: null } },
         select: {
             version: true, specHash: true, holdoutHash: true, lockedAt: true, lockTx: true, testCommand: true, buildCommand: true,
-            failingTests: true, allowedPaths: true, testFiles: true,
+            failingTests: true, allowedPaths: true, testFiles: true, holdout: { select: { holdoutHash: true, keyId: true, ciphertext: true } },
             checks: { select: { position: true, name: true, howVerified: true, weight: true }, orderBy: { position: 'asc' } },
         },
         orderBy: { version: 'desc' },
@@ -106,7 +106,7 @@ const rerunSelect = {
                     seller: { select: { ownerId: true } },
                     acceptanceSpecs: {
                         where: { lockedAt: { not: null } },
-                        select: { testCommand: true, buildCommand: true, failingTests: true, allowedPaths: true, testFiles: true },
+                        select: { testCommand: true, buildCommand: true, failingTests: true, allowedPaths: true, testFiles: true, holdoutHash: true, holdout: { select: { holdoutHash: true, ciphertext: true } } },
                         orderBy: { version: 'desc' },
                         take: 1,
                     },
@@ -152,6 +152,14 @@ export class ReviewsRepository {
 
     async getRerunTarget(userId: string, deliveryId: string) {
         return prisma.delivery.findFirst({ where: { id: deliveryId, milestone: { job: twoSided(userId) } }, select: rerunSelect });
+    }
+
+    async getOpenDeliveryOfJob(jobId: string) {
+        return prisma.delivery.findFirst({
+            where: { status: { in: ['submitted', 'reviewing'] }, milestone: { jobId } },
+            orderBy: { attempt: 'desc' },
+            select: rerunSelect,
+        });
     }
 
     async createRerun(r: NewRerun) {

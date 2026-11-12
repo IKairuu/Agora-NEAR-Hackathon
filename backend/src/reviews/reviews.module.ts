@@ -13,5 +13,6 @@ import { ReviewsService } from './reviews.service.js';
     imports: [JwtModule.register({ secret: constants.secret }), AuthModule, ChainModule, AgentsModule],
     controllers: [ReviewsController],
     providers: [ReviewsService, ReviewsRepository, AuthService],
+    exports: [ReviewsService],
 })
 export class ReviewsModule {}

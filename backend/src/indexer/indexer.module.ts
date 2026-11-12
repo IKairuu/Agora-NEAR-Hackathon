@@ -4,6 +4,6 @@ import { IndexerService } from './indexer.service.js';
 
 @Module({
     providers: [IndexerService, IndexerRepository],
-    exports: [IndexerService],
+    exports: [IndexerService, IndexerRepository],
 })
 export class IndexerModule {}

@@ -5,6 +5,7 @@ import path from 'node:path';
 import express, { NextFunction, Request, Response } from 'express';
 import { postResult } from './callback.js';
 import { config } from './config.js';
+import { HOLDOUT_ALG } from './holdout.js';
 import { createLimiter } from './queue.js';
 import { checkRepoUrl, executeRun } from './run.js';
 import { runRequestSchema } from './schema.js';
@@ -33,6 +34,14 @@ export const createServer = () => {
 
     app.get('/health', (_req, res) => {
         res.json({ ok: true });
+    });
+
+    app.get('/holdout-key', (_req, res) => {
+        if (!config.holdoutPublic) {
+            res.status(404).json({ message: 'This runner has no holdout key' });
+            return;
+        }
+        res.json({ alg: HOLDOUT_ALG, keyId: config.holdoutPublic.keyId, publicKey: config.holdoutPublic.publicKey });
     });
 
     app.post('/run', requireKey, async (req, res) => {

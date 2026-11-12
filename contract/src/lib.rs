@@ -70,6 +70,7 @@ pub enum JobStage {
     Released,
     Refunded,
     Disputed,
+    Expired,
 }
 
 #[near(serializers = [json, borsh])]
@@ -874,7 +875,7 @@ impl Contract {
         balance.escrowed = U128(balance.escrowed.0 - price);
         balance.free = U128(balance.free.0 + price);
         self.balances.insert(buyer.clone(), balance);
-        job.stage = JobStage::Refunded;
+        job.stage = JobStage::Expired;
         self.jobs.insert(job_id.0, job);
         emit(
             "milestone_refunded",
@@ -1745,7 +1746,7 @@ mod tests {
         let buyer = contract.get_balance(acc("alice.testnet"));
         assert_eq!(buyer.free.0, 200_000_000);
         assert_eq!(buyer.escrowed.0, 0);
-        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Refunded);
+        assert_eq!(contract.get_job(job_id).unwrap().stage, JobStage::Expired);
     }
 
     #[test]

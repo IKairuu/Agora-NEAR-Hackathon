@@ -70,7 +70,7 @@ describe('DisputesService', () => {
     beforeEach(() => {
         repo = {
             getDisputeJob: jest.fn().mockResolvedValue(job()), getDisputeJobById: jest.fn().mockResolvedValue(job(dispute())),
-            startRecheck: jest.fn().mockResolvedValue({ id: 'rr', round: 2 }), setRunStatus: jest.fn(), createNotes: jest.fn().mockResolvedValue(2),
+            startRecheck: jest.fn().mockResolvedValue({ id: 'rr', round: 2 }), getRunHoldout: jest.fn().mockResolvedValue(null), setRunStatus: jest.fn(), createNotes: jest.fn().mockResolvedValue(2),
             getBalance: jest.fn().mockResolvedValue({ available: D(12.5), escrowed: D(0), syncedAt: null }),
         } as unknown as jest.Mocked<DisputesRepository>;
         chain = {
@@ -99,6 +99,14 @@ describe('DisputesService', () => {
         expect(JSON.parse((fetchMock.mock.calls[0] as [string, { body: string }])[1].body)).toMatchObject({ commit: '81b0973aa1c2', deliveryId: 'del-1' });
         expect(agents.dispatchReviewers.mock.calls[0]).toEqual([BUYER, 'job-1', 'del-1']);
         expect(res).toMatchObject({ message: 'Dispute Successfully Opened', id: DISPUTE, status: 'recheck', openTx: 'mock-open_dispute-1', round: 2, runner: 'queued', reviewers: 2 });
+    });
+
+    it('re-checks with the sealed hidden tests when the spec has them', async () => {
+        repo.getDisputeJob.mockResolvedValueOnce(job() as never).mockResolvedValueOnce(job(dispute()) as never);
+        repo.getRunHoldout.mockResolvedValue({ holdoutHash: 'ef'.repeat(32), holdout: { holdoutHash: 'ef'.repeat(32), ciphertext: new Uint8Array(Buffer.from('sealed-blob')) } } as never);
+        await service.createDispute('Bearer t', { job_id: 'J-1042', reason: 'The tests were wrong' } as never);
+        expect(repo.getRunHoldout.mock.calls[0]).toEqual(['job-1']);
+        expect(JSON.parse((fetchMock.mock.calls[0] as [string, { body: string }])[1].body)).toMatchObject({ holdoutRef: 'ef'.repeat(32), holdoutBlob: 'sealed-blob' });
     });
 
     it('signs as the seller account when the seller opens it', async () => {

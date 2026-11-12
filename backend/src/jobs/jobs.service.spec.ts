@@ -1,9 +1,10 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
+import { AgentsService } from '../agents/agents.service';
 import { AuthService } from '../auth/auth.service';
 import { ChainService } from '../chain/chain.service';
 import { JobRow, JobsRepository } from './jobs.repository';
-import { ago, budgetHintOf, JobsService, toOtherJob } from './jobs.service';
+import { ago, budgetHintOf, JobsService, STAGES, statusOf, toOtherJob } from './jobs.service';
 
 const USER = '0f9b6c1e-4a2d-4c8e-9b1a-7d3e5f6a8b90';
 const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
@@ -13,7 +14,7 @@ const row = (overrides: Partial<JobRow> = {}): JobRow => ({
     status: 'open', visibility: 'public', repoUrl: 'https://github.com/lumen-labs/payroll-vault', baseCommit: 'a41c9e2',
     budgetLabel: 'under 40', agreedPrice: null, postedAt: new Date(), createdAt: new Date(), buyerId: USER,
     categoryRef: { slug: 'rust', name: 'Smart contracts' }, seller: null,
-    acceptanceSpecs: [{ specHash: 'ab'.repeat(32), lockedAt: new Date() }], _count: { bids: 6 },
+    acceptanceSpecs: [{ specHash: 'ab'.repeat(32), lockedAt: new Date() }], _count: { bids: 6, completionRecords: 0 },
     ...overrides,
 }) as JobRow;
 
@@ -21,6 +22,7 @@ describe('JobsService', () => {
     let repo: jest.Mocked<JobsRepository>;
     let service: JobsService;
     let chain: jest.Mocked<ChainService>;
+    let agents: jest.Mocked<AgentsService>;
     const post = (over: object = {}) => ({
         id: JOB, ref: 'J-1042', category: 'rust', onchainId: null, postedTx: null, budgetLabel: 'under 40', budgetMaxPublic: null,
         buyer: { nearAccountId: 'lumen.testnet', agentsAccountId: 'agents.lumen.testnet' }, acceptanceSpecs: [{ specHash: 'ab'.repeat(32) }], ...over,
@@ -35,12 +37,20 @@ describe('JobsService', () => {
             callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-post_job-5', explorer_url: '', ok: true, result: '1790000005' }),
             createAccount: jest.fn().mockResolvedValue({ account_id: 'agora-0f9b6c1e.testnet', agents_account_id: 'agents.agora-0f9b6c1e.testnet' }),
         } as unknown as jest.Mocked<ChainService>;
-        service = new JobsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService, chain);
+        agents = { dispatchBidders: jest.fn().mockResolvedValue([{ flow: 'bidding', runId: 'r1', status: 'sent' }, { flow: 'bidding', runId: 'r2', status: 'failed' }]) } as unknown as jest.Mocked<AgentsService>;
+        service = new JobsService(repo, { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService, chain, agents);
     });
 
     it('maps rows to the OtherJob shape', () => {
         expect(toOtherJob(row())).toMatchObject({ id: 'J-1042', cat: 'Smart contracts', budget: 'under 40', status: ['info', 'Getting offers'], at: 1, grp: 'offers', note: '6 offers so far.', posted: true });
         expect(toOtherJob(row({ status: 'funded', agreedPrice: 32 as never, seller: { displayName: 'patchsmith', ownerId: 'x' } }))).toMatchObject({ budget: '32.00', status: ['acc', 'Payment protected'], who: 'patchsmith', grp: 'working' });
+    });
+
+    it('shows Settled once a released job has its completion record, and gives each stage its own node', () => {
+        expect(statusOf({ status: 'released', _count: { completionRecords: 1 } })).toBe('settled');
+        expect(statusOf({ status: 'released', _count: { completionRecords: 0 } })).toBe('released');
+        expect(statusOf({ status: 'refunded', _count: { completionRecords: 0 } })).toBe('refunded');
+        expect([STAGES['funded']!.at, STAGES['delivered']!.at, STAGES['released']!.at, STAGES['settled']!.at]).toEqual([3, 4, 6, 7]);
     });
 
     it('filters by group', async () => {
@@ -64,8 +74,9 @@ describe('JobsService', () => {
         repo.getOwnedJob.mockResolvedValue(row({ status: 'draft' }));
         repo.publishJob.mockResolvedValue(1);
         await expect(service.publishJob('Bearer t', { id: 'J-1042' })).resolves.toEqual({
-            message: 'Job Successfully Published', id: JOB, ref: 'J-1042', posted: true, onchainId: '1790000005', postTx: 'mock-post_job-5', postError: null,
+            message: 'Job Successfully Published', id: JOB, ref: 'J-1042', posted: true, onchainId: '1790000005', postTx: 'mock-post_job-5', postError: null, bidders: 1,
         });
+        expect(agents.dispatchBidders.mock.calls[0]).toEqual([JOB]);
         const [role, signer, method, args] = chain.callAs.mock.calls[0]!;
         expect([role, signer, method]).toEqual(['transaction_agent', 'agents.lumen.testnet', 'post_job']);
         expect(args).toMatchObject({ category: 'rust', budget_hint: '40000000', spec_hash: 'ab'.repeat(32) });
@@ -98,6 +109,13 @@ describe('JobsService', () => {
             message: 'Job Successfully Published', posted: false, onchainId: null, postError: 'No signing key for agents.lumen.testnet',
         });
         expect(repo.setOnchainJob.mock.calls).toHaveLength(0);
+    });
+
+    it('still publishes when no bidding agent could be reached', async () => {
+        repo.getOwnedJob.mockResolvedValue(row({ status: 'draft' }));
+        repo.publishJob.mockResolvedValue(1);
+        agents.dispatchBidders.mockResolvedValue([]);
+        await expect(service.publishJob('Bearer t', { id: 'J-1042' })).resolves.toMatchObject({ message: 'Job Successfully Published', bidders: 0 });
     });
 
     it('turns the public budget into a budget hint', () => {

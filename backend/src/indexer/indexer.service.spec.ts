@@ -2,7 +2,7 @@ jest.mock('../prisma', () => ({ prisma: {} }));
 
 import { bondReturnedFor, IndexerRepository } from './indexer.repository';
 import { Prisma } from '../generated/prisma/client';
-import { acceptOfferRefusal, bidFlagsRefusal, bidRefOf, bondNeeded, disputeRefusal, placeBidRefusal, postJobRefusal, ESCALATION_WINDOW_MS, fundingRefusal, IndexerService, jobRefOf, MOCK_START_BALANCE, rateRefusal, settlementOf, stakeRefusal } from './indexer.service';
+import { acceptOfferRefusal, refundRefusal, bidFlagsRefusal, bidRefOf, bondNeeded, disputeRefusal, placeBidRefusal, postJobRefusal, ESCALATION_WINDOW_MS, fundingRefusal, IndexerService, jobRefOf, MOCK_START_BALANCE, rateRefusal, settlementOf, stakeRefusal } from './indexer.service';
 
 const JOB = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
 const D = (n: number) => new Prisma.Decimal(n);
@@ -12,6 +12,11 @@ const ctx = (over: Record<string, unknown> = {}, buyer: Record<string, unknown> 
     seller: { id: 'seller-1', nearAccountId: 'patchsmith.testnet' },
     acceptedBid: { fraudScore: 6, priceCheck: 'cleared', ownerApprovedRisk: false },
     ...over,
+}) as never;
+const DAY = 86_400_000;
+const refundCtx = (over: Record<string, unknown> = {}) => ({
+    id: JOB, status: 'funded', buyerAccount: 'lumen.testnet', milestoneStatus: 'funded', fundedAt: new Date('2026-11-01T00:00:00Z'), deliveryDays: 2,
+    lastAttempt: 3, lastDeliveryStatus: 'rejected', extraAttempts: 0, ...over,
 }) as never;
 const mandate = (over: object = {}) => ({ perJobCap: D(50), dailyCap: D(120), newSellerCap: D(25), allowedCategories: ['rust', 'fe', 'tests'], strictSellers: false, paused: false, ...over });
 
@@ -26,7 +31,7 @@ describe('IndexerService (mock)', () => {
             refundJob: jest.fn().mockResolvedValue({ jobId: JOB, amount: 32 }), releaseJob: jest.fn().mockResolvedValue({ jobId: JOB }),
             getFundingContext: jest.fn().mockResolvedValue(ctx()), getBalance: jest.fn().mockResolvedValue(null), getSettledJobs: jest.fn().mockResolvedValue(0),
             findOwner: jest.fn().mockResolvedValue({ id: 'buyer', nearAccountId: 'lumen.testnet' }), deposit: jest.fn(), withdraw: jest.fn().mockResolvedValue(1),
-            setMandate: jest.fn(), setPaused: jest.fn(),
+            setMandate: jest.fn(), setPaused: jest.fn(), getRefundContext: jest.fn().mockResolvedValue(refundCtx()),
         } as unknown as jest.Mocked<IndexerRepository>;
         service = new IndexerService(repo);
     });
@@ -48,10 +53,39 @@ describe('IndexerService (mock)', () => {
         expect(repo.fundJob.mock.calls[0]).toEqual([{ ref: 'J-1042' }, 'mock-fund_job-9', MOCK_START_BALANCE]);
     });
 
-    it('refunds on refund_milestone and refund_expired', async () => {
+    it('refunds on refund_milestone and marks a refund_expired job expired', async () => {
+        service.now = () => new Date('2026-12-01T00:00:00Z').getTime();
         await service.onMockCall({ signer: 'agents.lumen.testnet', method: 'refund_milestone', args: { job_id: '7' }, txHash: 'mock-r-1' });
         await service.onMockCall({ signer: 'anyone.testnet', method: 'refund_expired', args: { job_id: '7' }, txHash: 'mock-r-2' });
-        expect(repo.refundJob.mock.calls).toEqual([[{ onchainId: 7n }, 'mock-r-1'], [{ onchainId: 7n }, 'mock-r-2']]);
+        expect(repo.refundJob.mock.calls).toEqual([[{ onchainId: 7n }, 'mock-r-1', 'refunded'], [{ onchainId: 7n }, 'mock-r-2', 'expired']]);
+    });
+
+    it('refuses refund_expired before the deadline and refund_milestone while attempts are left', async () => {
+        service.now = () => new Date('2026-11-02T00:00:00Z').getTime();
+        await expect(service.onMockCall({ signer: 'anyone.testnet', method: 'refund_expired', args: { job_id: '7' }, txHash: 'mock-r-3' })).rejects.toThrow('Deadline has not passed');
+        repo.getRefundContext.mockResolvedValue(refundCtx({ lastAttempt: 2 }));
+        await expect(service.onMockCall({ signer: 'lumen.testnet', method: 'refund_milestone', args: { job_id: '7' }, txHash: 'mock-r-4' })).rejects.toThrow('Refund is allowed after the last attempt fails');
+        expect(repo.refundJob.mock.calls).toHaveLength(0);
+    });
+
+    it('applies the contract rules for refunds and extra attempts', () => {
+        const at = (days: number) => new Date('2026-11-01T00:00:00Z').getTime() + days * DAY;
+        const buyer = { signer: 'agents.lumen.testnet' };
+        expect(refundRefusal({ ...buyer, method: 'refund_expired' }, refundCtx(), at(5))).toBe('Deadline has not passed');
+        expect(refundRefusal({ ...buyer, method: 'refund_expired' }, refundCtx(), at(5.1))).toBeNull();
+        expect(refundRefusal({ ...buyer, method: 'refund_expired' }, refundCtx({ status: 'released' }), at(9))).toBe('Nothing to refund');
+        expect(refundRefusal({ ...buyer, method: 'refund_milestone' }, refundCtx(), at(1))).toBeNull();
+        expect(refundRefusal({ signer: 'patchsmith.testnet', method: 'refund_milestone' }, refundCtx(), at(1))).toBe('Only the buyer can refund');
+        expect(refundRefusal({ signer: 'patchsmith.testnet', method: 'grant_attempt' }, refundCtx(), at(1))).toBe('Only the buyer can grant an attempt');
+        expect(refundRefusal({ ...buyer, method: 'grant_attempt' }, refundCtx({ extraAttempts: 1 }), at(1))).toBe('Refund is allowed after the last attempt fails');
+        expect(refundRefusal({ ...buyer, method: 'grant_attempt' }, refundCtx({ lastDeliveryStatus: 'reviewing' }), at(1))).toBe('Refund is allowed after the last attempt fails');
+        expect(refundRefusal({ ...buyer, method: 'refund_expired' }, null, at(1))).toBe('Job not found');
+    });
+
+    it('records grant_attempt without moving money', async () => {
+        await expect(service.onMockCall({ signer: 'lumen.testnet', method: 'grant_attempt', args: { job_id: '7' }, txHash: 'mock-g-9' })).resolves.toBeNull();
+        expect(repo.recordTx.mock.calls[0]?.[0]).toMatchObject({ method: 'grant_attempt', ok: true });
+        expect(repo.refundJob.mock.calls).toHaveLength(0);
     });
 
     it('only records calls that move no money', async () => {

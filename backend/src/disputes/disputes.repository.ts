@@ -90,6 +90,14 @@ export class DisputesRepository {
         return prisma.job.findFirst({ where: { ...twoSided(userId), milestones: { some: { disputes: { some: { id: disputeId } } } } }, select: jobSelect });
     }
 
+    async getRunHoldout(jobId: string) {
+        return prisma.acceptanceSpec.findFirst({
+            where: { jobId, lockedAt: { not: null } },
+            orderBy: { version: 'desc' },
+            select: { holdoutHash: true, holdout: { select: { holdoutHash: true, ciphertext: true } } },
+        });
+    }
+
     async startRecheck(r: NewRecheck) {
         return prisma.$transaction(async (tx) => {
             const run = await tx.reviewRun.create({ data: { deliveryId: r.deliveryId, round: r.round, runId: r.runId }, select: { id: true, round: true } });

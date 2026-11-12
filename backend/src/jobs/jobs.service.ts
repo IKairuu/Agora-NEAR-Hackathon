@@ -1,5 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
+import { AgentsService } from '../agents/agents.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { chainIdOf, ChainService, deadlineIn, usdcUnits } from '../chain/chain.service.js';
 import { PublishJob } from './dto/PublishJob.dto.js';
@@ -21,8 +22,8 @@ export const STAGES: Record<string, StageInfo> = {
     open: { stage: 'Offers', at: 1, grp: 'offers', status: ['info', 'Getting offers'] },
     negotiating: { stage: 'Offers', at: 1, grp: 'offers', status: ['info', 'Negotiating'] },
     agreed: { stage: 'Agreed', at: 2, grp: 'waiting', status: ['', 'Waiting on seller'] },
-    funded: { stage: 'Protected', at: 4, grp: 'working', status: ['acc', 'Payment protected'] },
-    in_progress: { stage: 'Protected', at: 4, grp: 'working', status: ['acc', 'Payment protected'] },
+    funded: { stage: 'Protected', at: 3, grp: 'working', status: ['acc', 'Payment protected'] },
+    in_progress: { stage: 'Protected', at: 3, grp: 'working', status: ['acc', 'Payment protected'] },
     delivered: { stage: 'Delivered', at: 4, grp: 'working', status: ['hold', 'Reviewers voting'] },
     reviewed: { stage: 'Reviewed', at: 5, grp: 'working', status: ['hold', 'Reviewed'] },
     released: { stage: 'Released', at: 6, grp: 'done', status: ['ok', 'Paid'] },
@@ -48,6 +49,9 @@ export interface PostResult {
 
 const stageOf = (status: string): StageInfo => STAGES[status] ?? STAGES['draft']!;
 
+export const statusOf = (row: { status: string; _count: { completionRecords: number } }): string =>
+    row.status === 'released' && row._count.completionRecords > 0 ? 'settled' : row.status;
+
 export const ago = (date: Date | null, now = new Date()): string => {
     if (!date) return '';
     const minutes = Math.max(0, Math.round((now.getTime() - date.getTime()) / 60000));
@@ -72,7 +76,7 @@ const noteOf = (row: JobRow): string | undefined => {
 };
 
 export const toOtherJob = (row: JobRow) => {
-    const info = stageOf(row.status);
+    const info = stageOf(statusOf(row));
     return {
         id: row.ref,
         title: row.title,
@@ -89,7 +93,7 @@ export const toOtherJob = (row: JobRow) => {
 };
 
 export const toJob = (row: JobRow) => {
-    const info = stageOf(row.status);
+    const info = stageOf(statusOf(row));
     const spec = row.acceptanceSpecs[0];
     return {
         id: row.ref,
@@ -137,6 +141,7 @@ export class JobsService {
         private readonly jobsRepository: JobsRepository,
         private readonly authService: AuthService,
         private readonly chainService: ChainService,
+        private readonly agentsService: AgentsService,
     ) {}
 
     async getJobs(token: string, grp?: string) {
@@ -162,7 +167,8 @@ export class JobsService {
         const count = await this.jobsRepository.publishJob(authId, row.id);
         if (count === 0) throw new BadRequestException('This job is already past the offers stage');
         const chain = await this.postJob(authId, row.id);
-        return { message: 'Job Successfully Published', id: row.id, ref: row.ref, ...chain };
+        const bidders = await this.agentsService.dispatchBidders(row.id);
+        return { message: 'Job Successfully Published', id: row.id, ref: row.ref, ...chain, bidders: bidders.filter((b) => b.status === 'sent').length };
     }
 
     private async postJob(authId: string, id: string): Promise<PostResult> {

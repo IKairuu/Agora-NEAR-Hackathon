@@ -2,10 +2,12 @@ import { BadRequestException, ConflictException, Injectable, NotFoundException }
 import { createHash } from 'node:crypto';
 import { isUUID } from 'class-validator';
 import { AuthService } from '../auth/auth.service.js';
+import { sealHoldout } from '../holdout.js';
 import { CreateSpec } from './dto/CreateSpec.dto.js';
 import { CreateSpecBulk } from './dto/CreateSpecBulk.dto.js';
 import { EditSpec } from './dto/EditSpec.dto.js';
 import { LockSpec } from './dto/LockSpec.dto.js';
+import { SealSpecHoldout } from './dto/SealSpecHoldout.dto.js';
 import { JobKey, SpecRow, SpecsRepository } from './specs.repository.js';
 
 const EDITABLE_JOB_STATUSES = ['draft', 'open', 'negotiating'];
@@ -50,7 +52,8 @@ export const toSpecView = (row: SpecRow) => ({
     allowedPaths: row.allowedPaths,
     testFiles: testFilesOf(row),
     specHash: row.specHash,
-    holdoutHash: row.holdoutHash,
+    holdoutHash: row.holdoutHash ?? row.holdout?.holdoutHash ?? null,
+    hasHoldout: row.holdout !== null,
     locked: row.lockedAt !== null,
     lockedAt: row.lockedAt ? row.lockedAt.toISOString() : null,
     rows: row.checks.map((c): [string, string, string] => [c.name, c.howVerified, c.weight === 'required' ? 'Required' : 'Advisory']),
@@ -124,6 +127,20 @@ export class SpecsService {
         const count = await this.specsRepository.lockSpec(authId, body.id, specHash, holdoutHash);
         if (count === 0) throw new ConflictException('This spec was locked by another request');
         return { message: 'Spec Successfully Locked', id: body.id, specHash, holdoutHash };
+    }
+
+    async sealHoldout(token: string, body: SealSpecHoldout) {
+        const authId = await this.authId(token);
+        const row = await this.ownedSpec(authId, body.spec_id);
+        if (row.lockedAt) throw new BadRequestException('This spec is locked and its hidden tests can no longer change');
+        const paths = body.test_files.map((f) => f.path);
+        if (new Set(paths).size !== paths.length) throw new BadRequestException('Hidden test file paths must be unique');
+        const locked = new Set(testFilesOf(row).map((f) => f.path));
+        if (paths.some((p) => locked.has(p))) throw new BadRequestException('A hidden test file cannot use the path of a locked test file');
+        const sealed = sealHoldout({ command: body.test_command ?? null, files: body.test_files.map((f) => ({ path: f.path, content: f.content })) });
+        const count = await this.specsRepository.sealHoldout(authId, body.spec_id, sealed);
+        if (count === 0) throw new ConflictException('This spec was locked before the hidden tests were sealed');
+        return { message: 'Hidden Tests Successfully Sealed', id: body.spec_id, holdoutHash: sealed.holdoutHash, files: paths.length };
     }
 
     async deleteSpec(token: string, id: string) {

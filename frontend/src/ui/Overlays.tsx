@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
-import { DONE_JOBS, gigBy, ME, OTHER_JOBS, ROLES, usd, VIA } from '../data/sample';
+import { DONE_JOBS, gigBy, ME, OTHER_JOBS, ROLES, usd, VIA } from '../data/data';
 import { act, orderAct, TOUR } from '../store/actions';
 import { closeModal, free, hPrice, setState, useApp, useToasts } from '../store/store';
 import { authConfigured } from '../lib/supabase';
@@ -199,15 +199,26 @@ function Unpause() {
   );
 }
 
+function Discard({ job }: { job: string }) {
+  return (
+    <Frame>
+      <h2>Discard {job}?</h2>
+      <p className="muted">The request moves to Completed as cancelled. Sellers can no longer offer on it, and this can't be undone.</p>
+      <div className="acts"><Cancel label="Keep it" /><button className="btn danger" onClick={act.discardask2}><Icon name="x" />Discard request</button></div>
+    </Frame>
+  );
+}
+
 function RequestService() {
   const { svc } = useApp();
-  const g = gigBy(svc)!;
-  const [what, setWhat] = useState(g.prompt);
+  const g = gigBy(svc);
+  const [what, setWhat] = useState(g?.prompt ?? '');
+  if (!g) return null;
   return (
     <Frame>
       <h2>Request this service</h2>
       <p className="muted">{g.seller} gets this first. Your agent writes the tests from it, and escrow funds only if they accept.</p>
-      <div className="field"><label htmlFor="rq-repo">Repository</label><input className="input" id="rq-repo" placeholder="github.com/you/repo" defaultValue="github.com/lumen-labs/payroll-vault" /></div>
+      <div className="field"><label htmlFor="rq-repo">Repository</label><input className="input" id="rq-repo" placeholder="github.com/you/repo" /></div>
       <div className="field"><label htmlFor="rq-what">What's broken or needed</label><textarea className="input" id="rq-what" placeholder="What is broken, and what done looks like" value={what} onChange={(e) => setWhat(e.target.value)} /></div>
       <div className="grid g-2">
         <div className="field"><label htmlFor="rq-b">Budget</label><input className="input num" id="rq-b" placeholder="e.g. 25.00 USDC" defaultValue={`${g.from}.00 USDC`} /></div>
@@ -277,6 +288,7 @@ export function ModalHost() {
     case 'reqsvc': return <RequestService />;
     case 'ojob': return <OtherJob id={modal.props?.id ?? ''} />;
     case 'offer': return <Offer id={modal.props?.id ?? ''} />;
+    case 'discard': return <Discard job={modal.props?.job ?? ''} />;
     default: return null;
   }
 }

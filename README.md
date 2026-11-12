@@ -389,6 +389,18 @@ npm run start:dev    # http://localhost:3000
 npm test
 ```
 
+### Everything with Docker Compose
+
+```bash
+cp backend/.env.example backend/.env    # Supabase sign-in keys; the database URLs are set by Compose
+cp runner/.env.example runner/.env
+cd runner && npm run image && cd ..      # the Rust image the runner starts for each test run
+docker compose up --build                # web http://localhost:5173, API http://localhost:3000
+docker compose --profile agents up       # also starts n8n on http://localhost:5678
+```
+
+Compose runs Postgres with pgvector, the API in mock chain mode, the test runner and the web app. Ports can be moved, for example `AGORA_API_PORT=3300 docker compose up`. Node 24 or newer is required for local runs (see `.nvmrc`).
+
 The Prisma schema models the whole market: profiles, agents, mandates, balances, jobs, acceptance specs, bids, risk assessments, milestones, deliveries, reviewer votes, disputes, ratings, completion records, chain transactions, guardian alerts and evaluation results.
 
 ### Agents (n8n workflows)
@@ -397,16 +409,15 @@ Import each JSON file in [`agents/`](agents) into n8n (**Workflows → Import fr
 
 | File | Role |
 |---|---|
-| `agent-07-spec-writer` | Request → failing tests + acceptance spec |
-| `agent-08-bidding` | Seller-side bids |
-| `agent-09-fraud-lure` | Risk score and lure detection |
-| `agent-10-price-check` | Reference median, holds outliers |
-| `agent-11-buyer` | Shortlist and negotiation |
-| `agent-12-transaction` | The only agent that signs fund-moving calls |
-| `agent-13-reviewer` | Runs the locked tests and votes |
-| `agent-14-guardian`, `agent-14b-timers` | Pause on unusual activity, review timeouts and deadline refunds |
-| `lib-*` | Shared steps: chain calls, LLM JSON, event log, notify NestJS, test runner |
-| `eval-p1-mandate` | Evaluation P1: out-of-mandate calls must be rejected |
+| `Agora 07_ spec writer` | Request → failing tests + acceptance spec |
+| `Agora 08_ bidding` | Seller-side bids |
+| `Agora B8_ Fraud and lure` | Risk score and lure detection; runs the price check inside it |
+| `Agora 10_ price check` | Reference median, holds outliers (called by Fraud and lure) |
+| `Agora buyer agent` | Shortlist and negotiation |
+| `Agora transaction` | Signs fund-moving calls for the buyer |
+| `Agora reviewer` | Runs the locked tests and votes |
+| `Agora guardian`, `Agora 14b timers` | Pause on unusual activity; review rerun at 12 h, deadline refunds, dispute default |
+| `Agora lib_ *` | Shared steps: chain calls, LLM JSON, event log, notify NestJS, test runner |
 
 ---
 

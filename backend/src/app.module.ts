@@ -17,6 +17,7 @@ import { MessagesModule } from './messages/messages.module.js';
 import { NotificationsModule } from './notifications/notifications.module.js';
 import { SpecsModule } from './specs/specs.module.js';
 import { DeliveriesModule } from './deliveries/deliveries.module.js';
+import { PaymentsModule } from './payments/payments.module.js';
 import { ReviewsModule } from './reviews/reviews.module.js';
 import { DisputesModule } from './disputes/disputes.module.js';
 import { SellersModule } from './sellers/sellers.module.js';
@@ -25,6 +26,7 @@ import { SavedModule } from './saved/saved.module.js';
 import { SellerProfileModule } from './seller-profile/seller-profile.module.js';
 import { OrdersModule } from './orders/orders.module.js';
 import { InternalModule } from './internal/internal.module.js';
+import { DemoModule } from './demo/demo.module.js';
 
 @Module({
     imports: [
@@ -44,6 +46,7 @@ import { InternalModule } from './internal/internal.module.js';
         NotificationsModule,
         SpecsModule,
         DeliveriesModule,
+        PaymentsModule,
         ReviewsModule,
         DisputesModule,
         SellersModule,
@@ -52,6 +55,7 @@ import { InternalModule } from './internal/internal.module.js';
         SellerProfileModule,
         OrdersModule,
         InternalModule,
+        DemoModule,
     ],
     controllers: [AppController],
     providers: [AppService],

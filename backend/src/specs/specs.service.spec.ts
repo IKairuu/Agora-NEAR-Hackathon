@@ -1,11 +1,12 @@
-import { BadRequestException, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { generateKeyPairSync } from 'node:crypto';
 
 jest.mock('../prisma', () => ({ prisma: {} }));
 
 import { AuthService } from '../auth/auth.service';
 import { CreateSpec } from './dto/CreateSpec.dto';
 import { SpecRow, SpecsRepository } from './specs.repository';
-import { specHashOf, SpecsService } from './specs.service';
+import { specHashOf, SpecsService, toSpecView } from './specs.service';
 
 const USER = '0f9b6c1e-4a2d-4c8e-9b1a-7d3e5f6a8b90';
 const JOB_ID = '5d2a7c41-3b6e-4f80-a9d1-2c4e6f8a0b13';
@@ -60,6 +61,7 @@ describe('SpecsService', () => {
             editSpec: jest.fn(),
             lockSpec: jest.fn(),
             deleteSpec: jest.fn(),
+            sealHoldout: jest.fn().mockResolvedValue(1),
         } as unknown as jest.Mocked<SpecsRepository>;
         const auth = { verifySessionToken: jest.fn().mockResolvedValue(USER) } as unknown as AuthService;
         service = new SpecsService(repo, auth);
@@ -164,6 +166,72 @@ describe('SpecsService', () => {
         it('returns 404 when the job has no spec', async () => {
             repo.getSpecs.mockResolvedValue(null);
             await expect(service.getSpecs('Bearer t', JOB_ID)).rejects.toBeInstanceOf(NotFoundException);
+        });
+    });
+
+    describe('sealHoldout', () => {
+        const env = { ...process.env };
+        const SECRET = 'fn hidden_secret_overflow() { assert!(true); }';
+        const holdoutBody = (over: object = {}) => ({ spec_id: SPEC_ID, test_files: [{ path: 'tests/hidden_overflow.rs', content: SECRET }], ...over }) as never;
+
+        beforeEach(() => {
+            const pair = generateKeyPairSync('x25519');
+            process.env['AGORA_HOLDOUT_PUBLIC_KEY'] = pair.publicKey.export({ format: 'der', type: 'spki' }).toString('base64');
+        });
+
+        afterEach(() => { process.env = { ...env }; });
+
+        it('stores only the ciphertext and the hash, and returns no plaintext', async () => {
+            repo.getOwnedSpec.mockResolvedValue(row());
+            const res = await service.sealHoldout('Bearer t', holdoutBody());
+            expect(res).toMatchObject({ message: 'Hidden Tests Successfully Sealed', id: SPEC_ID, files: 1 });
+            expect(res.holdoutHash).toMatch(/^[0-9a-f]{64}$/);
+            const [user, spec, sealed] = repo.sealHoldout.mock.calls[0]!;
+            expect([user, spec]).toEqual([USER, SPEC_ID]);
+            expect(Object.keys(sealed).sort()).toEqual(['ciphertext', 'holdoutHash', 'keyId']);
+            expect(sealed.holdoutHash).toBe(res.holdoutHash);
+            const stored = JSON.stringify({ ...sealed, ciphertext: sealed.ciphertext.toString('utf8') });
+            expect(stored).not.toContain('hidden_secret_overflow');
+            expect(stored).not.toContain('tests/hidden_overflow.rs');
+            expect(JSON.stringify(res)).not.toContain('hidden');
+        });
+
+        it('only lets the buyer seal an unlocked spec', async () => {
+            repo.getOwnedSpec.mockResolvedValue(null);
+            await expect(service.sealHoldout('Bearer t', holdoutBody())).rejects.toBeInstanceOf(NotFoundException);
+            expect(repo.getOwnedSpec.mock.calls[0]).toEqual([USER, SPEC_ID]);
+            repo.getOwnedSpec.mockResolvedValue(row({ lockedAt: new Date() }));
+            await expect(service.sealHoldout('Bearer t', holdoutBody())).rejects.toBeInstanceOf(BadRequestException);
+            repo.getOwnedSpec.mockResolvedValue(row());
+            repo.sealHoldout.mockResolvedValue(0);
+            await expect(service.sealHoldout('Bearer t', holdoutBody())).rejects.toBeInstanceOf(ConflictException);
+        });
+
+        it('refuses duplicate paths and paths of locked test files', async () => {
+            repo.getOwnedSpec.mockResolvedValue(row());
+            await expect(service.sealHoldout('Bearer t', holdoutBody({ test_files: [{ path: 'tests/split_rounding.rs', content: 'x' }] }))).rejects.toThrow('locked test file');
+            await expect(service.sealHoldout('Bearer t', holdoutBody({ test_files: [{ path: 'tests/a.rs', content: 'x' }, { path: 'tests/a.rs', content: 'y' }] }))).rejects.toThrow('unique');
+            expect(repo.sealHoldout.mock.calls).toHaveLength(0);
+        });
+
+        it('fails clearly when the server has no runner public key', async () => {
+            delete process.env['AGORA_HOLDOUT_PUBLIC_KEY'];
+            repo.getOwnedSpec.mockResolvedValue(row());
+            await expect(service.sealHoldout('Bearer t', holdoutBody())).rejects.toThrow('Hidden tests are not configured on the server');
+        });
+
+        it('shows the seller only that a holdout exists and its hash', () => {
+            const hash = 'cd'.repeat(32);
+            const view = toSpecView(row({ holdout: { holdoutHash: hash } }));
+            expect(view).toMatchObject({ hasHoldout: true, holdoutHash: hash });
+            expect(Object.keys(view)).not.toContain('holdout');
+            expect(toSpecView(row())).toMatchObject({ hasHoldout: false, holdoutHash: null });
+        });
+
+        it('keeps the spec hash of a spec without a holdout unchanged and binds the holdout hash when present', () => {
+            const plain = specHashOf(row());
+            expect(specHashOf(row({ holdout: null }))).toBe(plain);
+            expect(specHashOf(row({ holdout: { holdoutHash: 'cd'.repeat(32) } }))).not.toBe(plain);
         });
     });
 });

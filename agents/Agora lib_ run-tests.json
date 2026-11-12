@@ -1,0 +1,95 @@
+{
+  "name": "Agora lib: run-tests",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $env.AGORA_RUNNER_URL }}/run",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ repoUrl: $json.repoUrl, commit: $json.commit, baseCommit: $json.baseCommit, testCommand: $json.testCommand, buildCommand: $json.buildCommand, testFiles: $json.testFiles || [] }) }}",
+        "options": {
+          "timeout": 60000
+        }
+      },
+      "id": "8bbd4c42-4a2e-4965-94b5-fdf34022452a",
+      "name": "POST runner /run",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "RYzGPTUUnAaKFSoO",
+          "name": "AGORA runner key"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "workflowInputs": {
+          "values": [
+            {
+              "name": "repoUrl"
+            },
+            {
+              "name": "commit"
+            },
+            {
+              "name": "baseCommit"
+            },
+            {
+              "name": "testCommand"
+            },
+            {
+              "name": "buildCommand"
+            },
+            {
+              "name": "testFiles",
+              "type": "array"
+            }
+          ]
+        }
+      },
+      "id": "7d892a2b-4968-4f49-b5d1-a361bcc11bf6",
+      "name": "Start",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        32,
+        0
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Start": {
+      "main": [
+        [
+          {
+            "node": "POST runner /run",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate"
+  },
+  "versionId": "86557b3c-6c75-44ce-9379-2d46c2c892dd",
+  "meta": {
+    "instanceId": "5bc1f41ff2889bec057c4b16904248e981cf8fde880ea6ae71e5a4721ead5080"
+  },
+  "nodeGroups": [],
+  "id": "zLG2zuDEJ0kE82Ni",
+  "tags": []
+}

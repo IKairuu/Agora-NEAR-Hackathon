@@ -1,17 +1,38 @@
-import { ARRIVE, BIDS, DONE_JOBS, GIGS, HELD, JOB, ME, OTHER_JOBS, REVIEWERS, SELLERS_DIR, SPEC, gigBy, liveOpenRef, setLiveOpenJobs, type Bid, type Gig, type OpenJob, type Order, type OtherJob, type SellerDir } from '../data/sample';
+import { ARRIVE, BIDS, DAO_COUNCIL, DONE_JOBS, NEG_LOG, SETTLED, GIGS, HELD, JOB, JOB_LISTING, KICKOFF, ME, OPEN_JOBS, OTHER_JOBS, REPLIES, REVIEWERS, SELLERS_DIR, SPEC, T_MSGS, T_TIME, THREADS, gigBy, liveOpenRef, setLiveOpenJobs, type Bid, type DemoData, type Gig, type OpenJob, type Order, type OtherJob, type SellerDir } from '../data/data';
 import type { ChatMsg } from '../store/store';
-import { getState, setState, toast, type LiveNote } from '../store/store';
+import { getState, setState, toast, type FollowUp, type LiveNote } from '../store/store';
 import type { Thread } from '../store/actions';
 import { api, ApiError } from './api';
 
 /*
- * Live mode: a real account is signed in and the API answers.
- * The screens read the sample objects directly, so live data is copied into those same objects
- * and restored from the snapshot below when the user signs out or starts the demo tour.
+ * All data comes from the backend. The screens read the shared objects in data/data.ts directly:
+ * - at startup, loadAppData fills the market (services, sellers, open jobs) from its public endpoints,
+ *   and the "Play demo" story from GET /api/demo/v1;
+ * - live mode (a real account is signed in and the API answers) copies the account's data into the
+ *   same objects, and the demo story is put back when the user signs out or starts the demo tour.
  */
 
 const clone = <T,>(v: T): T => JSON.parse(JSON.stringify(v)) as T;
-const SNAP = { ME: clone(ME), JOB: clone(JOB), SPEC: clone(SPEC), OTHER: clone(OTHER_JOBS), DONE: clone(DONE_JOBS), BIDS: clone(BIDS), HELD: clone(HELD), ARRIVE: clone(ARRIVE), REVIEWERS: clone(REVIEWERS), GIGS: clone(GIGS), SELLERS: clone(SELLERS_DIR) };
+/** The demo story as the backend sent it; null until loaded or when the backend could not be reached. */
+let DEMO: DemoData | null = null;
+export const demoLoaded = () => DEMO !== null;
+
+/*
+ * Demo and live data never mix:
+ * - every live session gets a new number; leaving it (sign-out, the demo tour) moves the number on,
+ *   so a request still in flight from the old session is dropped instead of writing into the demo;
+ * - going live empties every demo-only container, and leaving live puts the demo story back.
+ */
+let session = 0;
+class StaleSession extends Error {}
+const stale = (s: number) => s !== session;
+/** An API call made for the live session: rejects if that session ended before the answer came back. */
+async function liveApi<T>(path: string, opts: Parameters<typeof api>[1] = {}): Promise<T> {
+  const s = session;
+  const res = await api<T>(path, opts);
+  if (stale(s)) throw new StaleSession();
+  return res;
+}
 let likedBefore: string[] | null = null;
 const replace = <T,>(target: T[], items: T[]) => { target.splice(0, target.length, ...items); };
 
@@ -46,27 +67,85 @@ let timer: ReturnType<typeof setInterval> | null = null;
 
 /** Called after a real sign-in. Stays in demo mode if the API cannot be reached. */
 export async function goLive(): Promise<void> {
+  const s = ++session;
   let me: MeView;
   try { me = await api<MeView>('/me/v1', { quiet: true }); } catch (e) {
     if (e instanceof ApiError && e.status !== 0) toast(e.message, 'block');
     return;
   }
-  Object.assign(ME, { name: me.name, acct: me.acct, agents: me.agents, initials: me.initials, email: me.email });
+  if (stale(s)) return;
   if (likedBefore === null) likedBefore = getState().liked;
-  replace(OTHER_JOBS, []); replace(DONE_JOBS, []); replace(BIDS, []); replace(HELD as unknown as HeldView[], []); replace(ARRIVE, []);
+  clearDemo();
+  Object.assign(ME, { name: me.name, acct: me.acct, agents: me.agents, initials: me.initials, email: me.email });
   setState((s) => ({ live: true, seller: me.seller, role: s.role ?? me.role, mode: me.mode, orders: [], newJobs: [], extra: [], tLog: {}, chatLog: {} }));
   await Promise.allSettled([loadMarket(), loadSaved()]);
   await refreshAll(true);
   if (!timer) timer = setInterval(() => { void refreshAll(false); }, 8000);
 }
 
-/** Leaves live mode and puts the sample data back. */
+/** Empties every container the demo story fills, so a real account sees only its own data. */
+function clearDemo(): void {
+  Object.assign(ME, { name: '', acct: '', agents: '', initials: '', email: '' });
+  Object.assign(JOB, { id: '', title: '', repo: '', base: '', cat: '', plain: '', posted: '', specHash: '' });
+  Object.assign(JOB_LISTING, { budget: '', check: '', blurb: '', buyerRating: '' });
+  Object.assign(SETTLED, { record: '', title: '', reviewer: '', review: '' });
+  for (const list of [SPEC, OTHER_JOBS, DONE_JOBS, BIDS, HELD, ARRIVE, REVIEWERS, NEG_LOG, DAO_COUNCIL, THREADS] as unknown[][]) replace(list, []);
+  for (const rec of [REPLIES, KICKOFF, T_MSGS, T_TIME] as Record<string, unknown>[]) for (const k of Object.keys(rec)) delete rec[k];
+}
+
+/** Puts the demo story into the shared objects, or empties them when there is none. */
+function restoreDemo(): void {
+  clearDemo();
+  const d = DEMO ? clone(DEMO) : null;
+  if (d) {
+    Object.assign(JOB_LISTING, d.jobListing); Object.assign(SETTLED, d.settled);
+    Object.assign(REPLIES, d.replies); Object.assign(KICKOFF, d.kickoff, { '': d.kickoffDefault });
+    Object.assign(T_MSGS, d.threadMessages); Object.assign(T_TIME, d.threadTimes);
+    replace(THREADS, d.threads); replace(NEG_LOG, d.negotiationLog); replace(DAO_COUNCIL, d.daoCouncil);
+  }
+  Object.assign(ME, d?.me ?? { name: '', acct: '', agents: '', initials: '', email: '' });
+  Object.assign(JOB, d?.job ?? { id: '', title: '', repo: '', base: '', cat: '', plain: '', posted: '', specHash: '' });
+  replace(SPEC, d?.spec ?? []); replace(OTHER_JOBS, d?.otherJobs ?? []); replace(DONE_JOBS, d?.doneJobs ?? []);
+  replace(BIDS, d?.bids ?? []); replace(HELD, d?.held ?? []); replace(ARRIVE, d?.arrive ?? []); replace(REVIEWERS, d?.reviewers ?? []);
+  setState({ orders: d?.orders ?? [] });
+}
+
+/**
+ * Called once at startup, signed in or not: loads the public market and the demo story.
+ * When the backend cannot be reached everything stays empty and the screens show their empty states.
+ */
+let appData: Promise<void> | null = null;
+/** Resolves when the startup load has finished; starts it if it has not run yet. */
+export const appDataLoaded = (): Promise<void> => appData ?? loadAppData();
+export function loadAppData(): Promise<void> {
+  appData ??= loadAll();
+  return appData;
+}
+async function loadAll(): Promise<void> {
+  const [demo] = await Promise.all([
+    api<DemoData>('/demo/v1', { quiet: true }).catch(() => null),
+    loadMarket(),
+    loadPublicOpenJobs(),
+  ]);
+  if (demo) {
+    DEMO = demo;
+    /* a real sign-in may already have filled the shared objects with the account's own data */
+    if (!isLive()) restoreDemo();
+  }
+  setState({ dataReady: true });
+}
+
+/** Open jobs any visitor can see. Signed in, loadOpenJobs replaces them with the account's view. */
+async function loadPublicOpenJobs(): Promise<void> {
+  const rows = await api<OpenJobView[]>('/open-jobs/v1', { quiet: true }).catch(() => null);
+  replace(OPEN_JOBS, (rows ?? []).map((j): OpenJob => [j.title, j.cats, j.budget, j.check, j.bids, j.buyer, true, j.blurb, j.buyerRating, j.minutesAgo]));
+}
+
+/** Leaves live mode and puts the demo story back. The market stays: it is the same public data. */
 export function leaveLive(): void {
+  session++;
   if (timer) { clearInterval(timer); timer = null; }
-  Object.assign(ME, SNAP.ME); Object.assign(JOB, SNAP.JOB);
-  replace(SPEC, clone(SNAP.SPEC)); replace(OTHER_JOBS, clone(SNAP.OTHER)); replace(DONE_JOBS, clone(SNAP.DONE));
-  replace(BIDS, clone(SNAP.BIDS)); replace(HELD as unknown as unknown[], clone(SNAP.HELD)); replace(ARRIVE, clone(SNAP.ARRIVE)); replace(REVIEWERS, clone(SNAP.REVIEWERS));
-  replace(GIGS, clone(SNAP.GIGS)); replace(SELLERS_DIR, clone(SNAP.SELLERS));
+  restoreDemo();
   setLiveOpenJobs(null);
   if (likedBefore !== null) { setState({ liked: likedBefore }); likedBefore = null; }
   setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));
@@ -81,7 +160,7 @@ async function refreshAll(first: boolean): Promise<void> {
 }
 
 async function loadJobs(adopt: boolean): Promise<void> {
-  const jobs = await api<(OtherJob & { grp: string })[]>('/jobs/v1', { quiet: true });
+  const jobs = await liveApi<(OtherJob & { grp: string })[]>('/jobs/v1', { quiet: true });
   if (adopt && !getState().liveJob) {
     const current = jobs.find((j) => ['offers', 'waiting', 'working'].includes(j.grp));
     if (current) setState({ liveJob: { id: '', ref: current.id } });
@@ -94,20 +173,22 @@ async function loadJobs(adopt: boolean): Promise<void> {
 async function loadCurrentJob(): Promise<void> {
   const ref = getState().liveJob?.ref;
   if (!ref) return;
-  const job = await api<JobView>(`/jobs/v1/${ref}`, { quiet: true }).catch(() => null);
+  const sid = session;
+  const job = await liveApi<JobView>(`/jobs/v1/${ref}`, { quiet: true }).catch(() => null);
   if (!job) return;
   Object.assign(JOB, { id: job.id, title: job.title, repo: job.repo || 'No repository attached yet', base: job.base || 'main', cat: job.cat, plain: job.plain, posted: job.posted, specHash: job.specHash ? shortHash(job.specHash) : '' });
-  const spec = await api<SpecView>(`/specs/v1?job=${ref}`, { quiet: true }).catch(() => null);
+  const spec = await liveApi<SpecView>(`/specs/v1?job=${ref}`, { quiet: true }).catch(() => null);
+  if (stale(sid)) return;
   replace(SPEC, spec ? spec.rows : [['Tests are being written', 'The spec writer drafts failing tests from your repository', 'Pending']]);
   const stage = stageNumber(job);
   if (stage >= 2) await loadOffers(ref);
   if (stage >= 5) await loadReviews(ref);
-  const offer = stage >= 2 ? await api<HireOfferView>(`/negotiations/v1/offer?job=${ref}`, { quiet: true }).catch(() => null) : null;
+  const offer = stage >= 2 ? await liveApi<HireOfferView>(`/negotiations/v1/offer?job=${ref}`, { quiet: true }).catch(() => null) : null;
+  if (stale(sid)) return;
   setState((s) => {
     const hired = offer?.bidId ? BIDS.find((b) => (b as OfferView).bidId === offer.bidId)?.key : undefined;
     return {
       liveJob: { id: job.uuid, ref: job.id },
-      asked: true,
       askText: s.askText || job.plain,
       stage: Math.max(stage, offer?.offerSt === 'wait' ? 4 : stage),
       bidsShown: ARRIVE.length,
@@ -123,7 +204,7 @@ interface ReviewPanelView {
 }
 
 async function loadReviews(ref: string): Promise<void> {
-  const res = await api<ReviewPanelView>(`/reviews/v1?job=${ref}`, { quiet: true }).catch(() => null);
+  const res = await liveApi<ReviewPanelView>(`/reviews/v1?job=${ref}`, { quiet: true }).catch(() => null);
   if (!res?.deliveryId) return;
   replace(REVIEWERS, res.reviewers.map((r) => ({ id: r.id, model: r.state === 3 ? `${r.model} · rejected` : r.model, att: r.att })));
   const votes = res.reviewers.map((r) => (r.state === 3 ? 0 : r.state));
@@ -145,7 +226,7 @@ export async function liveBundle(): Promise<void> {
 }
 
 async function loadOffers(ref: string): Promise<void> {
-  const res = await api<OffersView>(`/bids/v1?job=${ref}`, { quiet: true }).catch(() => null);
+  const res = await liveApi<OffersView>(`/bids/v1?job=${ref}`, { quiet: true }).catch(() => null);
   if (!res) return;
   replace(BIDS, res.offers);
   replace(HELD as unknown as HeldView[], res.held);
@@ -154,44 +235,93 @@ async function loadOffers(ref: string): Promise<void> {
 
 async function loadOrders(): Promise<void> {
   if (!getState().seller) return;
-  const orders = await api<LiveOrder[]>('/orders/v1', { quiet: true });
+  const orders = await liveApi<LiveOrder[]>('/orders/v1', { quiet: true });
   setState({ orders });
 }
 
 async function loadNotes(): Promise<void> {
-  const res = await api<{ unread: number; items: LiveNote[] }>('/notifications/v1', { quiet: true });
+  const res = await liveApi<{ unread: number; items: LiveNote[] }>('/notifications/v1', { quiet: true });
   setState({ notes: res });
 }
 
 async function loadOpenJobs(): Promise<void> {
-  const rows = await api<OpenJobView[]>('/open-jobs/v1', { quiet: true });
+  const rows = await liveApi<OpenJobView[]>('/open-jobs/v1', { quiet: true });
   const jobs = rows.map((j): OpenJob => [j.title, j.cats, j.budget, j.check, j.bids, j.buyer, true, j.blurb, j.buyerRating, j.minutesAgo]);
   setLiveOpenJobs({ jobs, refs: rows.map((j) => j.id) });
 }
 
 async function loadThreads(): Promise<void> {
-  const rows = await api<ThreadView[]>('/threads/v1', { quiet: true });
+  const sid = session;
+  const rows = await liveApi<ThreadView[]>('/threads/v1', { quiet: true });
   const out: Thread[] = [];
   for (const t of rows.slice(0, 20)) {
     const msgs = await api<MessageView[]>(`/threads/v1/${t.id}/messages`, { quiet: true }).catch(() => [] as MessageView[]);
     out.push({ k: t.id, mode: t.side, who: t.with, job: t.jobId ?? '', title: t.title, st: ['', t.side === 'buy' ? 'Buying' : 'Selling'], amt: '', last: t.last, time: t.time, msgs: msgs.map((m) => ({ from: m.from, text: m.text })) });
   }
+  if (stale(sid)) return;
   setState({ liveThreads: out });
 }
 
 /* ---------------- live versions of the actions ---------------- */
 
+/** Why a message could not be sent, for the toast. The text stays in the composer either way. */
+const notSent = (e: unknown) => (e instanceof ApiError && e.status !== 0
+  ? `Not sent: ${e.message}. Your text is still in the box.`
+  : 'Could not reach the AGORA server. Your text is still in the box, so try again in a moment.');
+const hhmm = () => { const d = new Date(); return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0'); };
+
+/**
+ * Sends what the user typed in New request. The first message of an empty request creates the job;
+ * every later message in the same thread is about that job and never creates another one.
+ * The composer text is cleared only once the API accepted it.
+ */
+export async function liveSend(text: string): Promise<boolean> {
+  const s = getState();
+  return s.asked && s.liveJob ? liveFollowUp(text) : liveSubmitAsk(text);
+}
+
+/** First message: shows at once, then creates exactly one job and follows it. */
 export async function liveSubmitAsk(text: string): Promise<boolean> {
-  const first = !getState().asked && getState().stage < 2;
-  const res = await api<{ id: string; ref: string }>('/requests/v1', { body: { text } }).catch(() => null);
-  if (!res) return false;
-  if (first) {
-    setState({ liveJob: { id: res.id, ref: res.ref }, asked: true, askText: text });
-    toast(`${res.ref} created. The spec writer is turning it into tests.`);
-  } else {
-    toast(`${res.ref} created as a separate request. It is in Job requests.`);
-  }
+  setState({ asked: true, askText: text, pendingAsk: true, liveJob: null, followUps: [] });
+  let res: { id: string; ref: string };
+  try { res = await api<{ id: string; ref: string }>('/requests/v1', { body: { text }, quiet: true }); }
+  catch (e) { setState({ asked: false, askText: '', pendingAsk: false }); toast(notSent(e), 'block', 6000); return false; }
+  /* show the new job, not the previous one, until its details load */
+  Object.assign(JOB, { id: res.ref, title: text, repo: 'No repository attached yet', base: 'main', cat: '', plain: text, posted: 'just now', specHash: '' });
+  replace(SPEC, [['Tests are being written', 'The spec writer drafts failing tests from your repository', 'Pending']]);
+  setState({ liveJob: { id: res.id, ref: res.ref }, pendingAsk: false, draft: '', stage: 1, offerSt: '', preNeg: false, declined: [], bidsShown: 0 });
+  toast(`${res.ref} created. The spec writer is turning it into tests.`);
   await refreshAll(false);
+  return true;
+}
+
+/**
+ * A later message in the same thread. Before the tests are locked it is a clarification, saved on the
+ * job's request for the spec writer; after that the job can no longer change, and the agent says so.
+ */
+async function liveFollowUp(text: string): Promise<boolean> {
+  const s = getState();
+  const ref = s.liveJob?.ref ?? JOB.id;
+  const id = `f${Date.now()}`;
+  const update = (patch: Partial<FollowUp>) => setState((x) => ({ followUps: x.followUps.map((f) => (f.id === id ? { ...f, ...patch } : f)) }));
+  setState((x) => ({ followUps: [...x.followUps, { id, text, t: hhmm(), sending: true }] }));
+  if (s.stage >= 2) {
+    update({ sending: false, reply: `The tests for ${ref} are locked, so this job can't change any more. To get something else built, start a New request.` });
+    setState({ draft: '' });
+    return true;
+  }
+  const uuid = s.liveJob?.id;
+  try {
+    if (!uuid) throw new ApiError(`${ref} is still being set up`, 409);
+    await api('/requests/v1', { method: 'PATCH', body: { id: uuid, text: `${JOB.plain}\n\n${text}` }, quiet: true });
+  } catch (e) {
+    setState((x) => ({ followUps: x.followUps.filter((f) => f.id !== id) }));
+    toast(notSent(e), 'block', 6000);
+    return false;
+  }
+  JOB.plain = `${JOB.plain}\n\n${text}`;
+  update({ sending: false, reply: `Noted. I added this to ${ref} for the spec writer. The tests can still change until you lock them.`, link: true });
+  setState({ draft: '' });
   return true;
 }
 
@@ -222,6 +352,22 @@ export async function liveKeepWait(): Promise<void> {
   const id = getState().liveJob?.id; if (!id) return;
   const res = await api<{ message: string }>(`/requests/v1/${id}/keep-waiting`, { body: {} }).catch(() => null);
   if (res) toast(`${res.message}.`);
+}
+
+/** Stops following the current request so the New request page starts empty. The request stays in Job requests. */
+export function liveLeaveAsk(): void {
+  setState({ liveJob: null, asked: false, askText: '', stage: 1, offerSt: '', bidsShown: 0, draft: '' });
+  replace(BIDS, []); replace(ARRIVE, []);
+  void refreshAll(false);
+}
+
+/** Cancels the followed request (only before anyone is hired), then starts a new one. */
+export async function liveDiscardAsk(): Promise<void> {
+  const job = getState().liveJob; if (!job?.id) { liveLeaveAsk(); return; }
+  const res = await api<{ ref: string }>(`/requests/v1/${job.id}`, { method: 'DELETE' }).catch(() => null);
+  if (!res) return;
+  toast(`${res.ref} discarded. Start a new request.`);
+  liveLeaveAsk();
 }
 
 export async function liveAttachRepo(): Promise<void> {
@@ -262,7 +408,7 @@ export async function liveRequestService(text: string, serviceId?: string): Prom
   const body: Record<string, unknown> = { text };
   if (serviceId && UUID.test(serviceId)) body['service_id'] = serviceId;
   const repo = fieldValue('rq-repo');
-  if (repo && repo !== 'github.com/lumen-labs/payroll-vault') body['repo_url'] = /^https:\/\//.test(repo) ? repo : `https://${repo.replace(/^http:\/\//, '')}`;
+  if (repo) body['repo_url'] = /^https:\/\//.test(repo) ? repo : `https://${repo.replace(/^http:\/\//, '')}`;
   const budget = fieldValue('rq-b');
   if (budget) body['budget_label'] = budget.slice(0, 40);
   const res = await api<{ ref: string }>('/requests/v1', { body }).catch(() => null);
@@ -406,8 +552,8 @@ export async function liveDeliver(ref: string): Promise<void> {
 
 async function loadMoney(): Promise<void> {
   const [wallet, limits] = await Promise.all([
-    api<{ available: number; escrowed: number; usedToday: number }>('/wallet/v1', { quiet: true }).catch(() => null),
-    api<{ paused: boolean }>('/mandates/v1', { quiet: true }).catch(() => null),
+    liveApi<{ available: number; escrowed: number; usedToday: number }>('/wallet/v1', { quiet: true }).catch(() => null),
+    liveApi<{ paused: boolean }>('/mandates/v1', { quiet: true }).catch(() => null),
   ]);
   if (!wallet) return;
   setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused) } });
@@ -470,7 +616,7 @@ export async function liveRate(stars: number): Promise<void> {
   if (res) toast(`${stars} star${stars > 1 ? 's' : ''} saved on ${ref}.`);
 }
 
-interface DisputeView {
+export interface DisputeView {
   id: string | null; job: string; role: 'buyer' | 'seller'; status: string; price: number; bondNeeded: number;
   recheck: { outcome: 'release' | 'refund' | null; deadline: string | null } | null;
   escalation: { by: string | null; claim: string | null; bond: number | null } | null;
@@ -543,24 +689,34 @@ export async function liveDisputeNext(): Promise<void> {
 
 /* ---------------- Find services, the sellers directory and Saved ---------------- */
 
-type GigView = Gig & { sellerKey?: string };
+type GigView = Gig;
+
+/** A seller's public reputation: completion records and ratings, only from settled jobs. */
+export interface ReputationView {
+  settled: number; volume: number; buyers: number; pass: string; rating: number | null; ratings: number;
+  records: { tokenId: string | number; job: string; title: string; amount: number; at: string }[];
+  recent: { stars: number; comment: string | null; job: string; title: string; at: string }[];
+}
+/** Public, so it works signed out too. Null when the seller has none or the API cannot be reached. */
+export const fetchReputation = (acct: string) =>
+  api<ReputationView>(`/reputation/v1/${encodeURIComponent(acct)}`, { quiet: true }).catch(() => null);
 type SellerDirView = SellerDir & { id?: string };
 interface SavedView { services: string[]; sellers: string[] }
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
-/** Copies the live services and sellers into the sample lists. An empty market keeps the samples. */
+/** Copies the services and sellers from the API into the shared lists. Both endpoints are public. */
 async function loadMarket(): Promise<void> {
   const [gigs, sellers] = await Promise.all([
     api<GigView[]>('/services/v1', { quiet: true }).catch(() => null),
     api<SellerDirView[]>('/sellers/v1', { quiet: true }).catch(() => null),
   ]);
-  if (gigs?.length) replace(GIGS, gigs);
-  if (sellers?.length) replace(SELLERS_DIR, sellers);
+  if (gigs) replace(GIGS, gigs);
+  if (sellers) replace(SELLERS_DIR, sellers);
   setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));
 }
 
 async function loadSaved(): Promise<void> {
-  const res = await api<SavedView>('/saved/v1', { quiet: true }).catch(() => null);
+  const res = await liveApi<SavedView>('/saved/v1', { quiet: true }).catch(() => null);
   if (res) setState({ liked: res.services });
 }
 

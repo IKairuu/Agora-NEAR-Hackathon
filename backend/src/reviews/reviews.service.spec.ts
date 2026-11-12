@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 jest.mock('../prisma', () => ({ prisma: {} }));
 
 import { AgentsService } from '../agents/agents.service';
@@ -39,6 +40,26 @@ describe('reviews helpers', () => {
 
     it('shows queued slots before anything is delivered', () => {
         expect(toPanel(null, AGENTS, explorer, NOW)).toMatchObject({ deliveryId: null, votes: [0, 0, 0], canRerun: false });
+    });
+
+    it('puts only the holdout hash and the ciphertext hash in the evidence bundle', () => {
+        const ciphertext = new Uint8Array(Buffer.from('{"v":1,"ct":"SEALEDBYTES-hidden_secret_case"}'));
+        const job = {
+            id: 'j', ref: 'J-1042', title: 'Split fix', status: 'reviewed', repoUrl: 'https://github.com/x/y', baseCommit: '8e35f67', agreedPrice: 32,
+            buyer: { displayName: 'Lumen', nearAccountId: 'lumen.testnet' }, seller: null,
+            acceptanceSpecs: [{ version: 1, specHash: 'h', holdoutHash: 'ef'.repeat(32), lockedAt: new Date(NOW), lockTx: null, testCommand: 'cargo test --no-fail-fast', buildCommand: null, failingTests: [], allowedPaths: ['src/split.rs'], testFiles: [], holdout: { holdoutHash: 'ef'.repeat(32), keyId: '0123456789abcdef', ciphertext }, checks: [] }],
+            milestones: [],
+            chainTxs: [],
+        };
+        const bundle = toEvidence(job as never, new Date(NOW));
+        expect(bundle.spec?.holdoutHash).toBe('ef'.repeat(32));
+        expect(bundle.spec?.holdout).toEqual({
+            holdoutHash: 'ef'.repeat(32), algorithm: 'X25519-HKDF-SHA256-A256GCM', keyId: '0123456789abcdef',
+            ciphertextSha256: createHash('sha256').update(ciphertext).digest('hex'),
+        });
+        const text = JSON.stringify(bundle);
+        expect(text).not.toContain('SEALEDBYTES');
+        expect(text).not.toContain('hidden_secret_case');
     });
 
     it('allows a rerun only for a failed run, a split vote or a timeout', () => {
@@ -114,6 +135,14 @@ describe('ReviewsService', () => {
         expect(chain.callAs.mock.calls).toHaveLength(0);
         expect(repo.createRerun.mock.calls[0]?.[0]).toMatchObject({ deliveryId: DELIVERY, round: 2, userIds: [BUYER, 'seller'], ref: 'J-1042' });
         expect(JSON.parse((fetchMock.mock.calls[0] as [string, { body: string }])[1].body)).toMatchObject({ commit: '81b0973aa1c2', deliveryId: DELIVERY });
+    });
+
+    it('reruns with the sealed hidden tests when the spec has them', async () => {
+        const spec = { testCommand: 'cargo test --no-fail-fast', buildCommand: null, failingTests: [], allowedPaths: ['src/split.rs'], testFiles: [], holdoutHash: 'ef'.repeat(32), holdout: { holdoutHash: 'ef'.repeat(32), ciphertext: new Uint8Array(Buffer.from('sealed-blob')) } };
+        const t = target();
+        repo.getRerunTarget.mockResolvedValue({ ...t, milestone: { job: { ...t.milestone.job, acceptanceSpecs: [spec] } } } as never);
+        await service.rerunReview('Bearer t', { delivery_id: DELIVERY } as never);
+        expect(JSON.parse((fetchMock.mock.calls[0] as [string, { body: string }])[1].body)).toMatchObject({ holdoutRef: 'ef'.repeat(32), holdoutBlob: 'sealed-blob' });
     });
 
     it('calls rerun_review on chain after a split vote', async () => {
