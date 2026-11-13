@@ -70,19 +70,28 @@ export class WalletService {
         const account = await this.walletRepository.getAccount(authId);
         const acct = account?.nearAccountId ?? '';
         const agents = account?.agentsAccountId ?? '';
-        const [live, balance, activity] = await Promise.all([
+        const [live, balance, activity, sellers] = await Promise.all([
             acct ? this.chainService.liveBalance(acct) : Promise.resolve(null),
             acct ? this.walletRepository.getBalance(acct) : Promise.resolve(null),
             this.walletRepository.getActivity(authId, [acct, agents].filter(Boolean)),
+            this.walletRepository.getSellerAccounts(authId),
         ]);
         const available = live ? live.available : balance ? Number(balance.available) : 0;
         const escrowed = live ? live.escrowed : balance ? Number(balance.escrowed) : 0;
+        /* payouts from settled jobs land on the seller's own account, so show them next to the budget */
+        const earnings = await Promise.all(sellers.filter((s) => s.nearAccountId && s.nearAccountId !== acct).map(async (s) => {
+            const sLive = await this.chainService.liveBalance(s.nearAccountId);
+            const sBal = sLive ? null : await this.walletRepository.getBalance(s.nearAccountId);
+            return { acct: s.nearAccountId, name: s.displayName, available: sLive ? sLive.available : sBal ? Number(sBal.available) : 0 };
+        }));
         return {
             acct,
             agents,
             available,
             escrowed,
             total: available + escrowed,
+            earnings,
+            earned: earnings.reduce((n, e) => n + e.available, 0),
             usedToday: balance && sameDay(balance.dayStarted) ? Number(balance.spentToday) : 0,
             chain: this.chainService.walletChainInfo(),
             items: activity.map((t) => {

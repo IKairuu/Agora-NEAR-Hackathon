@@ -25,6 +25,16 @@ export class SupabaseAdminService {
         return { id: data.user.id, email };
     }
 
+    /** The GitHub login linked to this AGORA account in Supabase Auth, or null. Read on the server, so a client cannot claim someone else's GitHub. */
+    async getGithubLogin(userId: string): Promise<string | null> {
+        const { data, error } = await this.admin().auth.admin.getUserById(userId);
+        if (error || !data.user) return null;
+        const gh = (data.user.identities ?? []).find((i) => i.provider === 'github');
+        const d = (gh?.identity_data ?? {}) as Record<string, unknown>;
+        const login = d['user_name'] ?? d['preferred_username'];
+        return typeof login === 'string' && login ? login : null;
+    }
+
     async signInTokenFor(email: string): Promise<string> {
         const { data, error } = await this.admin().auth.admin.generateLink({ type: 'magiclink', email });
         const token = data?.properties?.hashed_token;
