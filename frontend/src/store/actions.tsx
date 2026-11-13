@@ -158,7 +158,7 @@ export const TOUR: TourStep[] = [
   { r: 'agents', st: 7, t: 'Someone steals the agent key', p: 'The attacker tries to drain the account. The protocol and the contract reject every call, and the guardian pauses the team.', d: <>Click <b>Run the drill</b>.</> },
   { r: 'sell', st: 7, t: 'Become a seller', p: 'Clicking Selling opens a short welcome, then a profile you can fill from LinkedIn, a CV or GitHub. The coding can be done by you or by a coding agent you run.', d: <>Click <b>Let's do this</b>.</>, act: () => setState({ sellStep: 0 }) },
   { r: 'dispute', st: 8, t: 'Disputes are a re-check first', p: "A dispute freezes the payment and 3 fresh reviewers re-run every test for free. Only if that doesn't settle it does the DAO vote, and the side that asks puts down a small bond it gets back if right.", d: <>Press <b>Next</b>.</> },
-  { r: 'wallet', st: 8, t: 'A wallet that stays simple', p: 'One balance, four actions. Buyers can add funds from other chains through NEAR Intents, and agents can never withdraw.', d: <>That's the full loop. Press <b>Finish</b>.</> },
+  { r: 'wallet', st: 8, t: 'A wallet that stays simple', p: 'One balance, four actions. Buyers add USDC from their own NEAR wallet, and agents can never withdraw.', d: <>That's the full loop. Press <b>Finish</b>.</> },
 ];
 export function tourGo(i: number) {
   if (isLive()) { leaveLive(); toast('The demo tour uses sample data. Sign in again afterwards to see your own jobs.', 'hold'); }
@@ -387,8 +387,8 @@ export const act = {
   fund: () => hire(getState().hire || hb(getState()).key),
   send: () => openModal('send'),
   receive: () => openModal('receive'),
-  /** Live: real chain mode signs in the user's wallet; mock mode adds test USDC. Demo: the NEAR Intents screen. */
-  addfunds: () => { if (isLive()) { if (walletMode()) openModal('walletmove', { op: 'deposit' }); else void liveAddFunds(); return; } openModal('addfunds'); },
+  /** Live: real chain mode signs in the user's wallet; mock mode adds test USDC. Demo: explains where real funds come from. */
+  addfunds: () => { if (isLive()) { if (walletMode()) openModal('walletmove', { op: 'deposit' }); else void liveAddFunds(); return; } toast('The demo uses sample money. Sign in with a NEAR wallet to add real testnet USDC from your wallet.', 'hold'); },
   dispute: () => openModal('dispute'),
   unpause: () => openModal('unpause'),
   overcap: () => toast(<><b>Rejected by contract.</b> fund_job 400.00 USDC is over your per-job cap of 50.00. 0 USDC moved.</>, 'block', 5200),
@@ -398,8 +398,6 @@ export const act = {
   withdrawme: () => isLive() ? (walletMode() ? openModal('walletmove', { op: 'withdraw' }) : void liveMockWithdraw()) : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
   send2: () => { closeModal(); toast('In the prototype nothing is sent. On testnet this is a full-access key transfer.', 'hold'); },
   copyacct: () => { try { void navigator.clipboard.writeText(ME.acct); } catch { /* ignore */ } toast(`Copied ${ME.acct}.`); },
-  intents: () => toast('Quote refreshed: 100.00 USDC on Base becomes 99.71 USDC on NEAR.'),
-  intentspay: () => { closeModal(); toast(<><b>Sent through NEAR Intents.</b> In the demo this is the real 1 USDC mainnet payment, with its explorer link in the README.</>, 'ok', 5200); },
   refundexp: () => toast("After the deadline, refund_expired returns the protected money to you. Anyone can call it, so it can't be blocked.", 'hold', 5200),
   baddeliver: () => { if (isLive()) { toast('Deliveries come from your seller. Reviewers run as soon as they submit a commit.', 'hold'); return; } setState((s) => ({ stage: Math.max(s.stage, 6) })); toast(<><b>Delivery rejected.</b> Commit 3b9c2aa edited a locked test. 0 of 3 approved.</>, 'block', 5200); },
   gooddeliver: () => {
