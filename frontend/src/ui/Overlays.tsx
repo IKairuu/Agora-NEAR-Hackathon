@@ -6,7 +6,7 @@ import { connectedAccount, disconnectWallet, NEAR_NETWORK, pickWallet, proveOwne
 import { closeModal, free, hPrice, setState, toast, useApp, useToasts } from '../store/store';
 import { authConfigured } from '../lib/supabase';
 import { GoogleIcon, Icon, Tile } from './icons';
-import { Check, T } from './parts';
+import { Check } from './parts';
 
 const WALLETS = [['Meteor Wallet', 'Browser extension and web'], ['HOT Wallet', 'Mobile and Telegram'], ['MyNearWallet', 'Web wallet'], ['Ledger', 'Hardware wallet']];
 
@@ -283,24 +283,9 @@ function Receive() {
   return (
     <Frame>
       <h2>Receive</h2>
-      <p className="muted">{live ? <>Ask people to send USDC on NEAR {chain?.usdc ? <>(token <span className="mono">{chain.usdc}</span>)</> : null} to this account. It lands in your NEAR wallet; use Add funds to move it into AGORA.</> : 'Send USDC on NEAR to this account. To pay in from another chain, use Add funds.'}</p>
+      <p className="muted">{live ? <>Ask people to send USDC on NEAR {chain?.usdc ? <>(token <span className="mono">{chain.usdc}</span>)</> : null} to this account. It lands in your NEAR wallet; use Add funds to move it into AGORA.</> : 'Send USDC on NEAR to this account, then use Add funds to move it into AGORA.'}</p>
       <div className="panel" style={{ padding: 20, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 12 }}>{live && ME.acct ? <AccountQr acct={ME.acct} /> : <span className="avatar lg"><Icon name="qr" /></span>}<span className="mono">{ME.acct}</span>{live && <WalletLine />}</div>
       <div className="acts"><button className="btn" onClick={act.copyacct}><Icon name="copy" />Copy account</button><button className="btn primary" onClick={closeModal}>Done</button></div>
-    </Frame>
-  );
-}
-
-function AddFunds() {
-  return (
-    <Frame>
-      <div className="row"><h2>Add funds</h2><T name="NEAR Intents" tip="Cross-chain pay-in settled as USDC on NEAR" /></div>
-      <div className="grid g-2">
-        <div className="field"><label htmlFor="w-from">From</label><select className="input" id="w-from">{['USDC on Base', 'USDC on Arbitrum', 'ETH on Ethereum', 'SOL on Solana', 'USDC on NEAR'].map((o) => <option key={o}>{o}</option>)}</select></div>
-        <div className="field"><label htmlFor="w-amt">Amount</label><input className="input num" id="w-amt" placeholder="0.00" defaultValue="100.00" /></div>
-      </div>
-      <div className="banner info"><Icon name="bolt" /><div className="grow"><b style={{ fontWeight: 500 }}>You receive 99.71 USDC on NEAR</b><span className="muted">About 40 seconds, fee 0.29, quote expires in 2 min</span></div></div>
-      <p className="muted xsmall">Intents runs on mainnet only. The demo makes one real 1 USDC payment and links it in the README; everything else here runs on testnet.</p>
-      <div className="acts"><button className="btn" onClick={act.intents}>Refresh quote</button><button className="btn primary" onClick={act.intentspay}>Pay with NEAR Intents</button></div>
     </Frame>
   );
 }
@@ -442,7 +427,6 @@ export function ModalHost() {
     case 'role': return <RolePicker />;
     case 'send': return <Send />;
     case 'receive': return <Receive />;
-    case 'addfunds': return <AddFunds />;
     case 'dispute': return <Dispute />;
     case 'unpause': return <Unpause />;
     case 'reqsvc': return <RequestService />;

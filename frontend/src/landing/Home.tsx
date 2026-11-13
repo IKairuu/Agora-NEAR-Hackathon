@@ -193,7 +193,7 @@ export function Home() {
           {stage >= 1 && <span className="wb">Welcome back{(restoring ? user?.name : ME.name || user?.name) ? `, ${restoring ? user?.name : ME.name || user?.name}` : ''}</span>}
           <h1><span className="l">Pay only when</span><span className="l">the tests pass.</span></h1>
           <HeroSearch />
-          <div className="built"><span>Built on</span><b>NEAR</b><b>USDC</b><b>NEAR AI Cloud</b><b>Sputnik DAO</b><b>NEAR Intents</b></div>
+          <div className="built"><span>Built on</span><b>NEAR</b><b>USDC</b><b>NEAR AI Cloud</b><b>Sputnik DAO</b></div>
         </div>
         <div className="cats container" aria-label="Browse by category">
           {HERO_CATS.map(([icon, label, cat]) => (
@@ -248,7 +248,7 @@ export function Home() {
       <section className="sec night" id="stack"><div className="container">
         <div className="sec-h"><h2>Each NEAR tool removes one trust problem.</h2></div>
         <div className="tools">
-          {[['Function-call keys', "Agents can't steal"], ['Sub-accounts', 'One account per team'], ['Native USDC', 'Dollar prices'], ['NEAR AI Cloud', 'Private, provable votes'], ['Sputnik DAO', 'A neutral court'], ['NEP-171', 'Unbuyable records'], ['NEAR Intents', 'Pay from any chain'], ['Chain Signatures', 'Paid on your chain'], ['Social login', 'No wallet needed']].map(([b, s]) => <div key={b}><b>{b}</b><span>{s}</span></div>)}
+          {[['Function-call keys', "Agents can't steal"], ['Sub-accounts', 'One account per team'], ['Native USDC', 'Dollar prices'], ['NEAR AI Cloud', 'Private, provable votes'], ['Sputnik DAO', 'A neutral court'], ['NEP-171', 'Unbuyable records'], ['Social login', 'No wallet needed']].map(([b, s]) => <div key={b}><b>{b}</b><span>{s}</span></div>)}
         </div>
       </div></section>
 

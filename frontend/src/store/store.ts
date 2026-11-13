@@ -41,7 +41,7 @@ export const DEMO_SELL_FORM: SellForm = {
 export interface FollowUp { id: string; text: string; t: string; sending: boolean; reply?: string; link?: boolean }
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
-  | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive' | 'addfunds'
+  | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive'
   | 'dispute' | 'unpause' | 'reqsvc' | 'ojob' | 'offer' | 'code' | 'walletstep' | 'walletpick' | 'linkwallet' | 'walletmove' | 'discard' | 'removejob';
 export interface LiveNote { id: string; kind: string; text: string; link: string | null; time: string; read: boolean }
 export interface State {
