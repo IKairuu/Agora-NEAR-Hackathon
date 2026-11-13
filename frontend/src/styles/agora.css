@@ -421,6 +421,12 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.5; }
 .wal-card .lbl .tag { font-size: var(--text-xs); padding: 1px 8px; border-radius: var(--radius-pill); background: var(--color-paper-3); color: var(--color-ink-2); margin-left: 4px; }
 .wal-card .total.sm { font-size: clamp(2rem, 2vw + 1rem, 2.5rem); }
 .wal-card .total.loading { color: var(--color-muted); }
+.wal-split { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-md); width: 100%; margin-top: var(--space-xs); }
+.wal-split > div { display: flex; flex-direction: column; align-items: center; gap: var(--space-2xs); min-width: 0; }
+.wal-split > .earn { border-left: 1px solid var(--color-rule); padding-left: var(--space-md); }
+.wal-split > .earn .total { color: var(--color-ok); }
+.wal-split .sub { overflow-wrap: anywhere; }
+@media (max-width: 560px) { .wal-split { grid-template-columns: 1fr; } .wal-split > .earn { border-left: 0; padding-left: 0; border-top: 1px solid var(--color-rule); padding-top: var(--space-sm); } }
 .wal-card .note { font-size: var(--text-xs); color: var(--color-ink-2); margin: var(--space-xs) 0 0; max-width: 32ch; }
 .wal-card .lk.small { margin-top: var(--space-2xs); }
 .wal-acts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: auto; padding-top: var(--space-md); }
