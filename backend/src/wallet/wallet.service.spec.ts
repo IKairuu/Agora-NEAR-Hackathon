@@ -20,7 +20,7 @@ describe('WalletService', () => {
     beforeEach(() => {
         repo = {
             getAccount: jest.fn().mockResolvedValue({ id: USER, nearAccountId: 'lumen.testnet', agentsAccountId: 'agents.lumen.testnet' }),
-            setAccountIds: jest.fn(), findAccountOwner: jest.fn().mockResolvedValue(null), findProfileByAccount: jest.fn().mockResolvedValue(null), createWalletProfile: jest.fn(), getBalance: jest.fn(), getActivity: jest.fn().mockResolvedValue([]), getSellerAccounts: jest.fn().mockResolvedValue([]),
+            setAccountIds: jest.fn(), findAccountOwner: jest.fn().mockResolvedValue(null), findProfileByAccount: jest.fn().mockResolvedValue(null), createWalletProfile: jest.fn(), getBalance: jest.fn(), getActivity: jest.fn().mockResolvedValue([]),
         } as unknown as jest.Mocked<WalletRepository>;
         chain = {
             callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-x-1', explorer_url: 'https://testnet.nearblocks.io/txns/mock-x-1', result: null }),
@@ -55,14 +55,6 @@ describe('WalletService', () => {
         expect(w.items[1]).toMatchObject({ label: 'Deposit', amount: 10 });
         expect(repo.getActivity.mock.calls[0]).toEqual([USER, ['lumen.testnet', 'agents.lumen.testnet']]);
         expect(chain.liveBalance.mock.calls[0]).toEqual(['lumen.testnet']);
-    });
-
-    it('shows earnings that landed on the seller accounts', async () => {
-        repo.getSellerAccounts.mockResolvedValue([{ nearAccountId: 'itsuki.agents.lumen.testnet', displayName: 'itsuki' }, { nearAccountId: 'lumen.testnet', displayName: 'me' }] as never);
-        repo.getBalance.mockImplementation(async (a: string) => (a === 'itsuki.agents.lumen.testnet' ? { available: D(4.9), escrowed: D(0), spentToday: D(0), dayStarted: null } : null) as never);
-        const w = await service.getWallet('Bearer t');
-        expect(w.earnings).toEqual([{ acct: 'itsuki.agents.lumen.testnet', name: 'itsuki', available: 4.9 }]);
-        expect(w.earned).toBeCloseTo(4.9);
     });
 
     it('shows the contract balance in real mode instead of the saved one', async () => {

@@ -260,12 +260,10 @@ export function Sell() {
         <p className="note-b small"><b>No LinkedIn?</b> Upload your CV instead, same button.</p>
       </Acc>
       <Acc id="gh" title="Connect GitHub" time="1 min" badge={s.ghLinked ? <span className="pill ok">Connected</span> : undefined}>
-        <p className="muted small">We show your public repositories and languages on your profile. Ratings still come only from settled jobs. One GitHub per AGORA account, and it also signs you in to this account.</p>
-        {s.ids.github
-          ? <><p className="note-b small"><Icon name="github" /> Linked as <b className="mono">{s.ids.github}</b>. To use a different GitHub, unlink this one on the Wallet page.</p><GhRepos login={s.ids.github} /></>
-          : s.ghLinked
-            ? <p className="note-b small"><Icon name="github" /> GitHub is connected. Your public repositories appear on your profile after you publish it.</p>
-            : <button className="btn" onClick={act.ghconnect}><Icon name="github" />Connect GitHub</button>}
+        <p className="muted small">We show your public repositories and languages on your profile. Ratings still come only from settled jobs.</p>
+        {s.ghLinked
+          ? <p className="note-b small"><Icon name="github" /> GitHub is connected. Your public repositories appear on your profile after you publish it.</p>
+          : <button className="btn" onClick={act.ghconnect}><Icon name="github" />Connect GitHub</button>}
       </Acc>
       <Acc id="man" title="Fill out manually" time="5 min" icon="edit">
         <div className="grid g-2">
@@ -385,9 +383,8 @@ function LiveSeller() {
               <dt>Get paid on</dt><dd>{PAYOUTS.find(([k]) => k === p.payoutChain)?.[1] ?? p.payoutChain}{p.payoutChain !== 'near' && p.payoutAddress ? <span className="mono muted"> {p.payoutAddress}</span> : ''}</dd>
               {p.country && <><dt>Country</dt><dd>{p.country}</dd></>}
               {p.langs.length > 0 && <><dt>Languages</dt><dd>{p.langs.join(', ')}</dd></>}
-              {p.githubUsername && <><dt>GitHub</dt><dd className="mono"><a href={`https://github.com/${p.githubUsername}`} target="_blank" rel="noreferrer">{p.githubUsername}</a></dd></>}
+              {p.githubUsername && <><dt>GitHub</dt><dd className="mono">{p.githubUsername}</dd></>}
             </dl>
-            {p.githubUsername && <GhRepos login={p.githubUsername} />}
             {p.about && <p className="small">{p.about}</p>}
           </div></div>
         </div>
@@ -528,29 +525,5 @@ export function Dispute() {
         <div className="ds-treasury"><div><span className="lbl">DAO treasury</span><b className="num">1,284.40<span className="u">USDC</span></b></div><p className="muted small">Filled by a 2% fee on released payments and by lost bonds. It pays the arbiters and the first-job pool. Sample figures.</p></div>
       </div>
     </Shell>
-  );
-}
-
-interface GhRepo { name: string; html_url: string; language: string | null; stargazers_count: number; fork: boolean }
-/** The newest public repositories of a GitHub login, straight from GitHub's public API. */
-export function GhRepos({ login }: { login: string }) {
-  const [repos, setRepos] = useState<GhRepo[] | null>(null);
-  const [failed, setFailed] = useState(false);
-  useEffect(() => {
-    let on = true;
-    setRepos(null); setFailed(false);
-    fetch(`https://api.github.com/users/${encodeURIComponent(login)}/repos?sort=updated&per_page=8`)
-      .then((r) => (r.ok ? (r.json() as Promise<GhRepo[]>) : Promise.reject(new Error(String(r.status)))))
-      .then((list) => { if (on) setRepos(list.filter((x) => !x.fork).slice(0, 6)); })
-      .catch(() => { if (on) setFailed(true); });
-    return () => { on = false; };
-  }, [login]);
-  if (failed) return <p className="muted xsmall">Could not load repositories from GitHub right now.</p>;
-  if (!repos) return <p className="muted xsmall">Loading repositories…</p>;
-  if (!repos.length) return <p className="muted xsmall">No public repositories yet.</p>;
-  return (
-    <ul className="small" style={{ listStyle: 'none', padding: 0, margin: '8px 0 0', display: 'grid', gap: 4 }}>
-      {repos.map((r) => <li key={r.name}><Icon name="github" /> <a className="mono" href={r.html_url} target="_blank" rel="noreferrer">{r.name}</a>{r.language && <span className="muted"> · {r.language}</span>}{r.stargazers_count > 0 && <span className="muted"> · {r.stargazers_count}★</span>}</li>)}
-    </ul>
   );
 }

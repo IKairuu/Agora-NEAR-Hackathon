@@ -7,8 +7,6 @@ import { SellerLock, Shell } from '../ui/Shell';
 
 /** The action buttons for an order at its current stage. Shared with the Messages job strip. */
 export function OrderAction({ o, full = true }: { o: Order; full?: boolean }) {
-  const hireOffer = !!(o as Order & { hireOfferId?: string }).hireOfferId;
-  if (o.st === 0 && hireOffer) return <><button className="btn sm primary" onClick={() => orderAct.accept(o.id)}>Accept</button>{full && <button className="btn sm ghost" onClick={() => orderAct.decline(o.id)}>Decline</button>}</>;
   if (o.st === 0) return <><button className="btn sm primary" onClick={() => orderAct.offer(o.id)}>Send offer</button>{full && <button className="btn sm ghost" onClick={() => orderAct.decline(o.id)}>Decline</button>}</>;
   if (!full) return o.st === 2 ? <button className="btn sm primary" onClick={() => orderAct.deliver(o.id)}>Submit delivery</button> : <RLink r="orders" className="btn sm">View order</RLink>;
   if (o.st === 1) return <button className="btn sm ghost" onClick={() => orderAct.accept(o.id)} title="Prototype only: plays the buyer's side">Buyer accepts, demo</button>;

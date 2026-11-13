@@ -691,12 +691,12 @@ export async function liveDeliver(ref: string): Promise<void> {
 
 async function loadMoney(): Promise<void> {
   const [wallet, limits] = await Promise.all([
-    liveApi<{ available: number; escrowed: number; usedToday: number; earned?: number; earnings?: { acct: string; name: string; available: number }[]; chain?: { mode: string; network: string; contract: string; usdc: string | null }; items?: WalletItem[] }>('/wallet/v1', { quiet: true }).catch(() => null),
+    liveApi<{ available: number; escrowed: number; usedToday: number; chain?: { mode: string; network: string; contract: string; usdc: string | null }; items?: WalletItem[] }>('/wallet/v1', { quiet: true }).catch(() => null),
     liveApi<Limits & { paused: boolean }>('/mandates/v1', { quiet: true }).catch(() => null),
   ]);
   if (!wallet) return;
   const tokenArrived = Boolean(wallet.chain?.usdc) && wallet.chain?.usdc !== getState().chain?.usdc;
-  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused), earned: wallet.earned ?? 0, earnings: wallet.earnings ?? [] }, chain: wallet.chain ?? null, walletItems: wallet.items ?? [],
+  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused) }, chain: wallet.chain ?? null, walletItems: wallet.items ?? [],
     ...(limits ? { limits: { perJobCap: limits.perJobCap, dailyCap: limits.dailyCap, newSellerCap: limits.newSellerCap, reviewWindowHours: limits.reviewWindowHours, categories: limits.categories, strict: limits.strict } } : {}) });
   if (tokenArrived) void loadWalletBalances();
 }
