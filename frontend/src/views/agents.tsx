@@ -3,6 +3,7 @@ import { useEffect, useState } from 'react';
 import { act } from '../store/actions';
 import { liveFaucet, loadWalletBalances } from '../lib/live';
 import { accessKeys, type AccessKeyRow } from '../lib/near';
+import { authConfigured } from '../lib/supabase';
 import { escrow, free, hb, hPrice, paused, setState, useApp } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
 import { Check, Feed, Gate, Head, RLink, SignInButton, T } from '../ui/parts';
@@ -212,10 +213,27 @@ export function Wallet() {
       <div className="wal">
         <div className="wal-cards">
           <section className="wal-card panel" aria-labelledby="wal-budget">
-            <span className="lbl" id="wal-budget">Agent budget <span className="tag">in AGORA</span></span>
             {s.live && !s.money
-              ? <><span className="total num loading" aria-busy="true">$—</span><span className="sub">Loading your balance…</span></>
-              : <><span className="total num">${d}<span className="c">.{c}</span></span><span className="sub">Free {usd(free(s))} · Locked in jobs {usd(escrow(s))}</span></>}
+              ? <><span className="lbl" id="wal-budget">Agent budget <span className="tag">in AGORA</span></span><span className="total num loading" aria-busy="true">$—</span><span className="sub">Loading your balance…</span></>
+              : (s.money?.earnings ?? []).length === 0
+                ? <><span className="lbl" id="wal-budget">Agent budget <span className="tag">in AGORA</span></span><span className="total num">${d}<span className="c">.{c}</span></span><span className="sub">Free {usd(free(s))} · Locked in jobs {usd(escrow(s))}</span></>
+                : (
+                  /* two pockets: what your buying agents can spend, and what selling has paid you */
+                  <div className="wal-split">
+                    <div>
+                      <span className="lbl" id="wal-budget">Agent budget <span className="tag">buying</span></span>
+                      <span className="total sm num">${d}<span className="c">.{c}</span></span>
+                      <span className="sub">Free {usd(free(s))} · Locked {usd(escrow(s))}</span>
+                    </div>
+                    <div className="earn">
+                      <span className="lbl">Earnings <span className="tag">selling</span></span>
+                      <span className="total sm num">${usd(s.money?.earned ?? 0)}</span>
+                      {(s.money?.earnings ?? []).map((e) => (
+                        <span key={e.acct} className="sub" title={`Paid out by settled jobs to ${e.acct}`}>{e.name}: {usd(e.available)} · <span className="mono">{e.acct}</span></span>
+                      ))}
+                    </div>
+                  </div>
+                )}
             <p className="note">{mock ? 'Test money: the server runs in mock mode, so nothing here is on chain.' : 'Your agents can spend this, only inside your limits.'}</p>
             <div className="wal-acts two">
               <button className="pri" onClick={act.addfunds}><i><Icon name="plus" /></i>Add funds</button>
@@ -239,6 +257,19 @@ export function Wallet() {
             </div>
           </section>
         </div>
+        {s.user && authConfigured && (
+          <section className="panel" aria-labelledby="wal-ids">
+            <div className="panel-h"><h3 id="wal-ids">Linked to this account</h3><span className="muted xsmall">One of each. Any of them signs you in to this same account.</span></div>
+            <div className="panel-b">
+              <div className="asset"><span className="tok">G</span><div><b style={{ fontWeight: 500 }}>Google</b><div className="muted xsmall">{s.ids.google ?? 'Not linked'}</div></div>
+                <div className="v">{s.ids.google ? <button className="btn sm" onClick={() => act.unlinkid('google')}>Unlink</button> : <button className="btn sm" onClick={() => act.linkid('google')}>Link Google</button>}</div></div>
+              <div className="asset"><span className="tok"><Icon name="github" /></span><div><b style={{ fontWeight: 500 }}>GitHub</b><div className="muted xsmall mono">{s.ids.github ?? 'Not linked'}</div></div>
+                <div className="v">{s.ids.github ? <button className="btn sm" onClick={() => act.unlinkid('github')}>Unlink</button> : <button className="btn sm" onClick={() => act.linkid('github')}>Link GitHub</button>}</div></div>
+              <div className="asset"><span className="tok near">N</span><div><b style={{ fontWeight: 500 }}>NEAR wallet</b><div className="muted xsmall mono">{ME.acct || 'Not linked'}</div></div>
+                <div className="v"><button className="btn sm" onClick={() => setState({ modal: { kind: 'linkwallet' } })}>{ME.acct ? 'Change' : 'Link wallet'}</button></div></div>
+            </div>
+          </section>
+        )}
         <div className="tabs" role="tablist">
           <button role="tab" aria-selected={s.walTab === 'assets'} className={s.walTab === 'assets' ? 'on' : ''} onClick={() => setState({ walTab: 'assets' })}>Assets</button>
           <button role="tab" aria-selected={s.walTab === 'activity'} className={s.walTab === 'activity' ? 'on' : ''} onClick={() => setState({ walTab: 'activity' })}>Activity</button>
