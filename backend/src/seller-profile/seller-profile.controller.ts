@@ -29,6 +29,14 @@ export class SellerProfileController {
         return this.sellerProfileService.publishProfile(auth);
     }
 
+    /** Copies the GitHub login linked to the signed-in account onto the seller profile. */
+    @Post('v1/github')
+    @HttpCode(200)
+    @UseGuards(AuthGuard)
+    syncGithub(@Headers('authorization') auth: string) {
+        return this.sellerProfileService.syncGithub(auth);
+    }
+
     @Post('v1/stake')
     @HttpCode(200)
     @UseGuards(AuthGuard)

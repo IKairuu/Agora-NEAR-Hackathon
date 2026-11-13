@@ -35,6 +35,11 @@ export class WalletRepository {
         );
     }
 
+    /** The user's seller accounts (for example itsuki.agents.<you>). Job payouts land on these, not on the main account. */
+    async getSellerAccounts(userId: string) {
+        return prisma.seller.findMany({ where: { ownerId: userId }, select: { nearAccountId: true, displayName: true }, orderBy: { createdAt: 'asc' } });
+    }
+
     async getBalance(accountId: string) {
         return prisma.balance.findUnique({ where: { accountId }, select: { available: true, escrowed: true, spentToday: true, dayStarted: true } });
     }
