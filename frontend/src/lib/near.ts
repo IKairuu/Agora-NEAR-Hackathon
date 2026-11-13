@@ -109,15 +109,11 @@ export const usdcUnits = (amount: number): string => String(Math.round(amount * 
 /**
  * Asks the connected wallet to sign one transaction and waits for the result. Returns the transaction hash.
  * Throws when the wallet is not the linked AGORA account, so money never moves from the wrong account.
- * If no wallet is connected in this browser, it opens the wallet picker first.
  */
 export async function walletSend(expectAccount: string, receiverId: string, calls: WalletCall[]): Promise<string> {
   const { selector } = await load();
-  // The wallet session lives in this browser and can drop (reload, another address, wallet timeout) while the
-  // account stays linked to the profile. Reconnect in place instead of making the user sign out and in again.
-  let signer = await connectedAccount();
-  if (!signer) signer = await pickWallet();
-  if (!signer) throw new Error(expectAccount ? `Connect ${expectAccount} in your NEAR wallet to continue` : 'Connect your NEAR wallet to continue');
+  const signer = await connectedAccount();
+  if (!signer) throw new Error('Connect your NEAR wallet first');
   if (expectAccount && signer !== expectAccount) throw new Error(`Your wallet is signed in as ${signer}, but this AGORA account is linked to ${expectAccount}. Switch accounts in the wallet or link ${signer}`);
   const [{ actionCreators }, wallet] = await Promise.all([import('@near-js/transactions'), selector.wallet()]);
   const actions = calls.map((c) => actionCreators.functionCall(c.method, c.args, BigInt(c.tgas) * TGAS, c.deposit));

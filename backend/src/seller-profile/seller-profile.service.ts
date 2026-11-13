@@ -1,7 +1,6 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { initialsOf } from '../accounts/accounts.service.js';
 import { AuthService } from '../auth/auth.service.js';
-import { SupabaseAdminService } from '../auth/supabase-admin.service.js';
 import { ChainService } from '../chain/chain.service.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { CreateSellerStake } from './dto/CreateSellerStake.dto.js';
@@ -50,7 +49,6 @@ export class SellerProfileService {
         private readonly sellerProfileRepository: SellerProfileRepository,
         private readonly authService: AuthService,
         private readonly chainService: ChainService,
-        private readonly supabaseAdmin: SupabaseAdminService,
     ) {}
 
     async getProfile(token: string) {
@@ -66,18 +64,8 @@ export class SellerProfileService {
             const unknown = body.categories.filter((c) => !known.includes(c));
             if (unknown.length) throw new BadRequestException(`Unknown category: ${unknown.join(', ')}`);
         }
-        /* the GitHub login only comes from the linked GitHub sign-in (POST v1/github), never from the form */
-        const row = await this.sellerProfileRepository.saveProfile(claims.id, claims.name, { ...body, github_username: undefined } as unknown as EditSellerProfile);
+        const row = await this.sellerProfileRepository.saveProfile(claims.id, claims.name, body);
         return { message: 'Seller Profile Successfully Saved', id: row.id, step: row.step };
-    }
-
-    /** One AGORA account has at most one GitHub: the one linked in Supabase Auth. Saves its login on the seller profile (or clears it after an unlink). */
-    async syncGithub(token: string) {
-        const claims = await this.authService.getSessionClaims((token ?? '').replace('Bearer ', ''));
-        const login = await this.supabaseAdmin.getGithubLogin(claims.id);
-        const row = await this.sellerProfileRepository.getProfile(claims.id);
-        if (row || login) await this.sellerProfileRepository.saveProfile(claims.id, claims.name, { github_username: login ?? null } as unknown as EditSellerProfile);
-        return { github: login };
     }
 
     async publishProfile(token: string) {

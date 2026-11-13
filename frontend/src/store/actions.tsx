@@ -1,7 +1,7 @@
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, BIDS, gigBy, JOB, KICKOFF, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, THREADS, usd, type Order } from '../data/data';
-import { finishWalletSignIn, linkedIdsOf, linkErrorText, linkProvider, NO_IDS, takeLinking, unlinkProvider, sendEmailCode, verifyEmailCode, saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
+import { finishWalletSignIn, sendEmailCode, verifyEmailCode, saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
 import { api } from '../lib/api';
 import type { OwnershipProof } from '../lib/near';
@@ -521,22 +521,7 @@ export const act = {
   openGig: (id: string) => { if (isLive()) void liveOpenGig(id); setState({ svc: id }); go('svc'); tourStep(1, 2); },
   /** A seller's name anywhere opens their profile. */
   who: (key: string) => { if (isLive()) void liveWho(key); setState({ who: key }); go('profile'); },
-  /** Links Google or GitHub to the signed-in account. In the demo (no real sign-in) GitHub just shows as connected. */
-  linkid: (via: OAuthVia) => {
-    if (!authConfigured || !getState().user) {
-      if (via === 'github') { setState({ ghLinked: true }); toast('GitHub connected: 14 public repositories found. Reputation still comes only from settled jobs.'); }
-      else toast('Sign in first.', 'hold');
-      return;
-    }
-    void linkProvider(via).then((err) => { if (err) toast(err, 'block'); });
-  },
-  unlinkid: (via: OAuthVia) => {
-    void unlinkProvider(via).then((err) => {
-      if (err) { toast(err, 'block'); return; }
-      toast(`${via === 'github' ? 'GitHub' : 'Google'} removed from this account.`);
-    });
-  },
-  ghconnect: () => act.linkid('github'),
+  ghconnect: () => { setState({ ghLinked: true }); toast('GitHub connected: 14 public repositories found. Reputation still comes only from settled jobs.'); },
   sellstart: () => { if (isLive()) void liveLoadSellProfile(); setState({ sellStep: 1 }); window.scrollTo(0, 0); },
   theme: () => {
     const r = document.documentElement;
@@ -597,21 +582,12 @@ export const act = {
  * Call once at startup. Picks up the session Supabase creates after the Google or GitHub redirect,
  * resumes the sign-in flow the user started, and keeps the app signed in across reloads.
  */
-let syncedGithub: string | null | undefined;
 export function initAuth(): () => void {
   const urlError = takeUrlError();
-  const linking = takeLinking();
-  if (urlError) { takePending(); toast(linking ? linkErrorText(urlError, linking) : `Sign-in was not completed: ${urlError}`, 'block'); }
-  else if (linking) setTimeout(() => { const id = getState().ids[linking]; if (id) toast(`${linking === 'github' ? 'GitHub' : 'Google'} linked: ${id}. It now opens this same account.`); }, 1500);
+  if (urlError) { takePending(); toast(`Sign-in was not completed: ${urlError}`, 'block'); }
   if (!supabase) return () => {};
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
-    if (event === 'SIGNED_OUT') { leaveLive(); syncedGithub = undefined; setState({ user: null, ids: NO_IDS, ghLinked: false }); return; }
-    if (session) {
-      const ids = linkedIdsOf(session);
-      setState({ ids, ghLinked: Boolean(ids.github) });
-      /* the seller profile shows the GitHub linked to this account, read by the server from Supabase */
-      if (ids.github !== syncedGithub) { syncedGithub = ids.github; setTimeout(() => { void api('/seller-profile/v1/github', { method: 'POST', quiet: true }).catch(() => null); }, 0); }
-    }
+    if (event === 'SIGNED_OUT') { leaveLive(); setState({ user: null }); return; }
     /* a saved Google or GitHub sign-in whose Supabase session has expired: back to guest */
     if (event === 'INITIAL_SESSION' && !session && getState().user) { setState({ stage: 0, user: null, role: null, signVia: '' }); stopRestoring(); return; }
     if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;

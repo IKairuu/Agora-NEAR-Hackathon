@@ -58,8 +58,6 @@ export interface State {
   liked: string[]; newJobs: OtherJob[]; nextJob: number; svc: string;
   sort: 'best' | 'rating' | 'price'; f: Partial<Record<FilterKey, string>>; q: string; online: boolean; newOnly: boolean;
   signVia: string; sellCoder: 'me' | 'agent'; expOpen: string; cvFile: string; avatarImg: string; coverImg: string; ghLinked: boolean;
-  /** Google email and GitHub login linked to the signed-in account (one of each). */
-  ids: { google: string | null; github: string | null };
   fold: boolean;
   /* v9: New request chat, hiring and job requests */
   hire: string; offerSt: '' | 'wait' | 'accepted' | 'declined'; declined: string[]; preNeg: boolean;
@@ -84,7 +82,7 @@ export interface State {
   liveThreads: Thread[];
   notes: { unread: number; items: LiveNote[] };
   /** Live balances and pause state from the wallet and limits API. */
-  money: { available: number; escrowed: number; usedToday: number; paused: boolean; earned?: number; earnings?: { acct: string; name: string; available: number }[] } | null;
+  money: { available: number; escrowed: number; usedToday: number; paused: boolean } | null;
   /** Which chain the backend uses: in mock mode AGORA balances are test numbers, in real mode they live in the contract. */
   chain: { mode: string; network: string; contract: string; usdc: string | null } | null;
   /** What the linked NEAR account holds in its own wallet, read from the chain (outside AGORA's contract). */
@@ -131,7 +129,7 @@ const initialState: State = {
   mode: saved?.mode ?? 'buy', oTab: 'active', orders: [],
   liked: [], newJobs: [], nextJob: 1043, svc: '',
   sort: 'best', f: {}, q: '', online: false, newOnly: false,
-  signVia: saved?.via ?? '', sellCoder: 'me', expOpen: 'cv', cvFile: '', avatarImg: '', coverImg: '', ghLinked: false, ids: { google: null, github: null },
+  signVia: saved?.via ?? '', sellCoder: 'me', expOpen: 'cv', cvFile: '', avatarImg: '', coverImg: '', ghLinked: false,
   fold: storage.get('agora-fold') === '1',
   hire: '', offerSt: '', declined: [], preNeg: false,
   asked: false, askText: '', bidsShown: 0, streamId: 0, jf: 'all', extra: [],
