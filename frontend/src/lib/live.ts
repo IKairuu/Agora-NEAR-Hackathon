@@ -68,7 +68,7 @@ interface HeldView { bidId: string; name: string; acct: string; kind: 'agent' | 
 interface OffersView { offers: OfferView[]; held: HeldView[]; bestPick: string | null; waitingFor: number }
 interface HireOfferView { id?: string; offerSt: '' | 'wait' | 'accepted' | 'declined'; seller?: string; bidId?: string | null }
 interface OpenJobView { id: string; title: string; cats: string; budget: string; check: string; bids: number; buyer: string; blurb: string; buyerRating: string; minutesAgo: number }
-interface ThreadView { id: string; title: string; with: string; side: 'buy' | 'sell'; jobId: string | null; last: string; time: string }
+interface ThreadView { id: string; title: string; with: string; side: 'buy' | 'sell'; jobId: string | null; last: string; time: string; unread?: boolean }
 interface MessageView { id: string; from: ChatMsg['from']; text: string }
 type LiveOrder = Order & { bidId?: string; hireOfferId?: string };
 
@@ -349,7 +349,7 @@ async function loadThreads(): Promise<void> {
   const out: Thread[] = [];
   for (const t of rows.slice(0, 20)) {
     const msgs = await api<MessageView[]>(`/threads/v1/${t.id}/messages`, { quiet: true }).catch(() => [] as MessageView[]);
-    out.push({ k: t.id, mode: t.side, who: t.with, job: t.jobId ?? '', title: t.title, st: ['', t.side === 'buy' ? 'Buying' : 'Selling'], amt: '', last: t.last, time: t.time, msgs: msgs.map((m) => ({ from: m.from, text: m.text })) });
+    out.push({ k: t.id, mode: t.side, who: t.with, job: t.jobId ?? '', title: t.title, st: ['', t.side === 'buy' ? 'Buying' : 'Selling'], amt: '', last: t.last, time: t.time, unread: !!t.unread && getState().thread !== t.id, msgs: msgs.map((m) => ({ from: m.from, text: m.text })) });
   }
   if (stale(sid)) return;
   setState({ liveThreads: out });
@@ -575,6 +575,12 @@ export async function liveSendOffer(id: string, priceText: string, daysText: str
 export async function liveSendThread(threadId: string, text: string): Promise<void> {
   const res = await api(`/threads/v1/${threadId}/messages`, { body: { text } }).catch(() => null);
   if (res) await loadThreads();
+}
+
+/** Marks a conversation read on the server once it is opened. */
+export async function liveReadThread(id: string): Promise<void> {
+  setState((s) => ({ liveThreads: s.liveThreads.map((t) => (t.k === id ? { ...t, unread: false } : t)) }));
+  await api(`/threads/v1/${id}/read`, { body: {}, quiet: true }).catch(() => null);
 }
 
 export async function liveReadNotes(): Promise<void> {

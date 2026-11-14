@@ -29,6 +29,13 @@ export class MessagesController {
         return this.messagesService.getMessages(auth, id);
     }
 
+    @Post('v1/:id/read')
+    @HttpCode(200)
+    @UseGuards(AuthGuard)
+    markRead(@Headers('authorization') auth: string, @Param('id') id: string) {
+        return this.messagesService.markRead(auth, id);
+    }
+
     @Post('v1/:id/messages')
     @HttpCode(200)
     @UseGuards(AuthGuard)

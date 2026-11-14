@@ -21,7 +21,7 @@ export const timeLabel = (date: Date | null, now = new Date()): string => {
 const FROM_BUYER: Record<string, string> = { owner: 'me', seller: 'them', agent: 'agent', system: 'sys' };
 const FROM_SELLER: Record<string, string> = { owner: 'them', seller: 'me', agent: 'agent', system: 'sys' };
 
-export const toThread = (row: ThreadRow, userId: string) => {
+export const toThread = (row: ThreadRow, userId: string, unread = false) => {
     const buying = row.buyerId === userId;
     const last = row.messages[0];
     return {
@@ -32,6 +32,7 @@ export const toThread = (row: ThreadRow, userId: string) => {
         jobId: row.job?.ref ?? null,
         last: last?.body ?? '',
         time: timeLabel(last?.createdAt ?? row.lastMessageAt ?? row.createdAt),
+        unread,
     };
 };
 
@@ -44,8 +45,8 @@ export class MessagesService {
 
     async getThreads(token: string, side: string) {
         const authId = await this.authId(token);
-        const rows = await this.messagesRepository.getThreads(authId, side ?? 'all');
-        return rows.map((r) => toThread(r, authId));
+        const [rows, unread] = await Promise.all([this.messagesRepository.getThreads(authId, side ?? 'all'), this.messagesRepository.unreadThreadIds(authId)]);
+        return rows.map((r) => toThread(r, authId, unread.has(r.id)));
     }
 
     async createThread(token: string, body: CreateThread) {
@@ -92,6 +93,13 @@ export class MessagesService {
             title: thread.title,
         });
         return { message: 'Message Successfully Sent', id: row.id };
+    }
+
+    async markRead(token: string, id: string) {
+        const authId = await this.authId(token);
+        const thread = await this.thread(authId, id);
+        await this.messagesRepository.markThreadRead(authId, thread.id);
+        return { message: 'Conversation Marked Read' };
     }
 
     private async authId(token: string): Promise<string> {

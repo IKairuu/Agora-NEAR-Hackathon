@@ -114,7 +114,7 @@ export class IndexerRepository {
         return prisma.$transaction(async (tx) => {
             const job = await tx.job.findFirst({
                 where: key,
-                select: { id: true, status: true, agreedPrice: true, buyerId: true, buyer: { select: { nearAccountId: true } } },
+                select: { id: true, ref: true, title: true, status: true, agreedPrice: true, buyerId: true, sellerId: true, buyer: { select: { nearAccountId: true } } },
             });
             if (!job || job.status !== 'agreed' || job.agreedPrice === null) return null;
             const moved = await tx.job.updateMany({ where: { id: job.id, status: 'agreed' }, data: { status: 'funded' } });
@@ -126,6 +126,13 @@ export class IndexerRepository {
                 update: { amount, status: 'funded', fundedTx: txHash, fundedAt: new Date() },
             });
             if (job.buyer.nearAccountId) await this.escrow(tx, job.buyer.nearAccountId, job.buyerId, amount, startBalance);
+            /* the buyer and seller get a conversation as soon as the payment is protected */
+            if (job.sellerId) {
+                const existing = await tx.thread.findFirst({ where: { jobId: job.id, buyerId: job.buyerId, sellerId: job.sellerId }, select: { id: true } });
+                const thread = existing ?? (await tx.thread.create({ data: { jobId: job.id, buyerId: job.buyerId, sellerId: job.sellerId, title: job.title }, select: { id: true } }));
+                await tx.message.create({ data: { threadId: thread.id, sender: 'system', body: `${Number(amount).toFixed(2)} USDC is protected for ${job.ref}. Use this conversation to talk about the work.` } });
+                await tx.thread.update({ where: { id: thread.id }, data: { lastMessageAt: new Date() } });
+            }
             return { jobId: job.id, amount: Number(amount) };
         }, MONEY_TX);
     }

@@ -23,7 +23,7 @@ describe('MessagesService', () => {
     beforeEach(() => {
         caller = BUYER;
         repo = {
-            getThreads: jest.fn(), getThread: jest.fn(), getOwnedJob: jest.fn(), getSeller: jest.fn(),
+            getThreads: jest.fn(), unreadThreadIds: jest.fn().mockResolvedValue(new Set()), markThreadRead: jest.fn(), getThread: jest.fn(), getOwnedJob: jest.fn(), getSeller: jest.fn(),
             getBiddingSeller: jest.fn(), createThread: jest.fn().mockResolvedValue({ id: THREAD }), getMessages: jest.fn(), createMessage: jest.fn().mockResolvedValue({ id: 'm1' }),
         } as unknown as jest.Mocked<MessagesRepository>;
         service = new MessagesService(repo, { verifySessionToken: jest.fn(async () => caller) } as unknown as AuthService);

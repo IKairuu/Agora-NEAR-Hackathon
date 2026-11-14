@@ -5,7 +5,7 @@ import { finishWalletSignIn, linkedIdsOf, linkErrorText, linkProvider, NO_IDS, t
 import { authConfigured, supabase } from '../lib/supabase';
 import { api } from '../lib/api';
 import type { OwnershipProof } from '../lib/near';
-import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveWithdraw as liveMockWithdraw, walletMode, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveBundle, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
+import { liveReadThread, appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveWithdraw as liveMockWithdraw, walletMode, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveBundle, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg, type State } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -87,11 +87,12 @@ export function threads(): Thread[] {
   return out;
 }
 /** True while a thread has news the user has not opened yet. */
-export const isUnread = (t: Thread) => !!t.unread && !getState().seenThreads.includes(t.k);
+export const isUnread = (t: Thread) => !!t.unread && (getState().live || !getState().seenThreads.includes(t.k));
 /** Unread conversations across buying and selling; drives the Messages badges. */
 export const unreadThreads = () => threads().filter(isUnread).length;
 /** Mark a thread as read once it is opened. */
 export function markSeen(k: string) {
+  if (k && isLive()) { if (getState().liveThreads.some((t) => t.k === k && t.unread)) void liveReadThread(k); return; }
   if (k && !getState().seenThreads.includes(k)) setState((s) => ({ seenThreads: [...s.seenThreads, k] }));
 }
 /** Send a message in a non-demo thread. */
