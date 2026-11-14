@@ -160,7 +160,7 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
             <b><Icon name={isPaused ? 'pause' : 'shield'} /><span className="t">{isPaused ? 'Agents paused' : 'Guardian watching'}</span></b>
             <span className="gd">{isPaused ? 'Only your full-access key can unpause.' : 'Pauses your agents if something probes your limits.'}</span>
           </div>
-          <span className="muted xsmall gd">Prototype with sample data on NEAR testnet</span>
+          <span className="muted xsmall gd">{s.live ? 'Running on NEAR testnet' : 'Prototype with sample data on NEAR testnet'}</span>
         </div>
       </aside>
       <div className="main">

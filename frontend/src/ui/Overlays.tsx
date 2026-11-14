@@ -307,11 +307,12 @@ function Dispute() {
 }
 
 function Unpause() {
+  const { live } = useApp();
   return (
     <Frame>
       <h2>Unpause agents</h2>
       <p className="muted">The guardian paused your agents after 6 rejected calls. Rotate the transaction key before unpausing.</p>
-      <Check>Delete old key ed25519:7Hk…2mL</Check>
+      <Check>{live ? 'Delete the old agents key' : 'Delete old key ed25519:7Hk…2mL'}</Check>
       <Check>Add new function-call key (same 6 methods)</Check>
       <div className="acts"><Cancel /><button className="btn primary" onClick={act.unpause2}>Confirm with Google and unpause</button></div>
     </Frame>
@@ -441,7 +442,7 @@ function RequestService() {
 }
 
 function OtherJob({ id }: { id: string }) {
-  const { newJobs } = useApp();
+  const { newJobs, live } = useApp();
   const j = [...newJobs, ...OTHER_JOBS, ...DONE_JOBS].find((x) => x.id === id);
   if (!j) return null;
   return (
@@ -453,7 +454,7 @@ function OtherJob({ id }: { id: string }) {
         {j.who && <><dt>Seller</dt><dd>{j.who}</dd></>}
         {j.note && <><dt>Status</dt><dd>{j.note}</dd></>}
       </dl>
-      <p className="muted xsmall">Sample job. The full walkthrough runs on J-1042.</p>
+      {!live && <p className="muted xsmall">Sample job. The full walkthrough runs on J-1042.</p>}
       <div className="acts"><button className="btn primary" onClick={closeModal}>Close</button></div>
     </Frame>
   );

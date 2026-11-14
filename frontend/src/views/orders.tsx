@@ -47,7 +47,7 @@ export function Orders() {
   return (
     <Shell cur="orders">
       <Head title="Orders" sub="Jobs buyers hired you for. Escrow is funded before you start, and the locked tests decide when you get paid." actions={<RLink r="openjobs" className="btn"><Icon name="explore" />Find open jobs</RLink>} />
-      {!s.seller && (
+      {!s.seller && !s.live && (
         <div className="banner"><Icon name="store" /><div className="grow"><b style={{ fontWeight: 500 }}>Sample orders</b><span className="muted">Publish your seller profile to receive real ones.</span></div><RLink r="sell" className="btn sm">Set up profile</RLink></div>
       )}
       <div className="tally o-tally">
