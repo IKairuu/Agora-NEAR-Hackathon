@@ -692,7 +692,10 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.5; }
 .orders { font-weight: 500; }
 .me-btn { position: relative; }
 .me-btn .online { position: absolute; right: 1px; bottom: 1px; width: 10px; height: 10px; border-radius: 50%; background: var(--color-ok); box-shadow: 0 0 0 2px var(--color-paper); }
-.pop.wide { min-width: 340px; max-width: calc(100vw - 24px); }
+.pop.wide { min-width: 0; width: min(380px, calc(100vw - 24px)); }
+.pop .mi.note > span { min-width: 0; }
+.pop .note-list { max-height: min(420px, calc(100vh - 140px)); overflow-y: auto; overscroll-behavior: contain; }
+.pop .mi.note b { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; line-clamp: 2; overflow: hidden; overflow-wrap: anywhere; }
 .pop .mi.note { align-items: flex-start; padding-block: var(--space-xs); min-height: 0; }
 .pop .mi.note > span { display: flex; flex-direction: column; gap: var(--space-3xs); }
 .pop .mi.note b { font-weight: 500; font-size: var(--text-sm); }

@@ -211,8 +211,11 @@ export function Pop({ anchor, onClose, wide, children }: { anchor: RefObject<HTM
     return () => { document.removeEventListener('mousedown', down); document.removeEventListener('keydown', key); removeEventListener('resize', onClose); };
   }, [anchor, onClose]);
   if (!r) return null;
+  /* line the popover's right edge up with the button, but never let it run off the left of a narrow screen */
+  const width = wide ? Math.min(380, innerWidth - 24) : 280;
+  const right = Math.max(12, Math.min(innerWidth - r.right, innerWidth - 12 - width));
   return createPortal(
-    <div ref={box} className={`pop ${wide ? 'wide' : ''}`} role="menu" style={{ top: r.bottom + 10, right: Math.max(12, innerWidth - r.right) }}>{children}</div>,
+    <div ref={box} className={`pop ${wide ? 'wide' : ''}`} role="menu" style={{ top: r.bottom + 10, right }}>{children}</div>,
     document.body,
   );
 }

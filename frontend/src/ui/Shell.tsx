@@ -81,11 +81,12 @@ function NoteMenu({ close }: { close: () => void }) {
   return (
     <>
       <div className="ph">Notifications</div>
-      {n.length ? n.map((x) => (
-        <RLink key={x[2]} r={x[4]} className="mi note" role="menuitem" onClick={close}>
+      {/* a fixed-size list: each note is cut to two lines (the full text is in its tooltip) and the list scrolls */}
+      {n.length ? <div className="note-list">{n.map((x, i) => (
+        <RLink key={x[2] + i} r={x[4]} className="mi note" role="menuitem" onClick={close} title={x[2]}>
           <Icon name={x[0]} className={x[1]} /><span><b>{x[2]}</b><span className="muted xsmall">{x[3]}</span></span>
         </RLink>
-      )) : <p className="muted small" style={{ padding: '8px 12px' }}>Nothing yet.</p>}
+      ))}</div> : <p className="muted small" style={{ padding: '8px 12px' }}>Nothing yet.</p>}
     </>
   );
 }
