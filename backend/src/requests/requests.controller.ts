@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Headers, HttpCode, Param, Patch, Post, UseGua
 import { AuthGuard } from '../auth/auth.guard.js';
 import { CreateRequest } from './dto/CreateRequest.dto.js';
 import { CreateRequestBulk } from './dto/CreateRequestBulk.dto.js';
+import { ChatRequest } from './dto/ChatRequest.dto.js';
 import { EditRequest } from './dto/EditRequest.dto.js';
 import { RequestsService } from './requests.service.js';
 
@@ -14,6 +15,13 @@ export class RequestsController {
     @UseGuards(AuthGuard)
     createRequest(@Headers('authorization') auth: string, @Body(ValidationPipe) body: CreateRequest) {
         return this.requestsService.createRequest(auth, body);
+    }
+
+    @Post('v1/chat')
+    @HttpCode(200)
+    @UseGuards(AuthGuard)
+    chat(@Headers('authorization') auth: string, @Body(new ValidationPipe({ transform: true })) body: ChatRequest) {
+        return this.requestsService.chat(auth, body);
     }
 
     @Post('v1/bulk-create')

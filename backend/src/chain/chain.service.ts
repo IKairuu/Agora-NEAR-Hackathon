@@ -65,6 +65,14 @@ export const deadlineIn = (days: number, now = Date.now()): string => String(Big
 
 export const chainJobId = (job: { onchainId: bigint | null; ref: string }): string => job.onchainId?.toString() ?? job.ref;
 
+/** The contract reads job_id as a U64. A label like "J-21" means the job never made it on chain, and sending it only traps with 'unreachable'. */
+export const assertChainJobId = (method: string, args: Record<string, unknown>): void => {
+    const id = args.job_id;
+    if (id !== undefined && id !== null && !/^\d{1,19}$/.test(String(id))) {
+        throw new BadRequestException(`Job ${String(id)} is not on chain yet, so ${method} was not sent`);
+    }
+};
+
 export const chainBidId = (bid: { onchainId: bigint | null; id: string }): string => bid.onchainId?.toString() ?? bid.id;
 
 export const chainIdOf = (value: unknown): bigint | null => {
@@ -161,7 +169,10 @@ export class ChainService {
         if (!accountId) {
             throw new BadRequestException(`No account to sign ${method} as ${role}`);
         }
-        if (this.mode === 'real') return this.callReal(role, accountId, method, args, deposit);
+        if (this.mode === 'real') {
+            assertChainJobId(method, args);
+            return this.callReal(role, accountId, method, args, deposit);
+        }
         this.requireMock();
         this.counter += 1;
         const txHash = `mock-${method}-${this.counter}`;
@@ -171,6 +182,7 @@ export class ChainService {
     }
 
     async buildUnsignedTx(signerId: string, method: string, args: Record<string, unknown>, deposit = '0'): Promise<UnsignedTx> {
+        if (this.mode === 'real') assertChainJobId(method, args);
         const payload = JSON.stringify({ signer_id: signerId, receiver_id: this.contractId, method, args, deposit });
         return { unsigned_tx_base64: Buffer.from(payload).toString('base64') };
     }

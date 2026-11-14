@@ -208,8 +208,10 @@ export function Ask() {
      Live, it is the account's own job (liveJob), so the demo job never appears here after a real sign-in.
      In the demo, `extra` holds requests sent after New request while the demo job is still running. */
   const thread = s.live ? s.asked && (!!s.liveJob || s.pendingAsk) : s.asked;
-  const started = thread || (!s.live && s.extra.length > 0);
-  useEffect(() => { if (started) acScroll(); }, [started]);
+  /* live, the chat with the buyer agent comes first; the job, its tests and offers follow once it posts one */
+  const chatting = s.live && s.reqChat.length > 0;
+  const started = thread || chatting || (!s.live && s.extra.length > 0);
+  useEffect(() => { if (started) acScroll(); }, [started, s.reqChat.length]);
   const pick = (t: string) => { setState({ draft: t }); requestAnimationFrame(() => document.getElementById('ask-in')?.focus()); };
   const H = hb(s);
   /* One page: the welcome, the conversation and the services stay on the same screen. Submitting a request
@@ -220,7 +222,7 @@ export function Ask() {
         <div className="ask-head">
           <span className="muted">{s.stage >= 1 ? `${greeting()}, ${ME.name}` : 'No account needed to look around'}</span>
           <h1>{started ? 'New request' : 'What should we get built?'}</h1>
-          <p className="muted">{started ? 'Spec writer, buyer agent and fraud and lure agent are working on this job.' : 'Tell your agent in plain words. It writes the tests, collects offers and shows you the lowest first.'}</p>
+          <p className="muted">{started ? (thread ? 'Spec writer, buyer agent and fraud and lure agent are working on this job.' : 'Chat with your buyer agent. Once it knows the task and the GitHub repository, it posts the job.') : 'Tell your agent in plain words. It writes the tests, collects offers and shows you the lowest first.'}</p>
           {started && (
             <div className="ask-acts">
               <RLink r="jobs" className="btn sm ghost"><Icon name="job" />Job requests</RLink>
@@ -232,8 +234,11 @@ export function Ask() {
         </div>
         {started && (
           <div className="ac-log" id="aclog" aria-live="polite">
+            {chatting && s.reqChat.map((m) => (m.from === 'me'
+              ? <MeMsg key={m.id} text={m.text} />
+              : <AgentMsg key={m.id} who="Buyer agent" t={m.sending ? undefined : m.t}><p className={m.sending ? 'muted' : undefined}>{m.sending ? 'Thinking…' : m.text}</p></AgentMsg>))}
             {thread && <>
-            <MeMsg text={s.askText || JOB.plain} />
+            {!chatting && <MeMsg text={s.askText || JOB.plain} />}
             {s.pendingAsk
               ? <AgentMsg who="Spec writer"><p className="muted">Reading your request and creating the job…</p></AgentMsg>
               : s.live ? <LiveSpecMsg /> : <AgentMsg who="Spec writer" t={s.live ? undefined : '16:02'}><p>I read <span className="mono">{JOB.repo.split('/').pop()}</span> at <span className="mono">{JOB.base}</span>. Here are the tests a seller must make pass. Nothing is sent to anyone until you lock them.</p><SpecCard locked={s.stage >= 2} /></AgentMsg>}

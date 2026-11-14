@@ -39,6 +39,8 @@ export const DEMO_SELL_FORM: SellForm = {
   terms: '1 to 2 days, includes one extra edge-case test', addr: '0x8b1F…4e2C',
 };
 export interface FollowUp { id: string; text: string; t: string; sending: boolean; reply?: string; link?: boolean }
+/** Live: one message of the New request chat before a job exists (the agent answers like a normal assistant). */
+export interface ReqMsg { id: string; from: 'me' | 'agent'; text: string; t: string; sending?: boolean }
 export interface ChatMsg { from: 'agent' | 'them' | 'me' | 'held' | 'sys'; text: string }
 export type ModalKind =
   | 'signin' | 'wallets' | 'role' | 'fund' | 'send' | 'receive'
@@ -69,6 +71,8 @@ export interface State {
   pendingAsk: boolean;
   /** Live: messages sent after the first one, about the same job, and the agent's answer to each. */
   followUps: FollowUp[];
+  /** Live: the chat with the buyer agent until it has a task and a repository and posts the job. */
+  reqChat: ReqMsg[];
   /** Live: the followed job's spec, as stored by the spec writer. */
   liveSpec: LiveSpec;
   /** The seller profile editor's text fields, and whether a real account's saved profile was loaded into them. */
@@ -143,7 +147,7 @@ const initialState: State = {
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: saved?.user ?? null,
   live: false, liveJob: null, liveThreads: [], rerun: null, pay: null, notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null, walletErr: false, walletItems: [], limits: null,
-  modal: null, dataReady: false, restoring: !!saved?.user && authConfigured, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
+  modal: null, dataReady: false, restoring: !!saved?.user && authConfigured, pendingAsk: false, followUps: [], reqChat: [], liveSpec: { state: 'loading' },
   sellForm: DEMO_SELL_FORM, sellLoaded: false,
 };
 

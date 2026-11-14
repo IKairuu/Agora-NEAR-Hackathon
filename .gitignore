@@ -1,0 +1,5 @@
+
+# n8n API key (never commit)
+n8n-railway-api-key.txt
+n8n-apply.mjs
+n8n-backup/

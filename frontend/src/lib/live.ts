@@ -125,6 +125,7 @@ export async function goLive(opts: { keepMode?: boolean } = {}): Promise<void> {
   /* the account learns a mode kept from this device only if it differs (savedMode = what the server has) */
   savedMode = me.mode === 'sell' ? 'sell' : 'buy';
   setState((s) => ({ live: true, restoring: false, sellForm: { ...EMPTY_SELL_FORM, name: me.name }, sellLoaded: false, seller: me.seller, role: s.role ?? me.role, mode, orders: [], newJobs: [], extra: [], tLog: {}, chatLog: {} }));
+  restoreAsk();
   await Promise.allSettled([loadMarket(), loadSaved()]);
   await refreshAll(true);
   if (!timer) timer = setInterval(() => { void refreshAll(false); }, 8000);
@@ -229,6 +230,7 @@ export function leaveLive(): void {
   savedMode = null;
   agentsOn = null;
   if (timer) { clearInterval(timer); timer = null; }
+  askOwner = '';
   restoreDemo();
   setState({ restoring: false, sellForm: DEMO_SELL_FORM, sellLoaded: false, avatarImg: '' });
   setLiveOpenJobs(null);
@@ -416,7 +418,69 @@ const hhmm = () => { const d = new Date(); return String(d.getHours()).padStart(
  */
 export async function liveSend(text: string): Promise<boolean> {
   const s = getState();
-  return s.asked && s.liveJob ? liveFollowUp(text) : liveSubmitAsk(text);
+  return s.asked && s.liveJob ? liveFollowUp(text) : liveChat(text);
+}
+
+/* ---------------- New request chat, kept per account across pages and reloads ---------------- */
+type SavedAsk = Pick<State, 'reqChat' | 'asked' | 'askText' | 'followUps' | 'liveJob'>;
+const askKey = (userId: string) => `agora-ask:${userId}`;
+/** The account whose saved conversation is loaded; nothing is written before that, so a sign-in never wipes it. */
+let askOwner = '';
+let askRaw = '';
+function restoreAsk(): void {
+  const id = getState().user?.id ?? '';
+  if (!id) return;
+  let saved: Partial<SavedAsk> | null = null;
+  try { const raw = localStorage.getItem(askKey(id)); saved = raw ? (JSON.parse(raw) as Partial<SavedAsk>) : null; } catch { saved = null; }
+  if (saved && getState().tour < 0) {
+    setState({
+      reqChat: (saved.reqChat ?? []).filter((m) => !m.sending),
+      asked: !!saved.asked && !!saved.liveJob,
+      askText: saved.askText ?? '',
+      followUps: (saved.followUps ?? []).filter((f) => !f.sending),
+      liveJob: saved.liveJob ?? null,
+    });
+  }
+  askOwner = id;
+}
+subscribe(() => {
+  const s = getState();
+  if (!s.live || !askOwner || s.user?.id !== askOwner || s.tour >= 0) return;
+  const data: SavedAsk = { reqChat: s.reqChat.filter((m) => !m.sending), asked: s.asked, askText: s.askText, followUps: s.followUps.filter((f) => !f.sending), liveJob: s.liveJob };
+  const raw = JSON.stringify(data);
+  if (raw === askRaw) return;
+  askRaw = raw;
+  try { localStorage.setItem(askKey(askOwner), raw); } catch { /* storage full or blocked: the chat still works for this visit */ }
+});
+
+interface ChatReply { reply: string; ready: boolean; job: { id: string; ref: string; title: string; text: string; repo: string } | null }
+
+/**
+ * A message before any job exists. The buyer agent answers like a normal assistant ("hello" gets a hello back)
+ * and only posts a job once it has a task and a GitHub repository; then the spec writer takes over below.
+ */
+async function liveChat(text: string): Promise<boolean> {
+  const id = `m${Date.now()}`;
+  const history = getState().reqChat.filter((m) => !m.sending).map((m) => ({ role: m.from === 'me' ? 'user' : 'agent', text: m.text }));
+  setState((x) => ({ draft: '', reqChat: [...x.reqChat, { id, from: 'me', text, t: hhmm() }, { id: `${id}a`, from: 'agent', text: '', t: '', sending: true }] }));
+  let res: ChatReply;
+  try { res = await api<ChatReply>('/requests/v1/chat', { body: { messages: [...history, { role: 'user', text }] }, quiet: true }); }
+  catch (e) {
+    setState((x) => ({ draft: x.draft || text, reqChat: x.reqChat.filter((m) => m.id !== id && m.id !== `${id}a`) }));
+    toast(notSent(e), 'block', 6000);
+    return false;
+  }
+  setState((x) => ({ reqChat: x.reqChat.map((m) => (m.id === `${id}a` ? { ...m, text: res.reply, t: hhmm(), sending: false } : m)) }));
+  if (!res.job) return true;
+  const job = res.job;
+  Object.assign(JOB, { id: job.ref, title: job.title, repo: job.repo, base: 'main', cat: '', plain: job.text, posted: 'just now', specHash: '' });
+  JOB_BUDGET.label = '';
+  replace(SPEC, [['Tests are being written', 'The spec writer drafts failing tests from your repository', 'Pending']]);
+  replace(BIDS, []); replace(ARRIVE, []);
+  setState({ asked: true, askText: job.text, followUps: [], liveJob: { id: job.id, ref: job.ref }, pendingAsk: false, stage: 1, offerSt: '', preNeg: false, declined: [], bidsShown: 0, hire: '', liveSpec: { state: 'loading' } });
+  toast(`${job.ref} created.`);
+  await refreshAll(false);
+  return true;
 }
 
 /** First message: shows at once, then creates exactly one job and follows it. */
@@ -477,7 +541,7 @@ export async function liveRemoveJob(ref: string, kind: 'delete' | 'cancel'): Pro
   REMOVAL[ref] = null;
   if (getState().liveJob?.ref === ref) {
     Object.assign(JOB, { id: '', title: '', repo: '', base: '', cat: '', plain: '', posted: '', specHash: '' });
-    setState({ liveJob: null, asked: false, askText: '', pendingAsk: false, followUps: [], liveSpec: { state: 'loading' }, stage: 1, offerSt: '', preNeg: false, declined: [], bidsShown: 0, hire: '' });
+    setState({ liveJob: null, asked: false, askText: '', pendingAsk: false, followUps: [], reqChat: [], liveSpec: { state: 'loading' }, stage: 1, offerSt: '', preNeg: false, declined: [], bidsShown: 0, hire: '' });
   }
   toast(kind === 'delete' ? `Draft ${ref} deleted.` : `${ref} cancelled. It is no longer on Open jobs and stays in your history.`);
   await refreshAll(false);
@@ -518,7 +582,7 @@ export async function liveKeepWait(): Promise<void> {
 
 /** Stops following the current request so the New request page starts empty. The request stays in Job requests. */
 export function liveLeaveAsk(): void {
-  setState({ liveJob: null, asked: false, askText: '', stage: 1, offerSt: '', bidsShown: 0, draft: '' });
+  setState({ liveJob: null, asked: false, askText: '', followUps: [], reqChat: [], stage: 1, offerSt: '', bidsShown: 0, draft: '' });
   replace(BIDS, []); replace(ARRIVE, []);
   void refreshAll(false);
 }
