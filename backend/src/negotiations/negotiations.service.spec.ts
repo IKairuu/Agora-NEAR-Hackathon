@@ -38,6 +38,7 @@ describe('NegotiationsService', () => {
         repo = {
             getBidContext: jest.fn(), createNegotiation: jest.fn().mockResolvedValue({ id: 'm1' }), getNegotiations: jest.fn(),
             getOpenOffer: jest.fn(), createOffer: jest.fn(), getOffer: jest.fn(), getJobOffer: jest.fn(), acceptOffer: jest.fn(), declineOffer: jest.fn(), setBuyerAccounts: jest.fn(),
+            openHireThread: jest.fn().mockResolvedValue('t1'), notify: jest.fn().mockResolvedValue(undefined), getAcceptedOffer: jest.fn(),
             getAcceptTerms: jest.fn().mockResolvedValue({ bid: { id: BID, onchainId: null, deliveryDays: 2 }, spec: { specHash: 'ab'.repeat(32), holdoutHash: null } }),
         } as unknown as jest.Mocked<NegotiationsRepository>;
         chain = {
@@ -119,15 +120,23 @@ describe('NegotiationsService', () => {
         expect(chain.callAs.mock.calls[1]).toEqual(['transaction_agent', 'agents.agora-buyer.testnet', 'fund_job', { job_id: '7' }]);
     });
 
-    it('skips funding when accept_offer is refused and keeps the accept', async () => {
+    it('leaves the offer open when accept_offer is refused', async () => {
         caller = SELLER_USER;
         repo.getOffer.mockResolvedValue(offer());
         repo.acceptOffer.mockResolvedValue(1);
         chain.callAs.mockRejectedValueOnce(new Error('Contract refused accept_offer: Price must be positive and not above the bid'));
-        await expect(service.acceptOffer('Bearer t', OFFER)).resolves.toMatchObject({
-            offerSt: 'accepted', accepted: false, funded: false, fundError: 'Contract refused accept_offer: Price must be positive and not above the bid',
-        });
+        await expect(service.acceptOffer('Bearer t', OFFER)).rejects.toThrow('NEAR did not take the hire offer');
+        expect(repo.acceptOffer).not.toHaveBeenCalled();
         expect(chain.callAs.mock.calls).toHaveLength(1);
+    });
+
+    it('opens the chat and tells the buyer when the seller accepts', async () => {
+        caller = SELLER_USER;
+        repo.getOffer.mockResolvedValue(offer());
+        repo.acceptOffer.mockResolvedValue(1);
+        await service.acceptOffer('Bearer t', OFFER);
+        expect(repo.openHireThread).toHaveBeenCalled();
+        expect(repo.notify).toHaveBeenCalled();
     });
 
     it('keeps the accept when funding is refused', async () => {

@@ -4,7 +4,7 @@ import { act, hire, isUnread, markSeen, openRequest, scrollMsgs, sendChat, sendT
 import { getState, hb, hPrice, priceOf, setState, useApp, type ChatMsg, type State } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
 import { Face, Gate, Head, Lifecycle, Mk, RemoveJobButton, RLink, SignInButton, T, Tl } from '../ui/parts';
-import { livePay, liveRerun, removalFor } from '../lib/live';
+import { livePay, liveProtectPayment, liveRerun, removalFor } from '../lib/live';
 import { Shell } from '../ui/Shell';
 import { OrderAction } from './orders';
 
@@ -99,7 +99,7 @@ export function Job() {
         sub={<>{JOB.cat}, posted {JOB.posted}, spec <span className="mono">{JOB.specHash}</span></>}
         actions={<>
           <RemoveJobButton id={JOB.id} title={JOB.title} kind={s.live ? removalFor(JOB.id) : null} sm={false} />
-          {accepted ? <RLink r="room" className="btn primary"><Icon name="lock" />Protected payment</RLink> : s.offerSt ? <RLink r="chat" className="btn primary"><Icon name="chat" />Chat room</RLink> : null}
+          {accepted ? <RLink r="room" className="btn primary"><Icon name="lock" />Protected payment</RLink> : s.live && s.offerSt === 'accepted' ? <button className="btn primary" onClick={() => void liveProtectPayment()}><Icon name="lock" />Protect payment</button> : s.offerSt ? <RLink r="chat" className="btn primary"><Icon name="chat" />Chat room</RLink> : null}
         </>}
       />
       <Lifecycle />
@@ -200,6 +200,12 @@ function hireItems(s: State, demo: boolean): ChatItem[] {
         <p className="muted xsmall">Held in USDC escrow by the contract. It pays {b.name} when 2 of 3 reviewers pass the tests.</p>
       </>,
     });
+  } else if (!demo && s.offerSt === 'accepted') {
+    out.push({ kind: 'card', key: 'acc', icon: 'check', k: 'ok', title: `${b.name} accepted the offer`, t: '', body: <p className="muted small">The contract recorded the hire on NEAR. Your payment is not protected yet.</p> });
+    out.push({
+      kind: 'agent', key: 'fund', text: `${b.name} accepted at ${amt} USDC. Protect the payment so the work can start. Your transaction agent moves it into escrow after your spending limits are checked.`,
+      acts: <button className="btn sm primary" onClick={() => void liveProtectPayment()}><Icon name="lock" />Protect payment</button>,
+    });
   } else if (s.offerSt === 'declined') {
     const nx = nextOffer(s);
     out.push({ kind: 'card', key: 'dec', icon: 'x', k: 'block', title: `${b.name} declined`, t: at('16:12'), body: <p className="muted small">Nothing was locked.</p> });
@@ -221,7 +227,7 @@ function hireItems(s: State, demo: boolean): ChatItem[] {
 
 /** Status of the followed job's hire, the same words in the demo and with real data. */
 const hireStatus = (s: State): [string, string] =>
-  s.stage >= 7 ? ['ok', 'Paid'] : s.stage >= 5 ? ['acc', 'Payment protected'] : s.offerSt === 'declined' ? ['block', 'Declined'] : ['hold', 'Waiting on seller'];
+  s.stage >= 7 ? ['ok', 'Paid'] : s.stage >= 5 ? ['acc', 'Payment protected'] : s.offerSt === 'accepted' ? ['hold', 'Accepted, protect the payment'] : s.offerSt === 'declined' ? ['block', 'Declined'] : ['hold', 'Waiting on seller'];
 
 /** The thread as the one chat view draws it, from demo data or from the backend. */
 function chatModel(s: State, cur: Thread): ChatModel {

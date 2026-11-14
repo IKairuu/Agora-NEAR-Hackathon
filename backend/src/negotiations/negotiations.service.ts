@@ -117,52 +117,86 @@ export class NegotiationsService {
         return toOfferView(row);
     }
 
+    /**
+     * The seller accepts the buyer's hire offer. On a real chain the contract takes the offer first (accept_offer, signed
+     * by the buyer's agents key): if it refuses, nothing changes here and the seller sees why. Then the job is agreed,
+     * buyer and seller get their conversation, the buyer is told, and the buyer's agent funds the escrow (fund_job).
+     * If funding fails the buyer is told why and can retry it with Protect payment.
+     */
     async acceptOffer(token: string, id: string) {
         const authId = await this.authId(token);
         const offer = await this.sellerOffer(authId, id);
         if (!NEGOTIABLE_JOB.includes(offer.job.status)) throw new BadRequestException('This job already has a seller');
-        const count = await this.negotiationsRepository.acceptOffer(authId, offer);
-        if (count === 0) throw new ConflictException('This hire offer was already answered');
-        const funding = await this.fundJob(offer);
-        return { message: 'Hire Offer Successfully Accepted', id, offerSt: 'accepted', ...funding };
-    }
-
-    private async fundJob(offer: OfferRow): Promise<ChainAccept> {
         let agents: string;
-        try {
-            agents = await this.buyerAgents(offer);
-        } catch (e) {
-            const error = e instanceof Error ? e.message : 'Funding failed';
-            return { accepted: false, acceptTx: null, acceptError: error, funded: false, fundTx: null, fundError: error };
-        }
-        const jobId = chainJobId(offer.job);
         let acceptTx: string;
         try {
-            const terms = await this.negotiationsRepository.getAcceptTerms(offer.jobId, offer.bidId);
-            if (!terms.bid) throw new BadRequestException('The hire offer has no bid');
-            if (terms.bid.onchainId === null && !this.chainService.isMock()) {
-                throw new BadRequestException('This offer never reached NEAR, so it cannot be accepted. The seller should withdraw it and bid again');
-            }
-            if (!terms.spec?.specHash) throw new BadRequestException('The job has no locked spec');
-            const tx = await this.chainService.callAs('transaction_agent', agents, 'accept_offer', {
-                job_id: jobId,
-                bid_id: chainBidId(terms.bid),
-                price: usdcUnits(offer.price),
-                spec_hash: terms.spec.specHash,
-                holdout_hash: terms.spec.holdoutHash || NO_HOLDOUT,
-                attempts: ACCEPT_ATTEMPTS,
-                deadline: deadlineIn((terms.bid.deliveryDays ?? 7) + ACCEPT_GRACE_DAYS),
-            });
-            acceptTx = tx.tx_hash;
+            agents = await this.buyerAgents(offer);
+            acceptTx = await this.chainAccept(offer, agents);
         } catch (e) {
-            const error = e instanceof Error ? e.message : 'Accepting on chain failed';
-            return { accepted: false, acceptTx: null, acceptError: error, funded: false, fundTx: null, fundError: error };
+            throw new BadRequestException(`NEAR did not take the hire offer, so nothing changed: ${e instanceof Error ? e.message : 'accept_offer failed'}`);
         }
+        const count = await this.negotiationsRepository.acceptOffer(authId, offer);
+        if (count === 0) throw new ConflictException('This hire offer was already answered');
+        const price = `${Number(offer.price).toFixed(2)} USDC`;
+        await this.negotiationsRepository.openHireThread(offer).catch(() => null);
+        await this.negotiationsRepository.notify(offer.job.buyerId, `${offer.seller.displayName} accepted your hire offer on ${offer.job.ref}`, `${price}. Your agent is protecting the payment now.`, `/job?id=${offer.job.ref}`).catch(() => null);
+        const funding = await this.chainFund(offer, agents);
+        if (!funding.funded) {
+            await this.negotiationsRepository.notify(offer.job.buyerId, `Protect the payment for ${offer.job.ref}`, `Your agent could not fund ${price}: ${funding.fundError}. Open the job and press Protect payment to try again.`, `/job?id=${offer.job.ref}`).catch(() => null);
+        }
+        return { message: 'Hire Offer Successfully Accepted', id, offerSt: 'accepted', accepted: true, acceptTx, acceptError: null, ...funding };
+    }
+
+    /**
+     * Protect payment, by the buyer: funds an agreed job whose funding failed when the seller accepted.
+     * Runs accept_offer first if the contract does not have the offer yet.
+     */
+    async fundAgreed(token: string, ref: string) {
+        const authId = await this.authId(token);
+        if (!/^J-\d+$/.test(ref ?? '')) throw new BadRequestException('Job id is not valid');
+        const offer = await this.negotiationsRepository.getAcceptedOffer(authId, ref);
+        if (!offer) throw new NotFoundException('No accepted hire offer on this job');
+        if (offer.job.status !== 'agreed') throw new BadRequestException(offer.job.status === 'funded' ? 'The payment is already protected' : 'This job is not waiting for payment');
+        const agents = await this.buyerAgents(offer);
+        if (!this.chainService.isMock()) {
+            const onChain = await this.chainService.view<{ stage?: string } | null>('get_job', { job_id: chainJobId(offer.job) }).catch(() => null);
+            if (!onChain) throw new BadRequestException(`${ref} is not on NEAR, so it cannot be funded`);
+            if (onChain.stage === 'Open') {
+                try { await this.chainAccept(offer, agents); } catch (e) { throw new BadRequestException(`accept_offer failed: ${e instanceof Error ? e.message : 'unknown error'}`); }
+            }
+        }
+        const funding = await this.chainFund(offer, agents);
+        if (!funding.funded) throw new BadRequestException(`Funding failed: ${funding.fundError}`);
+        return { message: 'Payment protected', ref, fundTx: funding.fundTx };
+    }
+
+    /** accept_offer on the contract, signed by the buyer's agents key. Throws with the contract's reason. */
+    private async chainAccept(offer: OfferRow, agents: string): Promise<string> {
+        const terms = await this.negotiationsRepository.getAcceptTerms(offer.jobId, offer.bidId);
+        if (!terms.bid) throw new BadRequestException('The hire offer has no bid');
+        if (terms.bid.onchainId === null && !this.chainService.isMock()) {
+            throw new BadRequestException('This offer never reached NEAR, so it cannot be accepted. The seller should withdraw it and bid again');
+        }
+        if (!terms.spec?.specHash) throw new BadRequestException('The job has no locked spec');
+        const tx = await this.chainService.callAs('transaction_agent', agents, 'accept_offer', {
+            job_id: chainJobId(offer.job),
+            bid_id: chainBidId(terms.bid),
+            price: usdcUnits(offer.price),
+            spec_hash: terms.spec.specHash,
+            holdout_hash: terms.spec.holdoutHash || NO_HOLDOUT,
+            attempts: ACCEPT_ATTEMPTS,
+            deadline: deadlineIn((terms.bid.deliveryDays ?? 7) + ACCEPT_GRACE_DAYS),
+        });
+        return tx.tx_hash;
+    }
+
+    /** fund_job, signed by the buyer's agents key. Never throws: the result says whether the escrow is funded. */
+    private async chainFund(offer: OfferRow, agents: string): Promise<Pick<ChainAccept, 'funded' | 'fundTx' | 'fundError'>> {
         try {
-            const tx = await this.chainService.callAs('transaction_agent', agents, 'fund_job', { job_id: jobId });
-            return { accepted: true, acceptTx, acceptError: null, funded: true, fundTx: tx.tx_hash, fundError: null };
+            const tx = await this.chainService.callAs('transaction_agent', agents, 'fund_job', { job_id: chainJobId(offer.job) });
+            return { funded: true, fundTx: tx.tx_hash, fundError: null };
         } catch (e) {
-            return { accepted: true, acceptTx, acceptError: null, funded: false, fundTx: null, fundError: e instanceof Error ? e.message : 'Funding failed' };
+            return { funded: false, fundTx: null, fundError: e instanceof Error ? e.message : 'Funding failed' };
         }
     }
 

@@ -694,7 +694,17 @@ export async function liveOrderAccept(id: string): Promise<void> {
   const res = await api<{ funded?: boolean; fundError?: string | null }>(`/negotiations/v1/${o.hireOfferId}/accept`, { body: {} }).catch(() => null);
   if (!res) return;
   if (res.funded) toast(`${id} accepted. The buyer's agent called fund_job, so the payment is being protected.`);
-  else toast(`${id} accepted, but funding did not go through${res.fundError ? `: ${res.fundError}` : ''}.`, 'hold');
+  else toast(`${id} accepted. The buyer was told to protect the payment${res.fundError ? ` (funding said: ${res.fundError})` : ''}.`, 'hold');
+  await refreshAll(false);
+}
+
+/** The buyer protects the payment for an accepted hire whose funding did not go through. */
+export async function liveProtectPayment(): Promise<void> {
+  const ref = getState().liveJob?.ref;
+  if (!ref) return;
+  const res = await api<{ fundTx?: string }>('/negotiations/v1/fund', { body: { job: ref } }).catch(() => null);
+  if (!res) return;
+  toast(`Payment protected for ${ref}. The seller can start the work.`);
   await refreshAll(false);
 }
 

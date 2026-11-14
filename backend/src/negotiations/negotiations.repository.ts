@@ -23,7 +23,7 @@ const offerSelect = {
     bidId: true,
     jobId: true,
     createdAt: true,
-    job: { select: { id: true, ref: true, buyerId: true, status: true, onchainId: true, buyer: { select: { nearAccountId: true, agentsAccountId: true } } } },
+    job: { select: { id: true, ref: true, title: true, buyerId: true, status: true, onchainId: true, buyer: { select: { nearAccountId: true, agentsAccountId: true } } } },
     seller: { select: { id: true, ownerId: true, displayName: true } },
 } satisfies Prisma.HireOfferSelect;
 
@@ -83,6 +83,26 @@ export class NegotiationsRepository {
             orderBy: { createdAt: 'desc' },
             select: offerSelect,
         });
+    }
+
+    /** The accepted hire offer on one of the buyer's jobs, for a funding retry. */
+    async getAcceptedOffer(userId: string, ref: string) {
+        return prisma.hireOffer.findFirst({ where: { status: 'accepted', job: { ref, buyerId: userId } }, select: offerSelect, orderBy: { createdAt: 'desc' } });
+    }
+
+    /** Buyer and seller get their conversation as soon as the seller accepts (fundJob reuses it once the payment is protected). */
+    async openHireThread(offer: OfferRow) {
+        return prisma.$transaction(async (tx) => {
+            const existing = await tx.thread.findFirst({ where: { jobId: offer.jobId, buyerId: offer.job.buyerId, sellerId: offer.seller.id }, select: { id: true } });
+            if (existing) return existing.id;
+            const thread = await tx.thread.create({ data: { jobId: offer.jobId, buyerId: offer.job.buyerId, sellerId: offer.seller.id, title: offer.job.title, lastMessageAt: new Date() }, select: { id: true } });
+            await tx.message.create({ data: { threadId: thread.id, sender: 'system', body: `${offer.seller.displayName} accepted the hire offer for ${offer.job.ref} at ${Number(offer.price).toFixed(2)} USDC. Use this conversation to talk about the work.` } });
+            return thread.id;
+        });
+    }
+
+    async notify(userId: string, title: string, body: string, link: string) {
+        await prisma.notification.create({ data: { userId, kind: 'offer', title, body, link } });
     }
 
     async acceptOffer(userId: string, offer: OfferRow) {
