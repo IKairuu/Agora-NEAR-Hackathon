@@ -7,11 +7,13 @@ import { SellerLock, Shell } from '../ui/Shell';
 
 /** The action buttons for an order at its current stage. Shared with the Messages job strip. */
 export function OrderAction({ o, full = true }: { o: Order; full?: boolean }) {
+  const { live } = useApp();
   const hireOffer = !!(o as Order & { hireOfferId?: string }).hireOfferId;
   if (o.st === 0 && hireOffer) return <><button className="btn sm primary" onClick={() => orderAct.accept(o.id)}>Accept</button>{full && <button className="btn sm ghost" onClick={() => orderAct.decline(o.id)}>Decline</button>}</>;
   if (o.st === 0) return <><button className="btn sm primary" onClick={() => orderAct.offer(o.id)}>Send offer</button>{full && <button className="btn sm ghost" onClick={() => orderAct.decline(o.id)}>Decline</button>}</>;
   if (!full) return o.st === 2 ? <button className="btn sm primary" onClick={() => orderAct.deliver(o.id)}>Submit delivery</button> : <RLink r="orders" className="btn sm">View order</RLink>;
-  if (o.st === 1) return <button className="btn sm ghost" onClick={() => orderAct.accept(o.id)} title="Prototype only: plays the buyer's side">Buyer accepts, demo</button>;
+  /* live: the buyer's side protects the payment; the demo button only plays that side in the prototype */
+  if (o.st === 1) return live ? <span className="muted xsmall">Waiting for the buyer to protect the payment</span> : <button className="btn sm ghost" onClick={() => orderAct.accept(o.id)} title="Prototype only: plays the buyer's side">Buyer accepts, demo</button>;
   if (o.st === 2) return <button className="btn sm primary" onClick={() => orderAct.deliver(o.id)}>Submit delivery</button>;
   if (o.st === 3) return <span className="muted xsmall">Payment releases at 2 of 3</span>;
   return <RLink r="wallet" className="btn sm ghost">Receipt</RLink>;

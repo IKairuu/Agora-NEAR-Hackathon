@@ -2,8 +2,8 @@ import { useCallback, useEffect, useRef, useState, type ReactNode, type RefObjec
 import { createPortal } from 'react-dom';
 import { Link, type LinkProps } from 'react-router';
 import { agentPick, dirKey, GIGS, LIFE, ME, OTHER_JOBS, sellerBy, usd, type Gig, type OtherJob } from '../data/data';
-import { act, pathOf } from '../store/actions';
-import { fetchReputation, type ReputationView } from '../lib/live';
+import { act, go, pathOf } from '../store/actions';
+import { fetchReputation, liveOpenJob, type ReputationView } from '../lib/live';
 import { getState, hb, hPrice, openModal, useApp, type State } from '../store/store';
 import { Icon, type IconName } from './icons';
 
@@ -136,10 +136,14 @@ export function PastJob({ id, t, who, amt }: { id: string; t: string; who: strin
 
 export function OtherJobCard({ j }: { j: OtherJob }) {
   return (
-    <button className="job-card as-btn" onClick={() => openModal('ojob', { id: j.id })}>
+    <button className="job-card as-btn" onClick={() => {
+      /* live: the account's job still being specified or collecting offers opens in the New request chat */
+      if (getState().live && (j.grp === 'offers' || j.grp === 'waiting')) { void liveOpenJob(j.id); go('ask'); return; }
+      openModal('ojob', { id: j.id });
+    }}>
       <div className="row"><span className={`pill ${j.status[0]}`}>{j.status[1]}</span><span className="mono muted xsmall">{j.id}</span>{j.who && <span className="muted xsmall">{j.who}</span>}</div>
       <h3>{j.title}</h3>
-      <div className="meta"><span>{j.cat}</span><span>Budget {j.budget} USDC</span><span>{j.note}</span></div>
+      <div className="meta"><span>{j.cat}</span><span>{j.budget ? `Budget ${j.budget.replace(/\s*USDC$/i, '')} USDC` : 'No budget set'}</span><span>{j.note}</span></div>
     </button>
   );
 }

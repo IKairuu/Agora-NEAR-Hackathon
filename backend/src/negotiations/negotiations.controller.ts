@@ -44,6 +44,14 @@ export class NegotiationsController {
         return this.negotiationsService.getOffer(auth, job);
     }
 
+    /** Protect payment: the buyer funds an agreed job whose funding failed when the seller accepted. Body: { job: 'J-123' }. */
+    @Post('v1/fund')
+    @HttpCode(200)
+    @UseGuards(AuthGuard)
+    fundAgreed(@Headers('authorization') auth: string, @Body() body: { job?: string }) {
+        return this.negotiationsService.fundAgreed(auth, String(body?.job ?? ''));
+    }
+
     @Post('v1/:id/accept')
     @HttpCode(200)
     @UseGuards(AuthGuard)
