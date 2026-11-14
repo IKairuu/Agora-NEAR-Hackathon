@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { DONE_JOBS, gigBy, ME, OTHER_JOBS, ROLES, usd, VIA } from '../data/data';
 import { act, go, orderAct, TOUR } from '../store/actions';
-import { currentRepo, liveAttachRepo, liveDeliver, liveLinkWallet, liveRemoveJob, liveWalletMove, liveWalletSendUsdc, loadWalletBalances } from '../lib/live';
+import { currentRepo, liveAttachRepo, liveDeliver, liveLinkWallet, liveMockMove, liveRemoveJob, liveWalletMove, liveWalletSendUsdc, loadWalletBalances, walletMode } from '../lib/live';
 import { connectedAccount, disconnectWallet, NEAR_NETWORK, pickWallet, proveOwnership, proveSignIn } from '../lib/near';
 import { closeModal, free, hPrice, setState, toast, useApp, useToasts } from '../store/store';
 import { authConfigured } from '../lib/supabase';
@@ -164,11 +164,11 @@ function LinkWallet({ onDone, back, signIn = false }: { onDone: () => void; back
       {acct ? (
         <>
           <div className="banner"><Icon name="wallet" /><div className="grow"><b className="mono" style={{ fontWeight: 500 }}>{acct}</b><span className="muted small">Sign a short message to prove this account is yours. It is not a transaction and costs nothing.</span></div></div>
-          <button className="btn primary wide" disabled={!!busy} aria-busy={busy === 'sign'} onClick={() => void link()}>{busy === 'sign' ? 'Waiting for your wallet…' : signIn ? 'Sign and sign in' : 'Sign and link'}</button>
-          <button className="lk" disabled={!!busy} onClick={() => void other()}>Use another wallet</button>
+          <button className="btn primary wide" disabled={!!busy} aria-busy={busy === 'sign'} onClick={() => void link()}>{busy === 'sign' && <span className="spin" aria-hidden="true" />}{busy === 'sign' ? 'Waiting for your wallet…' : signIn ? 'Sign and sign in' : 'Sign and link'}</button>
+          <button className="btn wide" disabled={!!busy} aria-busy={busy === 'pick'} onClick={() => void other()}>{busy === 'pick' ? <span className="spin" aria-hidden="true" /> : <Icon name="wallet" />}{busy === 'pick' ? 'Waiting for your wallet…' : 'Use another wallet'}</button>
         </>
       ) : (
-        <button className="btn primary wide" disabled={!!busy} aria-busy={busy === 'pick'} onClick={() => void pick()}><Icon name="wallet" />{busy === 'load' ? 'Loading wallets…' : busy === 'pick' ? 'Waiting for your wallet…' : 'Choose a wallet'}</button>
+        <button className="btn primary wide" disabled={!!busy} aria-busy={!!busy} onClick={() => void pick()}>{busy ? <span className="spin" aria-hidden="true" /> : <Icon name="wallet" />}{busy === 'load' ? 'Loading wallets…' : busy === 'pick' ? 'Waiting for your wallet…' : 'Choose a wallet'}</button>
       )}
       {err && <p className="small" role="alert" style={{ color: 'var(--block, #c0392b)' }}>{err}</p>}
       <div className="acts"><button className="btn" onClick={back}>Back</button></div>
@@ -206,26 +206,41 @@ function WalletLine() {
   return <span className="hint">In your NEAR wallet: {walletBal.usdc === null ? 'USDC token not set' : `${usd(walletBal.usdc)} USDC`}, {walletBal.near.toFixed(2)} NEAR for gas</span>;
 }
 
-/** Real chain mode: Add funds (ft_transfer_call from the wallet) or Withdraw (contract back to the wallet), signed in the wallet. */
+/**
+ * Add funds or Withdraw. Real chain mode: signed in the user's wallet (ft_transfer_call in, withdraw out).
+ * Mock mode: test USDC through the API. Either way the dialog shows progress, closes when it worked,
+ * and stays open with the reason when it didn't.
+ */
 function WalletMove({ op }: { op: 'deposit' | 'withdraw' }) {
   const s = useApp();
-  const [amt, setAmt] = useState('10.00');
+  const real = walletMode();
+  const [amt, setAmt] = useState(op === 'deposit' && !real ? '100.00' : '10.00');
   const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
   const go = async () => {
     const n = amountIn(amt);
-    if (!n) { toast('Enter an amount above 0.', 'hold'); return; }
-    if (op === 'withdraw' && n > free(s)) { toast(`You have ${usd(free(s))} USDC free to withdraw.`, 'hold'); return; }
+    setErr('');
+    if (!n) { setErr('Enter an amount above 0.'); return; }
+    if (op === 'withdraw' && n > free(s)) { setErr(`You have ${usd(free(s))} USDC free to withdraw.`); return; }
     setBusy(true);
-    if (await liveWalletMove(op, n)) closeModal(); else setBusy(false);
+    if (real) { if (await liveWalletMove(op, n)) { closeModal(); return; } setBusy(false); return; }
+    const fail = await liveMockMove(op, n);
+    if (!fail) { closeModal(); return; }
+    setErr(fail); setBusy(false);
   };
+  const label = busy ? (real ? 'Waiting for your wallet…' : op === 'deposit' ? 'Adding funds…' : 'Withdrawing…')
+    : real ? 'Confirm in your wallet' : op === 'deposit' ? 'Add funds' : 'Withdraw';
   return (
     <Frame>
-      <h2>{op === 'deposit' ? 'Add funds from your wallet' : 'Withdraw to your wallet'}</h2>
-      <p className="muted">{op === 'deposit' ? 'Moves USDC from your NEAR wallet into your AGORA balance with ft_transfer_call. Your agents can spend it only inside your limits.' : 'Sends free USDC from your AGORA balance back to your NEAR wallet. Money locked in Protected payment stays put.'}</p>
-      <div className="field"><label htmlFor="wm-amt">Amount (USDC)</label><input className="input num" id="wm-amt" inputMode="decimal" value={amt} onChange={(e) => setAmt(e.target.value)} />
-        {op === 'deposit' ? <WalletLine /> : <span className="hint">{usd(free(s))} USDC free in AGORA</span>}</div>
-      <div className="banner hold"><Icon name="lock" /><div className="grow"><span>Your wallet opens to confirm. It needs your full-access key, so agent keys can never do this.</span></div></div>
-      <div className="acts"><Cancel /><button className="btn primary" disabled={busy} aria-busy={busy} onClick={() => void go()}>{busy ? 'Waiting for your wallet…' : 'Confirm in your wallet'}</button></div>
+      <h2>{op === 'deposit' ? (real ? 'Add funds from your wallet' : 'Add test funds') : (real ? 'Withdraw to your wallet' : 'Withdraw test funds')}</h2>
+      <p className="muted">{op === 'deposit'
+        ? (real ? 'Moves USDC from your NEAR wallet into your AGORA balance with ft_transfer_call. Your agents can spend it only inside your limits.' : 'Adds test USDC to your AGORA balance. The server runs in mock mode, so nothing moves on chain.')
+        : (real ? 'Sends free USDC from your AGORA balance back to your NEAR wallet. Money locked in Protected payment stays put.' : 'Takes test USDC out of your AGORA balance. Money locked in Protected payment stays put.')}</p>
+      <div className="field"><label htmlFor="wm-amt">Amount (USDC)</label><input className="input num" id="wm-amt" inputMode="decimal" value={amt} disabled={busy} onChange={(e) => { setAmt(e.target.value); setErr(''); }} onKeyDown={(e) => { if (e.key === 'Enter' && !busy) void go(); }} />
+        {op === 'deposit' ? (real ? <WalletLine /> : null) : <span className="hint">{usd(free(s))} USDC free in AGORA</span>}</div>
+      {real && <div className="banner hold"><Icon name="lock" /><div className="grow"><span>Your wallet opens to confirm. It needs your full-access key, so agent keys can never do this.</span></div></div>}
+      {err && <p className="small" role="alert" style={{ color: 'var(--block, #c0392b)' }}>{err}</p>}
+      <div className="acts"><Cancel /><button className="btn primary" disabled={busy} aria-busy={busy} onClick={() => void go()}>{busy && <span className="spin" aria-hidden="true" />}{label}</button></div>
     </Frame>
   );
 }
