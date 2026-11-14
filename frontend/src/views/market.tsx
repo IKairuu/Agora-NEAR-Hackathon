@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
 import { CATS, COUNTRIES, DAO_COUNCIL, gigBy, GIGS, ME, O_ST, PAYOUTS, SELL_STEPS, sellerDir, SETTLED, SKILLS, usd } from '../data/data';
-import { act, newRequest } from '../store/actions';
+import { act, go, newRequest } from '../store/actions';
 import { isLive, justPublished, liveSavePhoto, liveDisputeNext, liveLoadDispute, liveLoadSellProfile, liveSaveSellStep, liveSellerProfile, type DisputeView, type SellerProfileView } from '../lib/live';
 import { getState, hb, hPrice, sellerLocked, setState, toast, useApp, type SellForm, type State } from '../store/store';
 import { Icon, Tile, type IconName } from '../ui/icons';
@@ -251,15 +251,22 @@ export function Sell() {
   const s = useApp();
   /* a real account's saved profile goes into the form once per session, also when the editor is opened directly */
   useEffect(() => { if (s.live && !s.sellLoaded) void liveLoadSellProfile(); }, [s.live, s.sellLoaded]);
+  /* a seller never sees the welcome page: opening the editor starts on the first step */
+  useEffect(() => { if (s.seller && s.sellStep === 0) setState({ sellStep: 1 }); }, [s.seller, s.sellStep]);
   const f = s.sellForm;
   const field = (k: keyof SellForm) => ({ value: f[k], onChange: (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { const v = e.target.value; setState((st) => ({ sellForm: { ...st.sellForm, [k]: v } })); } });
   const eg = (t: string) => (s.live ? `e.g. ${t}` : t);
   if (s.stage < 1) return <Shell cur="sell"><Head title="Become a seller" /><Gate msg="Sign in to become a seller"><SignInButton /></Gate></Shell>;
-  if (s.sellStep === 0) return <Shell cur="sell"><SellLanding /></Shell>;
-  const st = s.sellStep, agent = s.sellCoder === 'agent';
+  /* the welcome page is for new sellers; someone who already sells goes straight to editing their profile */
+  if (s.sellStep === 0 && !s.seller) return <Shell cur="sell"><SellLanding /></Shell>;
+  const st = Math.max(1, s.sellStep), agent = s.sellCoder === 'agent';
+  /* Back from the first step: a seller returns to their dashboard (saving what they typed), a new seller to the welcome page */
+  const back = st === 1 && s.seller
+    ? () => { if (isLive()) liveSaveSellStep(1); setState({ sellStep: 0 }); go('seller'); }
+    : () => goStep(st - 1);
   const nav = (next: boolean, label = 'Continue') => (
     <div className="row" style={{ justifyContent: 'space-between', paddingTop: 8 }}>
-      <button className="btn" onClick={() => goStep(st - 1)}>Back</button>
+      <button className="btn" onClick={back}>{st === 1 && s.seller ? 'Back to dashboard' : 'Back'}</button>
       <button className="btn primary" onClick={next ? () => goStep(st + 1) : act.publishseller}>{label}</button>
     </div>
   );
