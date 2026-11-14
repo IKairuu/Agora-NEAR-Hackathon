@@ -308,7 +308,7 @@ function allJobs(s: State) {
   const d = demoJob(s);
   const nj = s.newJobs.map((j): JobView => ({ at: j.posted ? 1 : 0, grp: j.posted ? 'offers' : 'waiting', due: 'Due in 3 days', ev: [['Now', 'Buyer agent', j.note || '']], ...j }));
   const on = [...(d && d.grp !== 'done' ? [d] : []), ...nj, ...(s.stage >= 1 ? OTHER_JOBS.filter((j) => j.id !== d?.id) : [])];
-  const done = [...(d && d.grp === 'done' ? [d] : []), ...DONE_JOBS];
+  const done = [...(d && d.grp === 'done' ? [d] : []), ...DONE_JOBS.filter((j) => j.id !== d?.id)];
   return { on, done };
 }
 

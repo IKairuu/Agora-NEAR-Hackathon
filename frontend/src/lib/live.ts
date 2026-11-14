@@ -254,7 +254,8 @@ async function loadJobs(adopt: boolean): Promise<void> {
   }
   const followed = getState().stage >= 2 ? getState().liveJob?.ref : undefined;
   replace(OTHER_JOBS, jobs.filter((j) => !['done', 'disputed'].includes(j.grp) && j.id !== followed).map((j) => ({ ...j, href: undefined })));
-  replace(DONE_JOBS, jobs.filter((j) => ['done', 'disputed'].includes(j.grp)));
+  /* the API's href is a full path (/job?id=…); RLink wants a route name, so finished jobs open in the popup like the others */
+  replace(DONE_JOBS, jobs.filter((j) => ['done', 'disputed'].includes(j.grp) && j.id !== followed).map((j) => ({ ...j, href: undefined })));
 }
 
 async function loadCurrentJob(): Promise<void> {
