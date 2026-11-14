@@ -285,6 +285,15 @@ export const Post = Ask;
 
 /* ---------------- job requests ---------------- */
 interface JobView extends OtherJob { demo?: boolean }
+/**
+ * The budget the buyer gave, as sellers see it. "10" reads "10 USDC"; text like "under 40" is kept.
+ * The demo story keeps its own "under 40".
+ */
+function budgetLabel(s: State): string {
+  if (!s.live) return 'under 40';
+  const b = JOB_BUDGET.label.trim();
+  return !b ? '' : /^d+(.d+)?$/.test(b) ? `${b} USDC` : b;
+}
 /** The demo job as a job request card, or null before it is requested. */
 function demoJob(s: State): JobView | null {
   if (s.stage < 2) return null;
@@ -293,7 +302,7 @@ function demoJob(s: State): JobView | null {
   const st: [string, string] = s.stage >= 8 ? ['block', 'Agents paused'] : s.stage >= 7 ? ['ok', 'Paid'] : s.stage >= 6 ? ['hold', 'Revision requested'] : s.stage >= 5 ? ['acc', 'Payment protected'] : waiting ? ['hold', 'Waiting on seller'] : s.stage >= 4 ? ['info', 'Offer agreed'] : ['info', 'Getting offers'];
   const grp = s.stage >= 7 ? 'done' : s.stage >= 5 ? 'working' : waiting ? 'waiting' : 'offers';
   const ev = feedItems(s).filter((i) => i.who !== 'Account').map((i): [string, string, string] => [i.t.slice(0, 5), i.who, i.txt]);
-  return { id: JOB.id, title: JOB.title, cat: JOB.cat, budget: s.stage >= 5 ? usd(hPrice(s)) : 'under 40', status: st, who: s.stage >= 4 ? hb(s).name : '', due: s.stage >= 7 ? 'Ended today' : 'Due in 2 days', at, grp, ev, href: s.stage >= 5 ? 'room' : s.stage >= 4 ? 'chat' : 'ask', demo: true };
+  return { id: JOB.id, title: JOB.title, cat: JOB.cat, budget: s.stage >= 5 ? usd(hPrice(s)) : budgetLabel(s) || 'Not set', status: st, who: s.stage >= 4 ? hb(s).name : '', due: s.stage >= 7 ? 'Ended today' : 'Due in 2 days', at, grp, ev, href: s.stage >= 5 ? 'room' : s.stage >= 4 ? 'chat' : 'ask', demo: true };
 }
 function allJobs(s: State) {
   const d = demoJob(s);
@@ -382,9 +391,9 @@ export function Dash() {
             <div className="panel-h"><h2>Job requests</h2><div className="r"><RLink r="jobs" className="btn sm">All job requests</RLink></div></div>
             {d && (
               <RLink r={d.href!} className="job-card" onClick={d.href === 'ask' ? openRequest : undefined}>
-                <div className="row"><span className={`pill ${d.status[0]}`}>{d.status[1]}</span><span className="mono muted xsmall">{JOB.id}</span><span className="pill">Demo job</span></div>
+                <div className="row"><span className={`pill ${d.status[0]}`}>{d.status[1]}</span><span className="mono muted xsmall">{JOB.id}</span>{!s.live && <span className="pill">Demo job</span>}</div>
                 <h3>{JOB.title}</h3>
-                <div className="meta"><span>{JOB.cat}</span><span>Budget under 40 USDC</span><span>6 checks locked</span></div>
+                <div className="meta"><span>{JOB.cat}</span><span>{budgetLabel(s) ? `Budget ${/usdc/i.test(budgetLabel(s)) ? budgetLabel(s) : `${budgetLabel(s)} USDC`}` : 'No budget set'}</span>{!s.live && <span>6 checks locked</span>}</div>
                 <Lifecycle />
               </RLink>
             )}

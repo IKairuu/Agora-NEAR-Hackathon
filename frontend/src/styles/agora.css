@@ -431,6 +431,8 @@ textarea.input { min-height: 120px; resize: vertical; line-height: 1.5; }
 @media (max-width: 560px) { .wal-split { grid-template-columns: 1fr; } .wal-split > .earn { border-left: 0; padding-left: 0; border-top: 1px solid var(--color-rule); padding-top: var(--space-sm); } }
 .wal-card .note { font-size: var(--text-xs); color: var(--color-ink-2); margin: var(--space-xs) 0 0; max-width: 32ch; }
 .wal-card .lk.small { margin-top: var(--space-2xs); }
+/* the activity list scrolls inside its panel (about 5 rows) instead of growing the page */
+.wal-activity { max-height: 470px; overflow-y: auto; overscroll-behavior: contain; }
 .wal-acts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: auto; padding-top: var(--space-md); }
 .asset { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-sm); align-items: center; padding: var(--space-sm) var(--space-md); border-bottom: 1px solid var(--color-rule); }
 .asset:last-child { border-bottom: 0; }

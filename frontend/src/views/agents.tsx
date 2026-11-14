@@ -290,7 +290,7 @@ export function Wallet() {
             <div className="asset"><span className="tok near">N</span><div><b style={{ fontWeight: 500 }}>NEAR</b><div className="muted xsmall">Gas, paid for you by the AGORA relayer</div></div><div className="v"><b>0.00</b><span className="muted xsmall">0.0041 covered</span></div></div>
           </div>
         ) : (
-          <div className="panel">
+          <div className="panel wal-activity" tabIndex={0} aria-label="Wallet activity">
             {s.live && s.walletItems.map((it) => (
               <div key={it.id} className="asset">
                 <span className="tok lock"><Icon name={itemIcon(it.method)} /></span>

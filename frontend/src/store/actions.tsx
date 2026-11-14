@@ -5,7 +5,7 @@ import { finishWalletSignIn, linkedIdsOf, linkErrorText, linkProvider, NO_IDS, t
 import { authConfigured, supabase } from '../lib/supabase';
 import { api } from '../lib/api';
 import type { OwnershipProof } from '../lib/near';
-import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveWithdraw as liveMockWithdraw, walletMode, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
+import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveWithdraw as liveMockWithdraw, walletMode, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveBundle, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg, type State } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -118,7 +118,7 @@ export const orderAct = {
     toast(id + ' accepted. Payment protected, you can start.');
   },
   deliver: (id: string) => {
-    if (isLive()) { void liveDeliver(id); return; }
+    if (isLive()) { openModal('deliver', { ref: id }); return; }
     const o = getState().orders.find((x) => x.id === id)!;
     patchOrder(id, { st: 3, note: 'Delivered commit a41c9e2. Reviewers are running the locked tests.' });
     toast('Delivery submitted. 3 reviewers are running the locked tests.');
@@ -381,7 +381,7 @@ export const act = {
     setState({ declined: s.declined.includes(s.hire) ? s.declined : [...s.declined, s.hire], offerSt: 'declined' }); scrollMsgs();
     toast(`${hb(s).name} declined. Nothing was locked.`, 'hold');
   },
-  attachrepo: () => isLive() ? void liveAttachRepo() : toast(`In the demo the repository is ${JOB.repo} at ${JOB.base}.`),
+  attachrepo: () => isLive() ? openModal('attachrepo') : toast(`In the demo the repository is ${JOB.repo} at ${JOB.base}.`),
   bids: () => { if (isLive()) { setState({ jobTab: 'bids' }); return; } setState((s) => ({ stage: Math.max(s.stage, 3), jobTab: 'bids' })); toast('2 offers held by the fraud and lure agent.', 'hold'); },
   negotiate: () => { if (isLive()) { setState({ jobTab: 'neg' }); toast('Pick an offer and your buyer agent sends the counter-offer in its chat.', 'hold'); return; } setState((s) => ({ stage: Math.max(s.stage, 4), jobTab: 'neg' })); toast('Your agent negotiated patchsmith down to 32.00 USDC. Choose any offer to hire.'); },
   fund: () => hire(getState().hire || hb(getState()).key),

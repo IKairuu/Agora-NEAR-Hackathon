@@ -485,13 +485,21 @@ export async function liveDiscardAsk(): Promise<void> {
   liveLeaveAsk();
 }
 
-export async function liveAttachRepo(): Promise<void> {
-  const job = getState().liveJob; if (!job?.id) return;
-  const repo = window.prompt('Repository URL (https://github.com/owner/repo)', JOB.repo.startsWith('github.com') ? `https://${JOB.repo}` : '');
-  if (!repo) return;
-  const base = window.prompt('Base commit (leave empty for the latest)', '') ?? '';
-  const res = await api<{ ref: string }>('/requests/v1', { method: 'PATCH', body: { id: job.id, text: getState().askText || JOB.plain, repo_url: repo.trim(), ...(base.trim() ? { base_commit: base.trim() } : {}) } }).catch(() => null);
-  if (res) { toast('Repository attached. The spec writer will read it.'); await refreshAll(false); }
+/** The reason an API call failed, in words the dialog can show. */
+const failReason = (e: unknown): string => (e instanceof ApiError && e.status !== 0 ? e.message : 'Could not reach the AGORA server. Try again.');
+
+/** The repository already on the open request, as an https link, for the dialog to start from. */
+export const currentRepo = (): string => (JOB.repo ? (/^https?:\/\//.test(JOB.repo) ? JOB.repo : `https://${JOB.repo}`) : '');
+
+/** Attaches a repository (and optionally a base commit) to the open request. Returns null when it worked, or why not. */
+export async function liveAttachRepo(repo: string, base: string): Promise<string | null> {
+  const job = getState().liveJob; if (!job?.id) return 'Open a request first.';
+  try {
+    await api<{ ref: string }>('/requests/v1', { method: 'PATCH', quiet: true, body: { id: job.id, text: getState().askText || JOB.plain, repo_url: repo, ...(base ? { base_commit: base } : {}) } });
+  } catch (e) { return failReason(e); }
+  toast('Repository attached. The spec writer will read it.');
+  void refreshAll(false);
+  return null;
 }
 
 export async function liveHire(key: string): Promise<boolean> {
@@ -693,18 +701,17 @@ export async function liveSellerProfile(): Promise<SellerProfileView | null> {
 }
 
 /** Hands in a commit for a funded job. The runner checks it against the locked tests. */
-export async function liveDeliver(ref: string): Promise<void> {
-  const commit = (window.prompt(`Commit hash to deliver for ${ref}`, '') ?? '').trim();
-  if (!commit) return;
-  const repo = (window.prompt('Repository URL (leave empty to use the buyer\'s repository)', '') ?? '').trim();
+export async function liveDeliver(ref: string, commit: string, repo: string): Promise<string | null> {
   const body: Record<string, unknown> = { job_id: ref, commit_sha: commit };
   if (repo) body['repo_url'] = repo;
-  const res = await api<{ attempt: number; attemptsLeft: number; runner: string }>('/deliveries/v1', { body }).catch(() => null);
-  if (!res) return;
+  let res: { attempt: number; attemptsLeft: number; runner: string };
+  try { res = await api<{ attempt: number; attemptsLeft: number; runner: string }>('/deliveries/v1', { body, quiet: true }); }
+  catch (e) { return failReason(e); }
   toast(res.runner === 'queued'
     ? `Delivery ${res.attempt} submitted for ${ref}. The locked tests are running. ${res.attemptsLeft} attempt${res.attemptsLeft === 1 ? '' : 's'} left.`
     : `Delivery ${res.attempt} saved for ${ref}, but the test runner is not reachable right now.`, res.runner === 'queued' ? undefined : 'hold');
-  await refreshAll(false);
+  void refreshAll(false);
+  return null;
 }
 
 async function loadMoney(): Promise<void> {
