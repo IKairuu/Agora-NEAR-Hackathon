@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useNavigate } from 'react-router';
 import { CATS, COUNTRIES, DAO_COUNCIL, gigBy, GIGS, ME, O_ST, PAYOUTS, SELL_STEPS, sellerDir, SETTLED, SKILLS, usd } from '../data/data';
 import { act, go, newRequest } from '../store/actions';
 import { isLive, justPublished, liveSavePhoto, liveDisputeNext, liveLoadDispute, liveLoadSellProfile, liveSaveSellStep, liveSellerProfile, type DisputeView, type SellerProfileView } from '../lib/live';
@@ -12,6 +13,10 @@ export function Profile() {
   const s = useApp();
   const p = sellerDir(s.who);
   const rep = useReputation(p?.acct);
+  const navigate = useNavigate();
+  /* Back returns to the page the profile was opened from (the seller dashboard, Find services, …);
+     opened directly, with nothing to go back to, it goes to the sellers list */
+  const back = () => { if ((window.history.state as { idx?: number } | null)?.idx) void navigate(-1); else { setState({ exTab: 'sellers' }); go('explore'); } };
   if (!p) return (
     <Shell cur="profile">
       <Head crumbs={<RLink r="explore" onClick={() => setState({ exTab: 'sellers' })}>Sellers</RLink>} title="Seller" />
@@ -29,6 +34,7 @@ export function Profile() {
   return (
     <Shell cur="profile">
       <Head crumbs={<><RLink r="explore" onClick={() => setState({ exTab: 'sellers' })}>Sellers</RLink> / {p.name}</>} title={p.name} actions={<>
+        <button className="btn ghost" onClick={back}><Icon name="back" />Back</button>
         {p.gig && <button className={`btn ${saved ? 'on' : ''}`} onClick={() => act.like(p.gig)} aria-pressed={saved}><Icon name="heart" />{saved ? 'Saved' : 'Save'}</button>}
         <RLink r="chat" className="btn"><Icon name="chat" />Message</RLink>
         <RLink r="ask" className="btn primary" onClick={newRequest}>Invite to a job</RLink>
