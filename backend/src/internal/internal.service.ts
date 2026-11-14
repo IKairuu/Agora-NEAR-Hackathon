@@ -172,8 +172,12 @@ export class InternalService {
                     const count = await this.internalRepository.settleDelivery(tally.id, tally.milestoneId, tally.milestone.job.id, approved);
                     if (count > 0) {
                         actions.push(`delivery ${approved ? 'approved' : 'rejected'}`);
-                        if (approved && (process.env['AGORA_CHAIN_MODE'] ?? 'mock') === 'mock') {
-                            const released = await this.indexer.onMockRelease(tally.milestone.job.id, `mock-release-${Date.now()}`);
+                        if (approved) {
+                            /* real mode: the 2nd approving vote released the money on chain; mirror it in the database with that tx */
+                            const mock = (process.env['AGORA_CHAIN_MODE'] ?? 'mock') === 'mock';
+                            const voteTx = text(result['voteTx']);
+                            const txHash = mock ? `mock-release-${Date.now()}` : voteTx;
+                            const released = txHash ? await this.indexer.onMockRelease(tally.milestone.job.id, txHash).catch(() => null) : null;
                             if (released) actions.push('released');
                         }
                         const outcome = approved
