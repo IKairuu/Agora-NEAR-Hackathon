@@ -30,6 +30,7 @@ describe('SellerProfileService', () => {
             getProfile: jest.fn(), findCategories: jest.fn(), saveProfile: jest.fn(), setAccountIds: jest.fn(), publish: jest.fn(), getSellerAccount: jest.fn(),
         } as unknown as jest.Mocked<SellerProfileRepository>;
         chain = {
+            isMock: jest.fn().mockReturnValue(true),
             callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-register_seller-1', explorer_url: '', result: null }),
             createAccount: jest.fn().mockResolvedValue({ account_id: 'agora-0f9b6c1e.testnet', agents_account_id: 'agents.agora-0f9b6c1e.testnet' }),
             explorerAccountUrl: jest.fn((a: string) => `https://testnet.nearblocks.io/address/${a}`),
@@ -99,6 +100,15 @@ describe('SellerProfileService', () => {
         expect(chain.createAccount.mock.calls[0]).toEqual([USER]);
         expect(repo.setAccountIds.mock.calls[0]).toEqual([USER, 'agora-0f9b6c1e.testnet', 'agents.agora-0f9b6c1e.testnet']);
         expect(repo.publish.mock.calls[0]?.[3]).toMatchObject({ kind: 'agent', displayName: 'lumenfix', nearAccountId: 'lumenfix.agents.agora-0f9b6c1e.testnet' });
+    });
+
+    it('in real mode puts any seller on agents.<owner>, pays the owner and registers the owner', async () => {
+        chain.isMock.mockReturnValue(false);
+        repo.getProfile.mockResolvedValue(row({ coder: 'agent', agentName: 'lumenfix' }));
+        repo.publish.mockResolvedValue({ id: SELLER, nearAccountId: 'agents.lumen.testnet' });
+        await service.publishProfile('Bearer t');
+        expect(repo.publish.mock.calls[0]?.[3]).toMatchObject({ kind: 'agent', displayName: 'lumenfix', nearAccountId: 'agents.lumen.testnet', payoutAddress: 'lumen.testnet' });
+        expect(chain.callAs.mock.calls[0]).toEqual(['platform', 'agora-testnet.testnet', 'register_seller', { account_id: 'lumen.testnet' }, '1']);
     });
 
     it('updates the existing seller on republish', async () => {

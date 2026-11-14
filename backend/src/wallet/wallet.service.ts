@@ -1,7 +1,9 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { AuthService } from '../auth/auth.service.js';
 import { SupabaseAdminService } from '../auth/supabase-admin.service.js';
-import { ChainService } from '../chain/chain.service.js';
+import { nearToYocto } from 'near-api-js';
+import { AGENT_METHODS, AGENTS_ALLOWANCE_NEAR, AGENTS_NEAR, ChainService } from '../chain/chain.service.js';
+import { ownerOf } from '../indexer/indexer.service.js';
 import { CreateDeposit } from './dto/CreateDeposit.dto.js';
 import { CreateWithdrawal } from './dto/CreateWithdrawal.dto.js';
 import { LinkWallet } from './dto/LinkWallet.dto.js';
@@ -76,10 +78,12 @@ export class WalletService {
             this.walletRepository.getActivity(authId, [acct, agents].filter(Boolean)),
             this.walletRepository.getSellerAccounts(authId),
         ]);
+        const agentsReady = agents ? (await this.chainService.agentsStatus(agents).catch(() => ({ ready: false }))).ready : false;
         const available = live ? live.available : balance ? Number(balance.available) : 0;
         const escrowed = live ? live.escrowed : balance ? Number(balance.escrowed) : 0;
         /* payouts from settled jobs land on the seller's own account, so show them next to the budget */
-        const earnings = await Promise.all(sellers.filter((s) => s.nearAccountId && s.nearAccountId !== acct).map(async (s) => {
+        /* a seller on agents.<you> is paid on <you>, which is already the budget above, so it is not listed twice */
+        const earnings = await Promise.all(sellers.filter((s) => s.nearAccountId && s.nearAccountId !== acct && ownerOf(s.nearAccountId) !== acct).map(async (s) => {
             const sLive = await this.chainService.liveBalance(s.nearAccountId);
             const sBal = sLive ? null : await this.walletRepository.getBalance(s.nearAccountId);
             return { acct: s.nearAccountId, name: s.displayName, available: sLive ? sLive.available : sBal ? Number(sBal.available) : 0 };
@@ -87,6 +91,7 @@ export class WalletService {
         return {
             acct,
             agents,
+            agentsReady,
             available,
             escrowed,
             total: available + escrowed,
@@ -111,6 +116,55 @@ export class WalletService {
                 };
             }),
         };
+    }
+
+    /**
+     * Real mode, wallet users: the one transaction that sets up agents.<you>. The server makes the agents key and
+     * keeps it in Vault; the wallet signs CreateAccount + Transfer + AddKey (function-call only, marketplace only).
+     */
+    async prepareAgents(token: string) {
+        const authId = await this.authId(token);
+        const { acct, agents } = await this.agentsOf(authId);
+        const status = await this.chainService.agentsStatus(agents);
+        if (status.ready) return { message: 'Agents Already Enabled', ready: true, acct, agents };
+        if (status.exists) {
+            throw new ConflictException(`${agents} already exists but AGORA has no key for it. Add the key shown under Wallet with your NEAR wallet, or ask the team to reset it`);
+        }
+        /* a brand-new wallet has no NEAR to pay for the setup, so AGORA covers it once */
+        const topUp = await this.chainService.gasTopUp(acct);
+        const publicKey = await this.chainService.agentsPublicKey(agents);
+        return {
+            message: 'Agents Setup Successfully Prepared',
+            ready: false,
+            acct,
+            agents,
+            toppedUp: topUp.toppedUp,
+            topUpTx: topUp.txHash,
+            publicKey,
+            contract: this.chainService.walletChainInfo().contract,
+            methods: AGENT_METHODS,
+            deposit: nearToYocto(AGENTS_NEAR).toString(),
+            allowance: nearToYocto(AGENTS_ALLOWANCE_NEAR).toString(),
+        };
+    }
+
+    /** Checks on chain that agents.<you> now carries the server's key, so posting, funding and bidding can sign. */
+    async confirmAgents(token: string) {
+        const authId = await this.authId(token);
+        const { agents } = await this.agentsOf(authId);
+        const status = await this.chainService.agentsStatus(agents);
+        if (!status.ready) throw new BadRequestException(`${agents} is not on NEAR with AGORA's key yet. Sign the "Enable agents" transaction in your wallet, then try again`);
+        return { message: 'Agents Successfully Enabled', ready: true, agents };
+    }
+
+    private async agentsOf(authId: string): Promise<{ acct: string; agents: string }> {
+        const account = await this.walletRepository.getAccount(authId);
+        const acct = account?.nearAccountId;
+        if (!acct) throw new BadRequestException('Link your NEAR wallet first');
+        if (/^[0-9a-f]{64}$/.test(acct)) throw new BadRequestException('A named NEAR account (like you.testnet) is needed for agents. Implicit hex accounts cannot have sub-accounts');
+        const agents = `agents.${acct}`;
+        if (account.agentsAccountId !== agents) await this.walletRepository.setAccountIds(authId, acct, agents);
+        return { acct, agents };
     }
 
     async createWithdrawal(token: string, body: CreateWithdrawal) {

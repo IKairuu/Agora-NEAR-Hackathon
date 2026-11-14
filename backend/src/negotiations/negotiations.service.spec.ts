@@ -42,6 +42,7 @@ describe('NegotiationsService', () => {
         } as unknown as jest.Mocked<NegotiationsRepository>;
         chain = {
             createAccount: jest.fn().mockResolvedValue({ account_id: 'agora-buyer.testnet', agents_account_id: 'agents.agora-buyer.testnet' }),
+            isMock: jest.fn().mockReturnValue(true),
             callAs: jest.fn(async (_r: string, _a: string, method: string) => ({ tx_hash: `mock-${method}-1`, explorer_url: '', ok: true, result: null })),
         } as unknown as jest.Mocked<ChainService>;
         service = new NegotiationsService(repo, { verifySessionToken: jest.fn(async () => caller) } as unknown as AuthService, chain);

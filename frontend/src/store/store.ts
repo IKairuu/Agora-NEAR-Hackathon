@@ -84,7 +84,7 @@ export interface State {
   liveThreads: Thread[];
   notes: { unread: number; items: LiveNote[] };
   /** Live balances and pause state from the wallet and limits API. */
-  money: { available: number; escrowed: number; usedToday: number; paused: boolean; earned?: number; earnings?: { acct: string; name: string; available: number }[] } | null;
+  money: { available: number; escrowed: number; usedToday: number; agentsReady?: boolean; paused: boolean; earned?: number; earnings?: { acct: string; name: string; available: number }[] } | null;
   /** Which chain the backend uses: in mock mode AGORA balances are test numbers, in real mode they live in the contract. */
   chain: { mode: string; network: string; contract: string; usdc: string | null } | null;
   /** What the linked NEAR account holds in its own wallet, read from the chain (outside AGORA's contract). */

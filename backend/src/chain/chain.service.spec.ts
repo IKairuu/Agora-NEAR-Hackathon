@@ -3,6 +3,7 @@ jest.mock('../prisma', () => ({ prisma: {} }));
 const signAndSendTransaction = jest.fn();
 const callFunction = jest.fn();
 const viewTransactionStatus = jest.fn();
+const viewAccount = jest.fn();
 const accountCtor = jest.fn();
 const providerCtor = jest.fn();
 const fromSecretKey = jest.fn((key: string) => ({ key }));
@@ -15,10 +16,11 @@ jest.mock('near-api-js', () => ({
     }),
     JsonRpcProvider: jest.fn().mockImplementation((...a: unknown[]) => {
         providerCtor(...a);
-        return { callFunction, viewTransactionStatus };
+        return { callFunction, viewTransactionStatus, viewAccount };
     }),
     KeyPairSigner: { fromSecretKey: (key: string) => fromSecretKey(key) },
-    actions: { functionCall: (m: string, a: object, g: bigint, d: bigint) => functionCall(m, a, g, d) },
+    actions: { functionCall: (m: string, a: object, g: bigint, d: bigint) => functionCall(m, a, g, d), transfer: (d: bigint) => ({ transfer: { deposit: d } }) },
+    nearToYocto: (n: string | number) => BigInt(Math.round(Number(n) * 1e6)) * 10n ** 18n,
     teraToGas: (t: number) => BigInt(t) * 1_000_000_000_000n,
 }));
 
@@ -30,7 +32,7 @@ import { ChainService, deadlineIn, decodeSuccessValue, functionCallOf, panicMess
 const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64');
 const KEY = 'ed25519:3D4YudUahN1nawWogh8pAKSj92sUNMdbZGjn7kERKzYoTy8tnFQuwoGUC51DowKqorvkr2pytJSnwuSbsNVfqygr';
 
-const build = async (getVaultSecret: jest.Mock = jest.fn().mockResolvedValue(null)) => {
+const build = async (getVaultSecret: jest.Mock = jest.fn().mockResolvedValue(null), repoExtra: Record<string, jest.Mock> = {}) => {
     const onMockCall = jest.fn().mockResolvedValue(null);
     const recordRealCall = jest.fn().mockResolvedValue({ id: 't' });
     const applyCall = jest.fn().mockResolvedValue(null);
@@ -41,7 +43,7 @@ const build = async (getVaultSecret: jest.Mock = jest.fn().mockResolvedValue(nul
         providers: [
             ChainService,
             { provide: IndexerService, useValue: { onMockCall, recordRealCall, applyCall, hasTx, partiesOf, syncBalance } },
-            { provide: ChainRepository, useValue: { getVaultSecret } },
+            { provide: ChainRepository, useValue: { getVaultSecret, ...repoExtra } },
         ],
     }).compile();
     return { service: module.get<ChainService>(ChainService), onMockCall, recordRealCall, getVaultSecret, applyCall, hasTx, partiesOf, syncBalance };
@@ -294,9 +296,63 @@ describe('ChainService (real mode)', () => {
         await expect(service.liveBalance('lumen.testnet')).resolves.toBeNull();
     });
 
-    it('refuses to create accounts', async () => {
+    it('needs a platform account to create accounts', async () => {
+        delete process.env['AGORA_PLATFORM_ACCOUNT'];
         const { service } = await build();
-        await expect(service.createAccount('abc')).rejects.toThrow('not built yet');
+        await expect(service.createAccount('abc')).rejects.toThrow('Set AGORA_PLATFORM_ACCOUNT');
+    });
+
+    it('recognises the agora-xxxxxxxx names it hands out, with or without agents.', async () => {
+        const { service } = await build();
+        expect(service.isPlatformAccount('agora-0f9b6c1e.testnet')).toBe(true);
+        expect(service.isPlatformAccount('agents.agora-0f9b6c1e.testnet')).toBe(true);
+        expect(service.isPlatformAccount('slowant9971.testnet')).toBe(false);
+        expect(service.isPlatformAccount('itsuki.agents.agora-0f9b6c1e.testnet')).toBe(false);
+    });
+
+    it('explains how to enable agents when a wallet user has no agents key', async () => {
+        const { service } = await build();
+        await expect(service.signingKey('transaction_agent', 'agents.slowant9971.testnet')).rejects.toThrow('Enable agents');
+    });
+
+    describe('gas top-up for a new wallet', () => {
+        const NEAR = 10n ** 24n;
+        const repo = (has = false, today = 0) => ({ hasGasTopUp: jest.fn().mockResolvedValue(has), countGasTopUpsSince: jest.fn().mockResolvedValue(today) });
+        beforeEach(() => {
+            process.env['AGORA_PLATFORM_ACCOUNT'] = 'kyle-n8n.testnet';
+            process.env['AGORA_PLATFORM_PRIVATE_KEY'] = KEY;
+        });
+
+        it('sends nothing when the wallet already has enough NEAR', async () => {
+            const { service } = await build(undefined, repo());
+            viewAccount.mockResolvedValue({ amount: NEAR });
+            await expect(service.gasTopUp('judge.testnet')).resolves.toEqual({ toppedUp: false, txHash: null });
+            expect(signAndSendTransaction).not.toHaveBeenCalled();
+        });
+
+        it('sends 0.4 NEAR from the platform to an empty wallet and records it', async () => {
+            const { service, recordRealCall } = await build(undefined, repo());
+            viewAccount.mockResolvedValue({ amount: 0n });
+            signAndSendTransaction.mockResolvedValue(ok(null, 'TOPUP1'));
+            await expect(service.gasTopUp('judge.testnet')).resolves.toEqual({ toppedUp: true, txHash: 'TOPUP1' });
+            expect(accountCtor.mock.calls[0]![0]).toBe('kyle-n8n.testnet');
+            expect(signAndSendTransaction.mock.calls[0]![0]).toMatchObject({ receiverId: 'judge.testnet', actions: [{ transfer: { deposit: 4n * 10n ** 23n } }] });
+            expect(recordRealCall.mock.calls[0]![0]).toMatchObject({ signer: 'kyle-n8n.testnet', method: 'gas_topup', args: { account_id: 'judge.testnet' }, ok: true });
+        });
+
+        it('covers a wallet only once', async () => {
+            const { service } = await build(undefined, repo(true));
+            viewAccount.mockResolvedValue({ amount: 0n });
+            await expect(service.gasTopUp('judge.testnet')).rejects.toThrow('already covered this wallet once');
+            expect(signAndSendTransaction).not.toHaveBeenCalled();
+        });
+
+        it('stops at the daily cap', async () => {
+            const { service } = await build(undefined, repo(false, 20));
+            viewAccount.mockResolvedValue({ amount: 0n });
+            await expect(service.gasTopUp('judge.testnet')).rejects.toThrow('used up for today');
+            expect(signAndSendTransaction).not.toHaveBeenCalled();
+        });
     });
 
     it('needs the contract id', async () => {

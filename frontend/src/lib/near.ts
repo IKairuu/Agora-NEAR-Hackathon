@@ -112,6 +112,26 @@ export const usdcUnits = (amount: number): string => String(Math.round(amount * 
  * If no wallet is connected in this browser, it opens the wallet picker first.
  */
 export async function walletSend(expectAccount: string, receiverId: string, calls: WalletCall[]): Promise<string> {
+  const { actionCreators } = await import('@near-js/transactions');
+  return signInWallet(expectAccount, receiverId, calls.map((c) => actionCreators.functionCall(c.method, c.args, BigInt(c.tgas) * TGAS, c.deposit)));
+}
+
+/**
+ * "Enable agents": one transaction from the user's wallet that creates agents.<you>, gives it NEAR for gas and adds
+ * the key AGORA holds, limited to the marketplace contract and the job methods. The wallet's own keys never leave it.
+ */
+export async function walletCreateAgents(expectAccount: string, setup: { agents: string; publicKey: string; contract: string; methods: string[]; deposit: string; allowance: string }): Promise<string> {
+  const [{ actionCreators }, { PublicKey }] = await Promise.all([import('@near-js/transactions'), import('@near-js/crypto')]);
+  return signInWallet(expectAccount, setup.agents, [
+    actionCreators.createAccount(),
+    actionCreators.transfer(BigInt(setup.deposit)),
+    actionCreators.addKey(PublicKey.fromString(setup.publicKey), actionCreators.functionCallAccessKey(setup.contract, setup.methods, BigInt(setup.allowance))),
+  ]);
+}
+
+type WalletAction = ReturnType<typeof import('@near-js/transactions').actionCreators.functionCall>;
+
+async function signInWallet(expectAccount: string, receiverId: string, actions: WalletAction[]): Promise<string> {
   const { selector } = await load();
   // The wallet session lives in this browser and can drop (reload, another address, wallet timeout) while the
   // account stays linked to the profile. Reconnect in place instead of making the user sign out and in again.
@@ -119,8 +139,7 @@ export async function walletSend(expectAccount: string, receiverId: string, call
   if (!signer) signer = await pickWallet();
   if (!signer) throw new Error(expectAccount ? `Connect ${expectAccount} in your NEAR wallet to continue` : 'Connect your NEAR wallet to continue');
   if (expectAccount && signer !== expectAccount) throw new Error(`Your wallet is signed in as ${signer}, but this AGORA account is linked to ${expectAccount}. Switch accounts in the wallet or link ${signer}`);
-  const [{ actionCreators }, wallet] = await Promise.all([import('@near-js/transactions'), selector.wallet()]);
-  const actions = calls.map((c) => actionCreators.functionCall(c.method, c.args, BigInt(c.tgas) * TGAS, c.deposit));
+  const wallet = await selector.wallet();
   const outcome = await wallet.signAndSendTransaction({ signerId: signer, receiverId, actions });
   const hash = outcome ? (outcome.transaction_outcome?.id ?? (outcome.transaction as { hash?: string } | undefined)?.hash) : undefined;
   if (!hash) throw new Error('The wallet did not return a transaction');

@@ -26,7 +26,8 @@ export const toOffer = (row: BidRow, rep: ReputationRow | undefined) => {
     const pass = rep?.firstTryPassRate !== null && rep?.firstTryPassRate !== undefined ? Number(rep.firstTryPassRate) : null;
     const settled = rep?.settledJobs ?? 0;
     return {
-        key: row.seller.nearAccountId.split('.')[0] ?? row.seller.nearAccountId,
+        /* agents.<owner> sellers would all get the key "agents", so key them by the owner instead */
+        key: row.seller.nearAccountId.replace(/^agents\./, '').split('.')[0] ?? row.seller.nearAccountId,
         bidId: row.id,
         sellerId: row.seller.id,
         name: row.seller.displayName,
@@ -87,6 +88,7 @@ export class BidsService {
         const row = await this.bidsRepository.createBid(plan);
         if (!row) throw new ConflictException('You already made an offer on this job. Edit it instead.');
         const chain = await this.placeBid(authId, plan, row);
+        await this.dropUnplacedBid(authId, row.id, chain);
         await this.checkBid(plan.buyerId, plan.jobId, row.id);
         return { message: 'Bid Successfully Created', id: row.id, ...chain };
     }
@@ -99,7 +101,9 @@ export class BidsService {
             const plan = await this.planBid(authId, item);
             const row = await this.bidsRepository.createBid(plan);
             if (!row) throw new ConflictException(`You already made an offer on ${item.job_id}`);
-            onchain.push({ id: row.id, ...(await this.placeBid(authId, plan, row)) });
+            const chain = await this.placeBid(authId, plan, row);
+            await this.dropUnplacedBid(authId, row.id, chain);
+            onchain.push({ id: row.id, ...chain });
             await this.checkBid(plan.buyerId, plan.jobId, row.id);
             ids.push(row.id);
         }
@@ -171,7 +175,7 @@ export class BidsService {
         if (!BIDDABLE_STATUSES.includes(job.status)) throw new BadRequestException('This job no longer takes offers');
         const sellers = await this.bidsRepository.getMySellers(authId);
         if (sellers.length === 0) throw new ForbiddenException('Set up your seller profile before making offers');
-        const seller = body.seller_id ? sellers.find((s) => s.id === body.seller_id) : sellers[0];
+        const seller = body.seller_id ? sellers.find((s) => s.id === body.seller_id) : this.defaultSeller(sellers);
         if (!seller) throw new ForbiddenException('That seller account is not yours');
         if (job.visibility === 'direct') {
             const service = job.serviceId ? await this.bidsRepository.getServiceSeller(job.serviceId) : null;
@@ -198,6 +202,22 @@ export class BidsService {
         } catch (e) {
             return { placed: false, onchainBidId: null, bidTx: null, bidError: e instanceof Error ? e.message : 'Placing the bid on chain failed' };
         }
+    }
+
+    /**
+     * With no seller picked, use the oldest seller that can sign on chain. In real mode an account like
+     * itsuki.agents.<you> was only ever a mock name, so a seller on agents.<you> or <you> wins over it.
+     */
+    private defaultSeller<T extends { nearAccountId: string }>(sellers: T[]): T | undefined {
+        if (this.chainService.isMock()) return sellers[0];
+        return sellers.find((s) => !s.nearAccountId.includes('.agents.')) ?? sellers[0];
+    }
+
+    /** In real mode a bid that did not reach the chain cannot be hired, so withdraw it and tell the seller why. */
+    private async dropUnplacedBid(authId: string, bidId: string, chain: PlaceResult) {
+        if (chain.placed || this.chainService.isMock()) return;
+        await this.bidsRepository.deleteBid(authId, bidId);
+        throw new BadRequestException(`Your offer could not be placed on NEAR: ${chain.bidError ?? 'unknown error'}`);
     }
 
     private async checkBid(buyerId: string, jobId: string, bidId: string) {

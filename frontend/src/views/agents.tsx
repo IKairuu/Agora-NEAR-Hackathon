@@ -1,7 +1,7 @@
 import { agentPick, ATTACK, CATS, HELD, JOB, ME, usd } from '../data/data';
 import { useEffect, useState } from 'react';
 import { act } from '../store/actions';
-import { liveFaucet, loadWalletBalances } from '../lib/live';
+import { liveEnableAgents, liveFaucet, loadWalletBalances } from '../lib/live';
 import { accessKeys, type AccessKeyRow } from '../lib/near';
 import { authConfigured } from '../lib/supabase';
 import { escrow, free, hb, hPrice, paused, setState, useApp } from '../store/store';
@@ -192,7 +192,10 @@ function LiveKeys() {
 export function Wallet() {
   const s = useApp();
   const [faucetBusy, setFaucetBusy] = useState(false);
+  const [agentsBusy, setAgentsBusy] = useState(false);
   useEffect(() => { if (s.live) void loadWalletBalances(); }, [s.live]);
+  /* real chain, own NEAR wallet, and agents.<you> not set up yet: one signature fixes it (server-made accounts are set up for you) */
+  const needAgents = s.live && s.chain?.mode === 'real' && Boolean(ME.acct) && !/^agora-[0-9a-f]{8}\./.test(ME.acct) && s.money?.agentsReady === false;
   if (s.stage < 1) return <Shell cur="wallet"><Head title="Wallet" /><Gate msg="Sign in to see your wallet"><SignInButton /></Gate></Shell>;
   const total = free(s) + escrow(s);
   const [d, c] = usd(total).split('.');
@@ -251,6 +254,10 @@ export function Wallet() {
             </> : <span className="sub">{!s.live ? 'Sample data: your own wallet shows here after you sign in.' : !ME.acct ? 'Balances show here once your wallet is linked.' : s.walletErr ? 'Could not reach the NEAR network.' : 'Loading your wallet…'}</span>}
             {s.live && s.walletErr && <button className="btn sm" onClick={() => void loadWalletBalances()}>Retry</button>}
             <p className="note">Only you can spend this. Agents can't touch it.</p>
+            {needAgents && <>
+              <p className="note"><b>One step left:</b> your agents need their own account, agents.{ME.acct}, to post, fund, bid and deliver on NEAR. It takes one signature, and its key works only on AGORA. No NEAR yet? AGORA covers the fee for your first setup.</p>
+              <button className="btn sm primary" disabled={agentsBusy} aria-busy={agentsBusy} onClick={() => { setAgentsBusy(true); void liveEnableAgents().finally(() => setAgentsBusy(false)); }}><Icon name="check" />{agentsBusy ? 'Waiting for your wallet…' : 'Enable agents (1 signature)'}</button>
+            </>}
             {s.live && s.walletBal && s.chain?.usdc && s.chain.network === 'testnet' && <button className="btn sm" disabled={faucetBusy} aria-busy={faucetBusy} onClick={() => { setFaucetBusy(true); void liveFaucet().finally(() => setFaucetBusy(false)); }}><Icon name="plus" />{faucetBusy ? 'Waiting for your wallet…' : 'Get 50 test USDC'}</button>}
             {s.live && <button className="lk small" onClick={() => setState({ modal: { kind: 'linkwallet' } })}><Icon name="wallet" />{s.walletBal ? 'Link a different wallet' : 'Link your own NEAR wallet'}</button>}
             <div className="wal-acts two">

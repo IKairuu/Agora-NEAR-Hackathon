@@ -140,6 +140,9 @@ export class NegotiationsService {
         try {
             const terms = await this.negotiationsRepository.getAcceptTerms(offer.jobId, offer.bidId);
             if (!terms.bid) throw new BadRequestException('The hire offer has no bid');
+            if (terms.bid.onchainId === null && !this.chainService.isMock()) {
+                throw new BadRequestException('This offer never reached NEAR, so it cannot be accepted. The seller should withdraw it and bid again');
+            }
             if (!terms.spec?.specHash) throw new BadRequestException('The job has no locked spec');
             const tx = await this.chainService.callAs('transaction_agent', agents, 'accept_offer', {
                 job_id: jobId,
