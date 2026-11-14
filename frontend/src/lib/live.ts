@@ -281,8 +281,8 @@ interface ReviewPanelView {
 async function loadReviews(ref: string): Promise<void> {
   const res = await liveApi<ReviewPanelView>(`/reviews/v1?job=${ref}`, { quiet: true }).catch(() => null);
   if (!res?.deliveryId) return;
-  replace(REVIEWERS, res.reviewers.map((r) => ({ id: r.id, model: r.state === 3 ? `${r.model} · rejected` : r.model, att: r.att })));
-  const votes = res.reviewers.map((r) => (r.state === 3 ? 0 : r.state));
+  replace(REVIEWERS, res.reviewers.map((r) => ({ id: r.id, model: r.model, att: r.att })));
+  const votes = res.reviewers.map((r) => r.state);
   setState({ votes, voting: votes.includes(1) });
 }
 

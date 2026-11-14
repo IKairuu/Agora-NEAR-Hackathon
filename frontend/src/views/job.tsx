@@ -442,7 +442,7 @@ function ProofPanel({ s }: { s: State }) {
               const st = v[i];
               return (
                 <div key={r.id} className={`vote ${st === 2 ? 'ok' : ''}`}>
-                  <div className="row" style={{ gap: 8 }}><b style={{ fontWeight: 500 }}>Reviewer {r.id}</b>{st === 2 ? <span className="pill ok">Approve</span> : st === 1 ? <span className="spin" /> : <span className="pill">Queued</span>}</div>
+                  <div className="row" style={{ gap: 8 }}><b style={{ fontWeight: 500 }}>Reviewer {r.id}</b>{st === 2 ? <span className="pill ok">✔ Approve</span> : st === 3 ? <span className="pill block">✘ Reject</span> : st === 1 ? <span className="spin" /> : <span className="pill">{s.live ? 'Waiting' : 'Queued'}</span>}</div>
                   <span className="muted xsmall">{r.model}</span>
                   {SPEC.slice(0, 5).map((sp, j) => <div key={sp[0]} className="check">{st === 2 || (st === 1 && j < 2) ? <Mk k="ok" /> : <span className="m" />}{sp[0]}</div>)}
                   {st === 2 && <span className="mono muted" style={{ fontSize: 11 }}>{s.live ? r.att : <>log 0x{['e3a1', '92cf', '5b07'][i]}…  {r.att}</>}</span>}
@@ -485,7 +485,7 @@ export function Room() {
       <div className="grid g-main">
         <div className="stack">
           <DeliveriesPanel s={s} />
-          {(s.voting || released) && <ProofPanel s={s} />}
+          {(s.live ? !!s.votes : (s.voting || released)) && <ProofPanel s={s} />}
         </div>
         <div className="stack">
           <div className="panel"><div className="panel-h"><h3>Contract record</h3><div className="r"><T name="NEP-141" tip="Native USDC held by the marketplace contract" /></div></div><div className="panel-b">
