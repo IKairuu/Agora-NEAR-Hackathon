@@ -256,7 +256,8 @@ async function loadCurrentJob(): Promise<void> {
   setState({ liveSpec });
   const stage = stageNumber(job);
   if (stage >= 2) await loadOffers(ref);
-  if (stage >= 5) await loadReviews(ref);
+  /* also after a rejected attempt sends the job back to Protected, so the last votes stay visible */
+  if (stage >= 4) await loadReviews(ref);
   const offer = stage >= 2 ? await liveApi<HireOfferView>(`/negotiations/v1/offer?job=${ref}`, { quiet: true }).catch(() => null) : null;
   if (stale(sid)) return;
   setState((s) => {
