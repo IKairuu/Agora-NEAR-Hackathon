@@ -27,7 +27,7 @@ jest.mock('near-api-js', () => ({
 import { Test, TestingModule } from '@nestjs/testing';
 import { IndexerService } from '../indexer/indexer.service';
 import { ChainRepository } from './chain.repository';
-import { ChainService, deadlineIn, decodeSuccessValue, functionCallOf, panicMessage, parseOutcome } from './chain.service';
+import { ChainService, deadlineIn, decodeSuccessValue, functionCallOf, isRetryableRpcError, panicMessage, parseOutcome, rpcUrls } from './chain.service';
 
 const b64 = (v: unknown) => Buffer.from(JSON.stringify(v)).toString('base64');
 const KEY = 'ed25519:3D4YudUahN1nawWogh8pAKSj92sUNMdbZGjn7kERKzYoTy8tnFQuwoGUC51DowKqorvkr2pytJSnwuSbsNVfqygr';
@@ -158,7 +158,7 @@ describe('ChainService (real mode)', () => {
         expect(getVaultSecret.mock.calls[0]).toEqual(['near_key:agents.lumen.testnet']);
         expect(fromSecretKey.mock.calls[0]).toEqual([KEY]);
         expect(accountCtor.mock.calls[0]![0]).toBe('agents.lumen.testnet');
-        expect(providerCtor.mock.calls[0]).toEqual([{ url: 'https://test.rpc.fastnear.com' }]);
+        expect(providerCtor.mock.calls[0]![0]).toEqual({ url: 'https://test.rpc.fastnear.com' });
         expect(functionCall.mock.calls[0]).toEqual(['post_job', { category: 'rust', budget_hint: '40000000', spec_hash: 'ab', deadline: '1' }, 100_000_000_000_000n, 0n]);
         const sent = signAndSendTransaction.mock.calls[0]![0];
         expect(sent.receiverId).toBe('agora-market.agora-testnet.testnet');
@@ -391,5 +391,18 @@ describe('outcome helpers', () => {
 
     it('builds deadlines in nanoseconds', () => {
         expect(deadlineIn(1, 1_000)).toBe(String(1_000n * 1_000_000n + 86_400_000_000_000n));
+    });
+
+    it('tries the configured RPCs first, then the public ones, without duplicates', () => {
+        const urls = rpcUrls({ NEAR_RPC_URL: 'https://mine.example/rpc?apiKey=x', NEAR_RPC_URLS: ' https://two.example , https://test.rpc.fastnear.com' });
+        expect(urls.slice(0, 3)).toEqual(['https://mine.example/rpc?apiKey=x', 'https://two.example', 'https://test.rpc.fastnear.com']);
+        expect(new Set(urls).size).toBe(urls.length);
+        expect(rpcUrls({})[0]).toBe('https://test.rpc.fastnear.com');
+    });
+
+    it('retries rate limits and outages but not contract errors', () => {
+        expect(isRetryableRpcError(Object.assign(new Error('Rate limits exceeded'), { cause: 429 }))).toBe(true);
+        expect(isRetryableRpcError(new Error('fetch failed'))).toBe(true);
+        expect(isRetryableRpcError(new Error('Smart contract panicked: Not the buyer'))).toBe(false);
     });
 });

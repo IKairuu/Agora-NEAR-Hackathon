@@ -73,6 +73,63 @@ export const assertChainJobId = (method: string, args: Record<string, unknown>):
     }
 };
 
+/** Free public NEAR RPCs tried after the ones in NEAR_RPC_URL / NEAR_RPC_URLS, so one rate-limited endpoint does not stop a call. */
+const PUBLIC_RPCS: Record<'testnet' | 'mainnet', string[]> = {
+    testnet: ['https://test.rpc.fastnear.com', 'https://near-testnet.drpc.org', 'https://neart.lava.build', 'https://rpc.testnet.near.org'],
+    mainnet: ['https://free.rpc.fastnear.com', 'https://near.drpc.org', 'https://near.lava.build', 'https://rpc.mainnet.near.org'],
+};
+
+/** RPC endpoints in the order they are tried: NEAR_RPC_URL, then NEAR_RPC_URLS (comma-separated, may hold an API key in the URL), then the public ones. */
+export const rpcUrls = (env: NodeJS.ProcessEnv = process.env): string[] => {
+    const net = (env['NEAR_NETWORK'] ?? 'testnet') === 'mainnet' ? 'mainnet' : 'testnet';
+    const own = [env['NEAR_RPC_URL'] ?? '', ...(env['NEAR_RPC_URLS'] ?? '').split(',')].map((u) => u.trim()).filter(Boolean);
+    return [...new Set([...own, ...PUBLIC_RPCS[net]])];
+};
+
+/** Rate limits (429), server errors, timeouts and network failures are worth another try on the next RPC. Contract errors are not. */
+export const isRetryableRpcError = (e: unknown): boolean => {
+    const err = (e ?? {}) as { cause?: unknown; type?: string; message?: string };
+    if (typeof err.cause === 'number' && [408, 429, 500, 502, 503, 504].includes(err.cause)) return true;
+    if (err.type === 'RetriesExceeded') return true;
+    return /rate limit|too many requests|\b429\b|bad gateway|unavailable|fetch failed|failed to fetch|ECONNRESET|ETIMEDOUT|ENOTFOUND|EAI_AGAIN|socket hang up|Exceeded \d+ attempts/i.test(String(err.message ?? e));
+};
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * One provider over several RPC URLs. A call that hits a retryable error moves to the next URL; after a full pass it
+ * waits (1 s, 2 s, 4 s) and tries the list again. Re-sending a signed transaction is safe: it has the same hash and nonce.
+ */
+export function resilientProvider(urls: string[], onRetry?: (url: string, why: string) => void): JsonRpcProvider {
+    const providers = urls.map((url) => new JsonRpcProvider({ url }, { retries: 2, wait: 300, backoff: 2 }));
+    let current = 0;
+    const run = async (call: (p: JsonRpcProvider) => Promise<unknown>): Promise<unknown> => {
+        let last: unknown = new Error('No NEAR RPC configured');
+        for (let round = 0; round < 3; round++) {
+            for (let i = 0; i < providers.length; i++) {
+                const p = providers[current]!;
+                try {
+                    return await call(p);
+                } catch (e) {
+                    if (!isRetryableRpcError(e)) throw e;
+                    last = e;
+                    onRetry?.(urls[current] ?? '', e instanceof Error ? e.message.slice(0, 120) : String(e));
+                    current = (current + 1) % providers.length;
+                }
+            }
+            if (round < 2) await sleep(1000 * 2 ** round);
+        }
+        throw last;
+    };
+    return new Proxy(providers[0]!, {
+        get(target, prop, receiver) {
+            const value = Reflect.get(target, prop, receiver);
+            if (typeof value !== 'function') return value;
+            return (...args: unknown[]) => run((p) => (Reflect.get(p, prop) as (...a: unknown[]) => Promise<unknown>).apply(p, args));
+        },
+    });
+}
+
 export const chainBidId = (bid: { onchainId: bigint | null; id: string }): string => bid.onchainId?.toString() ?? bid.id;
 
 export const chainIdOf = (value: unknown): bigint | null => {
@@ -152,7 +209,6 @@ export class ChainService {
     private readonly mode = process.env['AGORA_CHAIN_MODE'] ?? 'mock';
     private readonly network = process.env['NEAR_NETWORK'] ?? 'testnet';
     private readonly contractId = process.env['AGORA_CONTRACT_ID'] || 'agora-market.agora-testnet.testnet';
-    private readonly rpcUrl = process.env['NEAR_RPC_URL'] || ((process.env['NEAR_NETWORK'] ?? 'testnet') === 'mainnet' ? 'https://free.rpc.fastnear.com' : 'https://test.rpc.fastnear.com');
     private counter = Math.floor(Date.now() / 1000);
     private provider: JsonRpcProvider | null = null;
     private readonly logger = new Logger(ChainService.name);
@@ -530,7 +586,10 @@ export class ChainService {
     }
 
     private rpc(): JsonRpcProvider {
-        if (!this.provider) this.provider = new JsonRpcProvider({ url: this.rpcUrl });
+        if (!this.provider) {
+            /* the host only, never the path or query, which can hold an API key */
+            this.provider = resilientProvider(rpcUrls(), (url, why) => this.logger.warn(`NEAR RPC ${url.replace(/^(https?:\/\/[^/?]+).*/, '$1')} failed (${why}), trying the next one`));
+        }
         return this.provider;
     }
 

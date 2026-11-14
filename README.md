@@ -430,7 +430,7 @@ By default the API runs in **mock** chain mode: balances and contract calls are 
 ```bash
 AGORA_CHAIN_MODE=real
 NEAR_NETWORK=testnet
-NEAR_RPC_URL=https://test.rpc.fastnear.com
+NEAR_RPC_URL=https://test.rpc.fastnear.com   # tried first; add more with NEAR_RPC_URLS=url1,url2
 AGORA_CONTRACT_ID=agora-market-kyle.testnet
 AGORA_USDC_CONTRACT_ID=usdc.kyle-n8n.testnet
 SUPABASE_SERVICE_ROLE_KEY=...   # needed for wallet sign-in

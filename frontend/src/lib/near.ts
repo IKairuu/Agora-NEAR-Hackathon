@@ -170,17 +170,34 @@ export const sendCalls = (to: string, amount: number): WalletCall[] => [
   { method: 'ft_transfer', args: { receiver_id: to, amount: usdcUnits(amount), memo: 'Sent from AGORA' }, tgas: 30, deposit: ONE_YOCTO },
 ];
 
-/** A public RPC (FastNEAR; rpc.<network>.near.org is deprecated and rate-limited). Reading balances does not need the wallet library. */
-const RPC_URL = (import.meta.env.VITE_NEAR_RPC_URL as string | undefined) || (NEAR_NETWORK === 'mainnet' ? 'https://free.rpc.fastnear.com' : 'https://test.rpc.fastnear.com');
+/**
+ * RPCs for reading balances and keys (no wallet library needed): VITE_NEAR_RPC_URL, then VITE_NEAR_RPC_URLS (comma-separated),
+ * then free public ones. A rate limit (429), server error or network failure moves to the next one.
+ */
+const RPC_URLS = [...new Set([
+  (import.meta.env.VITE_NEAR_RPC_URL as string | undefined) ?? '',
+  ...((import.meta.env.VITE_NEAR_RPC_URLS as string | undefined) ?? '').split(','),
+  ...(NEAR_NETWORK === 'mainnet'
+    ? ['https://free.rpc.fastnear.com', 'https://near.drpc.org', 'https://near.lava.build']
+    : ['https://test.rpc.fastnear.com', 'https://near-testnet.drpc.org', 'https://neart.lava.build']),
+].map((u) => u.trim()).filter(Boolean))];
+let rpcAt = 0;
 
 async function rpcQuery<T>(params: Record<string, unknown>): Promise<T> {
-  const res = await fetch(RPC_URL, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ jsonrpc: '2.0', id: 'agora', method: 'query', params: { finality: 'optimistic', ...params } }),
-  });
-  const data = (await res.json()) as { result?: T & { error?: string }; error?: { message?: string } };
-  if (!data.result || data.result.error) throw new Error(data.error?.message ?? data.result?.error ?? 'RPC error');
-  return data.result;
+  const body = JSON.stringify({ jsonrpc: '2.0', id: 'agora', method: 'query', params: { finality: 'optimistic', ...params } });
+  let lastErr: Error = new Error('RPC error');
+  for (let tries = 0; tries < RPC_URLS.length * 2; tries++) {
+    if (tries === RPC_URLS.length) await new Promise((r) => setTimeout(r, 1500));
+    const url = RPC_URLS[rpcAt % RPC_URLS.length]!;
+    let res: Response;
+    try { res = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body }); }
+    catch (e) { lastErr = e instanceof Error ? e : new Error('RPC unreachable'); rpcAt++; continue; }
+    if (res.status === 429 || res.status >= 500) { lastErr = new Error(`RPC ${res.status}`); rpcAt++; continue; }
+    const data = (await res.json()) as { result?: T & { error?: string }; error?: { message?: string } };
+    if (!data.result || data.result.error) throw new Error(data.error?.message ?? data.result?.error ?? 'RPC error');
+    return data.result;
+  }
+  throw lastErr;
 }
 
 /** One access key on a NEAR account, as the chain reports it. */
