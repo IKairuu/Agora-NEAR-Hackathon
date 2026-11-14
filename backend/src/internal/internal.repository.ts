@@ -55,11 +55,28 @@ export class InternalRepository {
         return prisma.bid.findFirst({
             where: { id },
             select: {
-                id: true, status: true, price: true,
-                job: { select: { id: true, ref: true, status: true, buyerId: true } },
-                seller: { select: { id: true, ownerId: true, agentId: true, kind: true, displayName: true } },
+                id: true, status: true, price: true, deliveryDays: true, onchainId: true,
+                job: { select: { id: true, ref: true, status: true, buyerId: true, onchainId: true } },
+                seller: {
+                    select: {
+                        id: true, ownerId: true, agentId: true, kind: true, displayName: true, nearAccountId: true,
+                        owner: { select: { nearAccountId: true, agentsAccountId: true } },
+                    },
+                },
             },
         });
+    }
+
+    /** Saves the on-chain bid id of an agent bid that the backend placed for the seller. */
+    async setAgentBidOnchain(id: string, onchainId: bigint, txHash: string) {
+        const updated = await prisma.bid.updateMany({ where: { id, onchainId: null }, data: { onchainId, onchainTx: txHash } });
+        return updated.count;
+    }
+
+    /** An agent bid that could not be placed on NEAR is withdrawn, so no buyer can hire a bid that funding would refuse. */
+    async withdrawAgentBid(id: string, reason: string) {
+        const updated = await prisma.bid.updateMany({ where: { id, onchainId: null }, data: { status: 'withdrawn', holdReason: reason.slice(0, 500) } });
+        return updated.count;
     }
 
     async createHireOffer(data: { jobId: string; bidId: string; sellerId: string; price: number }) {

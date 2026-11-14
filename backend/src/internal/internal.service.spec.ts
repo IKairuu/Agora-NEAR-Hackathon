@@ -229,6 +229,50 @@ describe('InternalService', () => {
         expect(repo.createNotifications.mock.calls[0]![0][0]).toMatchObject({ userId: 'seller', title: 'Your agent bid on J-1042' });
     });
 
+    describe('agent bids in real mode', () => {
+        const realBid = () => agentBid({
+            status: 'pending_check', onchainId: null, deliveryDays: null,
+            seller: { id: SELLER, ownerId: 'seller', agentId: 'agent-9', kind: 'agent', displayName: 'patchbot', nearAccountId: 'agents.kyle.testnet', owner: { nearAccountId: 'kyle.testnet', agentsAccountId: 'agents.kyle.testnet' } },
+        });
+        beforeEach(() => {
+            chain.isMock.mockReturnValue(false);
+            repo.getJob.mockResolvedValue({ id: JOB, ref: 'J-1042', onchainId: 7n, title: 'Split fix', buyerId: 'buyer', seller: null } as never);
+            (repo as unknown as Record<string, jest.Mock>)['setAgentBidOnchain'] = jest.fn().mockResolvedValue(1);
+            (repo as unknown as Record<string, jest.Mock>)['withdrawAgentBid'] = jest.fn().mockResolvedValue(1);
+        });
+
+        it('places the bid on NEAR as agents.<owner> and saves the bid id before the checks', async () => {
+            repo.getAgentBid.mockResolvedValue(realBid() as never);
+            chain.callAs.mockResolvedValue({ tx_hash: 'TXBID', explorer_url: '', ok: true, result: '12' });
+            const res = await service.agentNotify({ role: 'bidding', ok: true, jobId: JOB, result: { action: 'bid', skip: null, bidId: BID, price: 8, etaDays: 2 } });
+            expect(chain.callAs.mock.calls[0]).toEqual(['owner', 'agents.kyle.testnet', 'place_bid', { job_id: '7', price: '8000000', days: 2 }]);
+            expect((repo as unknown as Record<string, jest.Mock>)['setAgentBidOnchain']!.mock.calls[0]).toEqual([BID, 12n, 'TXBID']);
+            expect(res.actions.slice(0, 2)).toEqual(['bid on chain TXBID', 'bid checks started']);
+        });
+
+        it('registers a seller the contract does not know yet and tries once more', async () => {
+            process.env['AGORA_PLATFORM_ACCOUNT'] = 'kyle-n8n.testnet';
+            repo.getAgentBid.mockResolvedValue(realBid() as never);
+            chain.callAs
+                .mockRejectedValueOnce(new Error('Contract refused place_bid: Not a registered seller'))
+                .mockResolvedValueOnce({ tx_hash: 'TXREG', explorer_url: '', ok: true, result: null })
+                .mockResolvedValueOnce({ tx_hash: 'TXBID', explorer_url: '', ok: true, result: '13' });
+            await service.agentNotify({ role: 'bidding', ok: true, jobId: JOB, result: { action: 'bid', skip: null, bidId: BID, price: 8 } });
+            expect(chain.callAs.mock.calls[1]).toEqual(['platform', 'kyle-n8n.testnet', 'register_seller', { account_id: 'kyle.testnet' }, '1']);
+            expect((repo as unknown as Record<string, jest.Mock>)['setAgentBidOnchain']!.mock.calls[0]).toEqual([BID, 13n, 'TXBID']);
+            delete process.env['AGORA_PLATFORM_ACCOUNT'];
+        });
+
+        it('withdraws a bid that cannot reach NEAR so no buyer can pick it', async () => {
+            repo.getAgentBid.mockResolvedValue(realBid() as never);
+            chain.callAs.mockRejectedValue(new Error('agents.kyle.testnet is not set up yet'));
+            const res = await service.agentNotify({ role: 'bidding', ok: true, jobId: JOB, result: { action: 'bid', skip: null, bidId: BID, price: 8 } });
+            expect((repo as unknown as Record<string, jest.Mock>)['withdrawAgentBid']!.mock.calls[0]).toEqual([BID, 'Not placed on NEAR: agents.kyle.testnet is not set up yet']);
+            expect(agents.dispatch.mock.calls).toHaveLength(0);
+            expect(res.actions[0]).toBe('bid withdrawn: agents.kyle.testnet is not set up yet');
+        });
+    });
+
     it('runs the buyer agent again after a seller agent reply', async () => {
         repo.getAgentBid.mockResolvedValue(agentBid() as never);
         const res = await service.agentNotify({ role: 'bidding', ok: true, jobId: JOB, result: { action: 'negotiate', skip: null, bidId: BID, accept: false, price: 33 } });

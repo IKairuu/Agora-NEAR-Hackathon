@@ -168,6 +168,15 @@ describe('BidsService', () => {
             expect(result.waitingFor).toBe(0);
         });
 
+        it('in real mode hides offers that never reached NEAR', async () => {
+            chain.isMock.mockReturnValue(false);
+            repo.getOwnedJob.mockResolvedValue({ id: JOB });
+            repo.getBids.mockResolvedValue([bid('dana', 38, { onchainId: 4n } as never), bid('patchsmith', 36, { onchainId: null } as never)]);
+            repo.getReputations.mockResolvedValue([]);
+            const result = await service.getBids('Bearer t', 'J-1042');
+            expect(result.offers.map((o) => o.key)).toEqual(['dana']);
+        });
+
         it('only shows offers to the job buyer', async () => {
             repo.getOwnedJob.mockResolvedValue(null);
             await expect(service.getBids('Bearer t', 'J-1042')).rejects.toThrow('Job not found');
