@@ -4,6 +4,15 @@ import { prisma } from '../prisma.js';
 
 export type JobKey = { id: string } | { ref: string };
 
+/**
+ * The bids a buyer can actually see as offers, so "Bids so far" and "N offers" match the offers list.
+ * On a real chain that means bids placed on NEAR; a bid the bidding agent saved but could not place is not counted.
+ */
+const VISIBLE_BID: Prisma.BidWhereInput = {
+    status: { in: ['pending_check', 'live', 'shortlisted', 'accepted'] },
+    ...((process.env['AGORA_CHAIN_MODE'] ?? 'mock') === 'mock' ? {} : { onchainId: { not: null } }),
+};
+
 const jobSelect = {
     id: true,
     ref: true,
@@ -22,7 +31,7 @@ const jobSelect = {
     categoryRef: { select: { slug: true, name: true } },
     seller: { select: { displayName: true, ownerId: true } },
     acceptanceSpecs: { select: { specHash: true, lockedAt: true }, orderBy: { version: 'desc' }, take: 1 },
-    _count: { select: { bids: true, completionRecords: true } },
+    _count: { select: { bids: { where: VISIBLE_BID }, completionRecords: true } },
 } satisfies Prisma.JobSelect;
 
 export type JobRow = Prisma.JobGetPayload<{ select: typeof jobSelect }>;
@@ -45,7 +54,7 @@ const openJobSelect = {
     categoryRef: { select: { slug: true, name: true } },
     buyer: { select: { displayName: true } },
     acceptanceSpecs: { where: { lockedAt: { not: null } }, select: { failingTests: true }, orderBy: { version: 'desc' }, take: 1 },
-    _count: { select: { bids: true } },
+    _count: { select: { bids: { where: VISIBLE_BID } } },
 } satisfies Prisma.JobSelect;
 
 export type OpenJobRow = Prisma.JobGetPayload<{ select: typeof openJobSelect }>;

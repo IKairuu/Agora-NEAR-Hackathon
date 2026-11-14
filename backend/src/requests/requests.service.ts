@@ -23,6 +23,8 @@ export const guessCategory = (text: string): string => {
     if (/\b(react|front-?end|css|safari|browser|modal|layout|ui)\b/.test(t)) return 'fe';
     if (/\b(script|csv|export|cron|batch)\b/.test(t)) return 'scripts';
     if (/\b(coverage|playwright|write (unit |property )?tests)\b/.test(t)) return 'tests';
+    /* plain JS, TS or Python code is not a smart contract */
+    if (!/\b(rust|cargo|near-sdk|smart contract|contract)\b|\.rs\b/.test(t) && /\.(m?js|ts|py)\b|\b(javascript|typescript|node|npm|python)\b/.test(t)) return 'scripts';
     return 'rust';
 };
 

@@ -633,7 +633,7 @@ export function Ojob() {
         </div></div>
       </div>
       <div className="tally">
-        <div><span className="lbl">Budget</span><b className="num">{j[2]}<span className="u">USDC</span></b><span className="sub">funded into escrow when you're hired</span></div>
+        <div><span className="lbl">Budget</span>{j[2] ? <b className="num">{j[2].replace(/\s*USDC$/i, '')}<span className="u">USDC</span></b> : <b className="num">Open</b>}<span className="sub">{j[2] ? 'funded into escrow when you\'re hired' : 'no budget set, name your price'}</span></div>
         <div><span className="lbl">Deliver within</span><b className="num">3 days</b><span className="sub">up to 3 delivery attempts</span></div>
         <div><span className="lbl">Bids so far</span><b className="num">{j[4]}</b><span className="sub">sealed, buyers see lowest first</span></div>
         <div><span className="lbl">Buyer record</span><b className="num">{j[8] === 'New buyer' ? 'New' : '12 paid'}</b><span className="sub">{j[8] === 'New buyer' ? 'first job, escrow still protects you' : '0 disputes lost'}</span></div>
