@@ -468,7 +468,7 @@ export const act = {
   savemandate: () => { if (isLive()) { void liveSaveMandate(); return; } toast('Limits saved on-chain with your full-access key.'); },
   publishseller: () => {
     if (isLive()) { void livePublishSeller().then((ok) => { if (ok) { setState({ sellStep: 0 }); go('seller'); } }); return; }
-    setState({ seller: true, sellStep: 0 }); go('seller'); toast('Seller profile published. Your bidding agent is watching matching jobs.');
+    setState({ seller: true, sellStep: 0 }); go('seller'); toast(getState().sellCoder === 'agent' ? 'Seller profile published. Your bidding agent now bids on matching jobs.' : 'Seller profile published. Matching jobs show in Open jobs, and your bidding agent bids for you inside your rules.');
   },
   reqsvc: () => { if (getState().stage < 1) { act.signin(); return; } openModal('reqsvc'); },
   reqsvc2: (what: string) => {

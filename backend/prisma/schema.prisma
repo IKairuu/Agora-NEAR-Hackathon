@@ -277,6 +277,9 @@ model Profile {
   isBusiness      Boolean @default(false) @map("is_business")
   location        String?
   bio             String?
+  /// Profile photo as a small data URL (image/jpeg, png or webp), served by GET /avatars/v1/:id.
+  avatarImage     String?   @map("avatar_image")
+  avatarUpdatedAt DateTime? @map("avatar_updated_at") @db.Timestamptz(6)
   role            String?
   mode            String?
   theme           String?

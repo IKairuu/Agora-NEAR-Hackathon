@@ -30,7 +30,9 @@ export function Agents() {
     ['Reviewers, 3', 'Run the locked tests on each delivery and vote.', 'Vote only, shared', live ? live.review : '2 of 3 approved e5f1d07', false],
     ['Fraud and lure', 'Scores every counterparty 0 to 100 and holds lures and outlier prices.', 'Can hold, not pay, shared', live ? live.held : 'Held 2 bids', false],
     ['Guardian', 'Watches your on-chain activity and pauses on unusual patterns.', 'Function-call key, pause only', 'Watching, 0 alerts', false],
-    ['Bidding agent', 'Seller side. Bids on jobs that match your skills.', s.seller ? 'Function-call key, bid and deliver' : 'Off while you only buy', s.seller ? 'Watching matching jobs' : 'Off', false],
+    s.sellCoder === 'agent'
+      ? ['Bidding agent', 'Seller side. Bids on jobs that match your skills, for your coding agent.', s.seller ? 'Function-call key, bid and deliver' : 'Off while you only buy', s.seller ? 'Bidding on matching jobs' : 'Off', false]
+      : ['Bidding agent', 'Seller side. Places bids for you on jobs that match your skills. You do the work and deliver it.', s.seller ? 'Function-call key, bid and deliver' : 'Off while you only buy', s.seller ? 'Bids for you, inside your rules' : 'Off', false],
   ];
   return (
     <Shell cur="agents">

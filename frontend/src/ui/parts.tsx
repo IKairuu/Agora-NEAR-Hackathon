@@ -12,6 +12,11 @@ export function RLink({ r, children, ...rest }: { r: string; children: ReactNode
   return <Link to={pathOf(r)} {...rest}>{children}</Link>;
 }
 
+/** An avatar circle: the photo when there is one, the initials otherwise. */
+export function Face({ photo, initials, className = '' }: { photo?: string; initials: ReactNode; className?: string }) {
+  return <span className={`avatar ${photo ? 'has-photo' : ''} ${className}`.trim()}>{photo ? <img src={photo} alt="" /> : initials}</span>;
+}
+
 export function Head({ crumbs, title, sub, actions }: { crumbs?: ReactNode; title: ReactNode; sub?: ReactNode; actions?: ReactNode }) {
   return (
     <div className="page-head">

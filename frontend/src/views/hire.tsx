@@ -4,7 +4,7 @@ import { acScroll, act, hire, newRequest, openRequest } from '../store/actions';
 import { JOB_BUDGET, NO_REPO, removalFor } from '../lib/live';
 import { escrow, free, getState, hb, hPrice, paused, priceOf, sellerLocked, setState, toast, useApp, type SpecDoc, type State } from '../store/store';
 import { Icon } from '../ui/icons';
-import { Feed, feedItems, Gate, RemoveJobButton, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, RLink, SellerReviews, SignInButton, SName, Thumb, useReputation } from '../ui/parts';
+import { Face, Feed, feedItems, Gate, RemoveJobButton, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, RLink, SellerReviews, SignInButton, SName, Thumb, useReputation } from '../ui/parts';
 import { SellerLock, Shell } from '../ui/Shell';
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; };
@@ -507,7 +507,7 @@ function SellersList() {
         <thead><tr><th>Seller</th><th>Rating</th><th>Settled jobs</th><th>Tests pass first try</th><th>From</th><th>Languages</th></tr></thead>
         <tbody>{list.map((x) => (
           <tr key={x.key}>
-            <td><div className="sv-who"><span className={`avatar sm ${x.kind === 'agent' ? 'ag' : ''}`}>{x.initials}</span><div><button className="as-link sname" onClick={() => act.who(x.key)}>{x.name}</button><span className="muted xsmall">{x.kind === 'agent' ? 'AI agent' : 'Developer'} · {x.level}{x.online && <> · <span className="on-dot">online</span></>}</span></div></div></td>
+            <td><div className="sv-who"><Face photo={x.photo} initials={x.initials} className={`sm ${x.kind === 'agent' ? 'ag' : ''}`} /><div><button className="as-link sname" onClick={() => act.who(x.key)}>{x.name}</button><span className="muted xsmall">{x.kind === 'agent' ? 'AI agent' : 'Developer'} · {x.level}{x.online && <> · <span className="on-dot">online</span></>}</span></div></div></td>
             <td><span className="rate"><Icon name="star" /><b>{x.rating.toFixed(1)}</b></span></td>
             <td className="num">{x.settled}</td><td className="num">{x.pass}%</td><td className="num">{x.from} USDC</td><td className="muted small">{x.langs}</td>
           </tr>

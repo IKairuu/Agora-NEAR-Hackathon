@@ -9,6 +9,8 @@ export const sellerDirSelect = {
     displayName: true,
     headline: true,
     priceFloor: true,
+    ownerId: true,
+    owner: { select: { avatarUpdatedAt: true } },
     sellerProfile: { select: { initials: true, level: true, online: true, about: true, langs: true, days: true, headline: true, country: true, skills: true, categories: true, deliveryTerms: true, githubUsername: true, priceFrom: true } },
     services: { where: { active: true }, select: { id: true, fromPrice: true, days: true }, orderBy: { createdAt: 'asc' } },
 } satisfies Prisma.SellerSelect;

@@ -37,7 +37,7 @@ async function liveApi<T>(path: string, opts: Parameters<typeof api>[1] = {}): P
 let likedBefore: string[] | null = null;
 const replace = <T,>(target: T[], items: T[]) => { target.splice(0, target.length, ...items); };
 
-interface MeView { id: string; name: string; acct: string; agents: string; initials: string; email: string; role: 'hire' | 'work' | null; mode: 'buy' | 'sell'; seller: boolean }
+interface MeView { id: string; name: string; acct: string; agents: string; initials: string; email: string; photo?: string; role: 'hire' | 'work' | null; mode: 'buy' | 'sell'; seller: boolean }
 interface JobView { id: string; uuid: string; title: string; repo: string; base: string; cat: string; plain: string; posted: string; specHash: string; specLocked: boolean; budget: string; stage: string; status: [string, string]; offers: number; remove?: 'delete' | 'cancel' | null }
 
 /* ---- delete or cancel a job: the API says which one a job allows, and checks it again when asked ---- */
@@ -120,7 +120,7 @@ export async function goLive(opts: { keepMode?: boolean } = {}): Promise<void> {
   if (stale(s)) return;
   if (likedBefore === null) likedBefore = getState().liked;
   clearDemo();
-  Object.assign(ME, { name: me.name, acct: me.acct, agents: me.agents, initials: me.initials, email: me.email });
+  Object.assign(ME, { name: me.name, acct: me.acct, agents: me.agents, initials: me.initials, email: me.email, photo: me.photo ?? '' });
   const mode = opts.keepMode ? getState().mode : me.mode === 'sell' ? 'sell' : 'buy';
   /* the account learns a mode kept from this device only if it differs (savedMode = what the server has) */
   savedMode = me.mode === 'sell' ? 'sell' : 'buy';
@@ -149,7 +149,7 @@ export function stopRestoring(): void {
 
 /** Empties every container the demo story fills, so a real account sees only its own data. */
 function clearDemo(): void {
-  Object.assign(ME, { name: '', acct: '', agents: '', initials: '', email: '' });
+  Object.assign(ME, { name: '', acct: '', agents: '', initials: '', email: '', photo: '' });
   Object.assign(JOB, { id: '', title: '', repo: '', base: '', cat: '', plain: '', posted: '', specHash: '' });
   Object.assign(JOB_LISTING, { budget: '', check: '', blurb: '', buyerRating: '' });
   Object.assign(SETTLED, { record: '', title: '', reviewer: '', review: '' });
@@ -206,13 +206,31 @@ async function loadPublicOpenJobs(): Promise<void> {
 }
 
 /** Leaves live mode and puts the demo story back. The market stays: it is the same public data. */
+/**
+ * Saves the account's profile photo (a small data URL the browser already resized), or removes it with ''.
+ * It shows at once in the account menu and the seller profile; the sellers list reloads so buyers see it too.
+ */
+export async function liveSavePhoto(dataUrl: string): Promise<boolean> {
+  try {
+    await api('/me/v1', { method: 'PATCH', body: { avatar: dataUrl }, quiet: true });
+  } catch (e) {
+    toast(e instanceof ApiError && e.status !== 0 ? e.message : 'Could not save your photo. Check your connection and try again.', 'block');
+    return false;
+  }
+  ME.photo = dataUrl;
+  setState({ avatarImg: dataUrl });
+  toast(dataUrl ? 'Profile photo saved.' : 'Profile photo removed.');
+  void loadMarket();
+  return true;
+}
+
 export function leaveLive(): void {
   session++;
   savedMode = null;
   agentsOn = null;
   if (timer) { clearInterval(timer); timer = null; }
   restoreDemo();
-  setState({ restoring: false, sellForm: DEMO_SELL_FORM, sellLoaded: false });
+  setState({ restoring: false, sellForm: DEMO_SELL_FORM, sellLoaded: false, avatarImg: '' });
   setLiveOpenJobs(null);
   if (likedBefore !== null) { setState({ liked: likedBefore }); likedBefore = null; }
   setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));
