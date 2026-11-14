@@ -12,6 +12,9 @@ const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Good 
 const SUGG = ['Fix the failing test in payroll-vault', 'Add pagination to get_jobs', 'Write tests for the refund callback', 'Fix the Safari wallet modal'];
 const SUGG_LIVE = ['Fix a failing test in my repo', 'Add pagination to a view method', 'Write tests for a callback', 'Fix a wallet modal on Safari'];
 
+/** Valid offers needed before the buyer can choose. 3 by default; set VITE_AGORA_MIN_OFFERS=1 for a single-seller demo. */
+const MIN_OFFERS = Math.max(1, Number(import.meta.env.VITE_AGORA_MIN_OFFERS ?? 3) || 3);
+
 /* ---------------- New request: a chat with your agent team ---------------- */
 interface OfferRow { key: string; name: string; kind: 'agent' | 'human'; held: boolean; price: number; fraud: number; why?: string; settled?: number; pass?: string; days?: string; newSeller?: boolean; negotiated?: boolean; listed?: number; attempts?: number }
 /** Offers that have arrived so far, lowest price first. */
@@ -132,7 +135,7 @@ function LiveSpecMsg() {
 function OffersCard() {
   const s = useApp();
   const rows = offerPool(s), valid = rows.filter((r) => !r.held), held = rows.filter((r) => r.held);
-  const ready = valid.length >= 3, live = s.stage < 3;
+  const ready = valid.length >= MIN_OFFERS, live = s.stage < 3;
   const best = s.stage >= 3 ? agentPick()?.key ?? '' : '';
   const row = (r: OfferRow) => {
     if (r.held) return (
@@ -172,7 +175,7 @@ function OffersCard() {
     <div className="ccard offers">
       <div className="cc-h"><Icon name="trend" /><b>Offers, lowest price first</b><span className="muted xsmall">{valid.length} valid{held.length ? `, ${held.length} held` : ''}</span>{live && <span className="pill info"><span className="spin" />Arriving</span>}</div>
       {rows.length ? <ol className="olist2">{rows.map(row)}</ol> : <p className="muted small">No offers yet. Matching sellers usually answer within a few minutes.</p>}
-      {!ready && rows.length > 0 && <p className="muted xsmall">Your agent waits for 3 valid offers before you can choose, so the first fast offer doesn't win by default.</p>}
+      {!ready && rows.length > 0 && <p className="muted xsmall">Your agent waits for {MIN_OFFERS} valid {MIN_OFFERS === 1 ? 'offer' : 'offers'} before you can choose, so the first fast offer doesn't win by default.</p>}
       <div className="cc-f">
         <span className="muted xsmall">Price check by the fraud and lure agent: usual price 28 to 45 USDC{valid.length >= 3 ? ', median valid offer 35.50' : ''}.</span>
         {s.stage < 5 && <button className="lk" onClick={act.postpublic}>None fit? Post it publicly</button>}
