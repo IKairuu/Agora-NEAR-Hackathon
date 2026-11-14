@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
-import { Account, actions, JsonRpcProvider, KeyPairSigner, KeyPairString, teraToGas } from 'near-api-js';
+import { Account, actions, JsonRpcProvider, KeyPair, KeyPairEd25519, KeyPairSigner, KeyPairString, nearToYocto, teraToGas } from 'near-api-js';
 import { verifyMessage } from 'near-api-js/nep413';
 import { IndexerService, jobKeyOf, jobRefOf, bondJobOf, MockCall, ownerOf, usdcOf } from '../indexer/indexer.service.js';
 import { ChainRepository } from './chain.repository.js';
@@ -42,6 +42,14 @@ export const HEAVY_METHODS = ['ft_transfer_call', 'withdraw', 'resolve_dispute',
 export const DEFAULT_TGAS = 100;
 export const HEAVY_TGAS = 300;
 const NS_PER_DAY = 86_400_000_000_000n;
+
+/** What the server spends to make a wallet-less user real on NEAR (testnet), and the starter USDC it deposits. */
+export const ACCOUNT_NEAR = '0.5';
+export const AGENTS_NEAR = '0.25';
+export const AGENTS_ALLOWANCE_NEAR = '0.25';
+export const STARTER_DEPOSIT_UNITS = 40_000_000n;
+/** Everything an agents.<owner> key may call: the buyer's job methods, the seller's bid and delivery, and the guardian's pause. */
+export const AGENT_METHODS = ['post_job', 'accept_offer', 'fund_job', 'refund_milestone', 'grant_attempt', 'rate', 'place_bid', 'submit_delivery', 'open_dispute', 'pause'];
 
 export const vaultKeyName = (accountId: string): string => `near_key:${accountId}`;
 
@@ -137,6 +145,7 @@ export class ChainService {
     private provider: JsonRpcProvider | null = null;
     private readonly logger = new Logger(ChainService.name);
     private readonly accounts = new Map<string, Account>();
+    private readonly provisioning = new Map<string, Promise<void>>();
 
     constructor(
         private readonly indexer: IndexerService,
@@ -178,15 +187,128 @@ export class ChainService {
     }
 
     async createAccount(profileId: string): Promise<CreatedAccount> {
+        const name = `agora-${profileId.replace(/[^a-z0-9]/gi, '').slice(0, 8).toLowerCase()}`;
+        const created = { account_id: `${name}.${this.network}`, agents_account_id: `agents.${name}.${this.network}` };
         if (this.mode === 'real') {
-            throw new ServiceUnavailableException('Creating NEAR accounts in real chain mode is not built yet. Create the account, save its key in Supabase Vault as near_key:<account> and set it on the profile');
+            await this.provisionAccount(created.account_id);
+            return created;
         }
         this.requireMock();
-        const name = `agora-${profileId.replace(/[^a-z0-9]/gi, '').slice(0, 8).toLowerCase()}`;
-        return {
-            account_id: `${name}.${this.network}`,
-            agents_account_id: `agents.${name}.${this.network}`,
-        };
+        return created;
+    }
+
+    /** True for the names createAccount hands out, so a profile from mock mode can be made real on first use. */
+    isPlatformAccount(accountId: string): boolean {
+        return new RegExp(`^(agents\\.)?agora-[0-9a-f]{8}\\.${this.network}$`).test(accountId);
+    }
+
+    /**
+     * Real mode: makes a custodial account real on NEAR for a user who signed in without a wallet.
+     *  1. The platform account creates <acct> with a full-access key that only the server holds (Vault near_key:<acct>).
+     *  2. <acct> creates agents.<acct> with one function-call key limited to the marketplace's job methods
+     *     (Vault near_key:agents.<acct>), the same shape a wallet user gets from "Enable agents".
+     *  3. <acct> claims test USDC from the token faucet and deposits part of it, so the user can fund a job right away.
+     * Every step checks the chain first, so a retry after a failure finishes the job instead of repeating it.
+     */
+    async provisionAccount(accountId: string): Promise<void> {
+        const running = this.provisioning.get(accountId);
+        if (running) return running;
+        const job = this.runProvision(accountId).finally(() => this.provisioning.delete(accountId));
+        this.provisioning.set(accountId, job);
+        return job;
+    }
+
+    private async runProvision(accountId: string): Promise<void> {
+        if (this.mode !== 'real') return;
+        const platformId = process.env['AGORA_PLATFORM_ACCOUNT'];
+        if (!platformId) throw new ServiceUnavailableException('Set AGORA_PLATFORM_ACCOUNT so the server can create NEAR accounts');
+        const agentsId = `agents.${accountId}`;
+        try {
+            if (!(await this.accountExists(accountId))) {
+                const key = await this.newVaultKey(accountId, `AGORA custodial full-access key for ${accountId}`);
+                const platform = await this.account('platform', platformId);
+                await platform.createAccount({ newAccountId: accountId, publicKey: KeyPair.fromString(key).getPublicKey(), nearToTransfer: nearToYocto(ACCOUNT_NEAR) });
+                /* a top-level name goes through the network's registrar, which can refuse without failing the transaction */
+                if (!(await this.accountExists(accountId))) throw new Error(`the network did not create ${accountId}`);
+                this.logger.log(`Created ${accountId}`);
+            }
+            const owner = await this.account('owner', accountId);
+            if (!(await this.accountExists(agentsId))) {
+                const key = await this.newVaultKey(agentsId, `AGORA agents key for ${agentsId}, limited to ${this.contractId}`);
+                await owner.signAndSendTransaction({
+                    receiverId: agentsId,
+                    actions: [
+                        actions.createAccount(),
+                        actions.transfer(nearToYocto(AGENTS_NEAR)),
+                        actions.addFunctionCallAccessKey(KeyPair.fromString(key).getPublicKey(), this.contractId, AGENT_METHODS, nearToYocto(AGENTS_ALLOWANCE_NEAR)),
+                    ],
+                });
+                this.logger.log(`Created ${agentsId}`);
+            }
+            await this.starterFunds(accountId, owner);
+        } catch (e) {
+            const why = e instanceof Error ? e.message : 'unknown error';
+            this.logger.warn(`Setting up ${accountId} failed: ${why}`);
+            throw new ServiceUnavailableException(`Could not set up your NEAR account ${accountId}: ${why}`);
+        } finally {
+            this.accounts.delete(`owner:${accountId}`);
+            this.accounts.delete(`transaction_agent:${agentsId}`);
+            this.accounts.delete(`owner:${agentsId}`);
+        }
+    }
+
+    /** Claims the faucet's test USDC once and deposits most of it, unless the user already has AGORA balance. */
+    private async starterFunds(accountId: string, owner: Account): Promise<void> {
+        const usdc = process.env['AGORA_USDC_CONTRACT_ID'];
+        if (!usdc) return;
+        const inMarket = await this.rpc().callFunction({ contractId: this.contractId, method: 'get_balance', args: { account_id: accountId } }).catch(() => null) as { free?: string; escrowed?: string } | null;
+        if (inMarket && (BigInt(inMarket.free ?? '0') > 0n || BigInt(inMarket.escrowed ?? '0') > 0n)) return;
+        let wallet = BigInt(String(await this.rpc().callFunction({ contractId: usdc, method: 'ft_balance_of', args: { account_id: accountId } }).catch(() => '0') ?? '0'));
+        if (wallet === 0n) {
+            await owner.signAndSendTransaction({ receiverId: usdc, actions: [actions.functionCall('faucet', {}, teraToGas(30), 0n)] });
+            wallet = BigInt(String(await this.rpc().callFunction({ contractId: usdc, method: 'ft_balance_of', args: { account_id: accountId } }).catch(() => '0') ?? '0'));
+        }
+        const amount = wallet < STARTER_DEPOSIT_UNITS ? wallet : STARTER_DEPOSIT_UNITS;
+        if (amount === 0n) return;
+        await this.callAs('owner', accountId, 'ft_transfer_call', { receiver_id: this.contractId, amount: amount.toString(), msg: 'deposit' }, '1');
+    }
+
+    /**
+     * Whether the server can sign for agents.<owner>: Vault holds its key and that key is on the account on chain.
+     * Mock mode is always ready.
+     */
+    async agentsStatus(agentsId: string): Promise<{ ready: boolean; exists: boolean; publicKey: string | null }> {
+        if (this.mode !== 'real') return { ready: true, exists: true, publicKey: null };
+        const key = await this.chainRepository.getVaultSecret(vaultKeyName(agentsId));
+        const publicKey = key && /^(ed25519|secp256k1):/.test(key) ? KeyPair.fromString(key as KeyPairString).getPublicKey().toString() : null;
+        const exists = await this.accountExists(agentsId).catch(() => false);
+        if (!exists || !publicKey) return { ready: false, exists, publicKey };
+        const onChain = await this.rpc().viewAccessKey({ accountId: agentsId, publicKey }).then(() => true).catch(() => false);
+        return { ready: onChain, exists, publicKey };
+    }
+
+    /** The public half of the key the server keeps for agents.<owner>, made and saved in Vault on first ask. */
+    async agentsPublicKey(agentsId: string): Promise<string> {
+        const key = await this.newVaultKey(agentsId, `AGORA agents key for ${agentsId}, limited to ${this.contractId}`);
+        this.accounts.delete(`transaction_agent:${agentsId}`);
+        this.accounts.delete(`owner:${agentsId}`);
+        return KeyPair.fromString(key).getPublicKey().toString();
+    }
+
+    private async accountExists(accountId: string): Promise<boolean> {
+        try {
+            await this.rpc().viewAccount({ accountId });
+            return true;
+        } catch (e) {
+            if (/does not exist|UNKNOWN_ACCOUNT|doesn't exist/i.test(e instanceof Error ? e.message : String(e))) return false;
+            throw e;
+        }
+    }
+
+    /** The key for an account that is about to be created: the one already in Vault, or a new one saved there first. */
+    private async newVaultKey(accountId: string, description: string): Promise<KeyPairString> {
+        const key = await this.chainRepository.putVaultSecret(vaultKeyName(accountId), KeyPairEd25519.fromRandom().toString(), description);
+        return key as KeyPairString;
     }
 
     networkId(): string {
@@ -237,7 +359,15 @@ export class ChainService {
 
     async signingKey(role: ChainRole, accountId: string): Promise<KeyPairString> {
         const envName = ROLE_KEY_ENV[role];
-        const key = (envName ? process.env[envName] : undefined) || (await this.chainRepository.getVaultSecret(vaultKeyName(accountId)));
+        let key = (envName ? process.env[envName] : undefined) || (await this.chainRepository.getVaultSecret(vaultKeyName(accountId)));
+        if (!key && this.mode === 'real' && this.isPlatformAccount(accountId) && !this.provisioning.has(ownerOf(accountId))) {
+            /* a profile from mock mode carries an agora-xxxxxxxx name that was never created; create it now */
+            await this.provisionAccount(ownerOf(accountId));
+            key = await this.chainRepository.getVaultSecret(vaultKeyName(accountId));
+        }
+        if (!key && accountId.startsWith('agents.')) {
+            throw new BadRequestException(`${accountId} is not set up yet. Open Wallet and click "Enable agents" (one signature in your NEAR wallet), then try again`);
+        }
         if (!key) throw new BadRequestException(`No signing key for ${accountId}`);
         if (!/^(ed25519|secp256k1):/.test(key)) throw new BadRequestException(`The signing key for ${accountId} is not a NEAR key`);
         return key as KeyPairString;

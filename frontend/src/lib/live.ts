@@ -3,7 +3,7 @@ import type { ChatMsg } from '../store/store';
 import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type SellForm, type LiveNote, type LiveSpec, type SpecDoc, type Limits, type WalletItem } from '../store/store';
 import type { Thread } from '../store/actions';
 import { api, ApiError } from './api';
-import { depositCall, mandateCall, pauseCall, sendCalls, unpauseCall, walletBalances, walletSend, withdrawCall, type WalletCall } from './near';
+import { depositCall, mandateCall, pauseCall, sendCalls, unpauseCall, walletBalances, walletCreateAgents, walletSend, withdrawCall, type WalletCall } from './near';
 
 /*
  * All data comes from the backend. The screens read the shared objects in data/data.ts directly:
@@ -691,12 +691,12 @@ export async function liveDeliver(ref: string): Promise<void> {
 
 async function loadMoney(): Promise<void> {
   const [wallet, limits] = await Promise.all([
-    liveApi<{ available: number; escrowed: number; usedToday: number; earned?: number; earnings?: { acct: string; name: string; available: number }[]; chain?: { mode: string; network: string; contract: string; usdc: string | null }; items?: WalletItem[] }>('/wallet/v1', { quiet: true }).catch(() => null),
+    liveApi<{ available: number; escrowed: number; usedToday: number; agentsReady?: boolean; earned?: number; earnings?: { acct: string; name: string; available: number }[]; chain?: { mode: string; network: string; contract: string; usdc: string | null }; items?: WalletItem[] }>('/wallet/v1', { quiet: true }).catch(() => null),
     liveApi<Limits & { paused: boolean }>('/mandates/v1', { quiet: true }).catch(() => null),
   ]);
   if (!wallet) return;
   const tokenArrived = Boolean(wallet.chain?.usdc) && wallet.chain?.usdc !== getState().chain?.usdc;
-  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, paused: Boolean(limits?.paused), earned: wallet.earned ?? 0, earnings: wallet.earnings ?? [] }, chain: wallet.chain ?? null, walletItems: wallet.items ?? [],
+  setState({ money: { available: wallet.available, escrowed: wallet.escrowed, usedToday: wallet.usedToday, agentsReady: wallet.agentsReady ?? true, paused: Boolean(limits?.paused), earned: wallet.earned ?? 0, earnings: wallet.earnings ?? [] }, chain: wallet.chain ?? null, walletItems: wallet.items ?? [],
     ...(limits ? { limits: { perJobCap: limits.perJobCap, dailyCap: limits.dailyCap, newSellerCap: limits.newSellerCap, reviewWindowHours: limits.reviewWindowHours, categories: limits.categories, strict: limits.strict } } : {}) });
   if (tokenArrived) void loadWalletBalances();
 }
@@ -842,6 +842,29 @@ export async function liveWalletSendUsdc(to: string, amount: number): Promise<bo
     toast(e instanceof Error ? e.message : 'The wallet did not send it', 'block');
     return false;
   }
+}
+
+/**
+ * Real mode, wallet users: sets up agents.<you> with one wallet signature. The server makes the key the agents use
+ * (limited to the marketplace's job methods) and keeps it; the wallet creates the account and adds that key.
+ */
+export async function liveEnableAgents(): Promise<boolean> {
+  const setup = await api<{ ready: boolean; agents: string; publicKey?: string; contract?: string; methods?: string[]; deposit?: string; allowance?: string }>('/wallet/v1/agents/prepare', { body: {} }).catch(() => null);
+  if (!setup) return false;
+  if (!setup.ready) {
+    if (!setup.publicKey || !setup.contract || !setup.methods || !setup.deposit || !setup.allowance) { toast('The server did not send the agents setup.', 'block'); return false; }
+    try {
+      const hash = await walletCreateAgents(ME.acct, { agents: setup.agents, publicKey: setup.publicKey, contract: setup.contract, methods: setup.methods, deposit: setup.deposit, allowance: setup.allowance });
+      toast(`${setup.agents} created (tx ${shortHash(hash)}). Checking it on NEAR…`);
+    } catch (e) {
+      toast(e instanceof Error ? e.message : 'The wallet did not send it', 'block');
+      return false;
+    }
+  }
+  const ok = await api('/wallet/v1/agents/confirm', { body: {} }).catch(() => null);
+  if (ok) toast(`Agents enabled. ${setup.agents} can now post, fund, bid and deliver for you, only on AGORA and only inside your limits.`);
+  await refreshAll(false);
+  return Boolean(ok);
 }
 
 /** Testnet only: the test USDC token's faucet registers the wallet and gives it 50 USDC, once a day. Signed in the wallet. */

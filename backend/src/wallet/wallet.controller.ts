@@ -46,6 +46,20 @@ export class WalletController {
         return this.walletService.syncWalletTx(auth, body);
     }
 
+    @Post('v1/agents/prepare')
+    @HttpCode(200)
+    @UseGuards(AuthGuard)
+    prepareAgents(@Headers('authorization') auth: string) {
+        return this.walletService.prepareAgents(auth);
+    }
+
+    @Post('v1/agents/confirm')
+    @HttpCode(200)
+    @UseGuards(AuthGuard)
+    confirmAgents(@Headers('authorization') auth: string) {
+        return this.walletService.confirmAgents(auth);
+    }
+
     @Post('v1/sign-in')
     @HttpCode(200)
     signInWithWallet(@Body(ValidationPipe) body: SignInWallet) {

@@ -294,9 +294,23 @@ describe('ChainService (real mode)', () => {
         await expect(service.liveBalance('lumen.testnet')).resolves.toBeNull();
     });
 
-    it('refuses to create accounts', async () => {
+    it('needs a platform account to create accounts', async () => {
+        delete process.env['AGORA_PLATFORM_ACCOUNT'];
         const { service } = await build();
-        await expect(service.createAccount('abc')).rejects.toThrow('not built yet');
+        await expect(service.createAccount('abc')).rejects.toThrow('Set AGORA_PLATFORM_ACCOUNT');
+    });
+
+    it('recognises the agora-xxxxxxxx names it hands out, with or without agents.', async () => {
+        const { service } = await build();
+        expect(service.isPlatformAccount('agora-0f9b6c1e.testnet')).toBe(true);
+        expect(service.isPlatformAccount('agents.agora-0f9b6c1e.testnet')).toBe(true);
+        expect(service.isPlatformAccount('slowant9971.testnet')).toBe(false);
+        expect(service.isPlatformAccount('itsuki.agents.agora-0f9b6c1e.testnet')).toBe(false);
+    });
+
+    it('explains how to enable agents when a wallet user has no agents key', async () => {
+        const { service } = await build();
+        await expect(service.signingKey('transaction_agent', 'agents.slowant9971.testnet')).rejects.toThrow('Enable agents');
     });
 
     it('needs the contract id', async () => {

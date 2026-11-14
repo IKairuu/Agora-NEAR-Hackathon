@@ -34,7 +34,7 @@ describe('BidsService', () => {
             getOwnedBid: jest.fn(), editBid: jest.fn(), explainBid: jest.fn(), deleteBid: jest.fn(),
             getOwnedJob: jest.fn(), getBids: jest.fn(), getReputations: jest.fn(), setOnchainBid: jest.fn().mockResolvedValue(1),
         } as unknown as jest.Mocked<BidsRepository>;
-        chain = { callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-place_bid-9', explorer_url: '', ok: true, result: '1790000009' }) } as unknown as jest.Mocked<ChainService>;
+        chain = { isMock: jest.fn().mockReturnValue(true), callAs: jest.fn().mockResolvedValue({ tx_hash: 'mock-place_bid-9', explorer_url: '', ok: true, result: '1790000009' }) } as unknown as jest.Mocked<ChainService>;
         agents = { dispatch: jest.fn().mockResolvedValue({ status: 'sent' }) } as unknown as jest.Mocked<AgentsService>;
         service = new BidsService(repo, { verifySessionToken: jest.fn(async () => caller) } as unknown as AuthService, agents, chain);
     });
@@ -78,6 +78,34 @@ describe('BidsService', () => {
             });
             expect(repo.setOnchainBid.mock.calls).toHaveLength(0);
             expect(agents.dispatch.mock.calls).toHaveLength(1);
+        });
+
+        it('in real mode withdraws an offer that place_bid refused and reports why', async () => {
+            caller = SELLER_USER;
+            chain.isMock.mockReturnValue(false);
+            repo.getJobForBidding.mockResolvedValue(open);
+            repo.getMySellers.mockResolvedValue([{ id: SELLER, kind: 'human', nearAccountId: 'agents.patchsmith.testnet' }]);
+            repo.createBid.mockResolvedValue({ id: 'b1', onchainId: null, onchainTx: null });
+            chain.callAs.mockRejectedValue(new Error('No signing key for agents.patchsmith.testnet'));
+            await expect(service.createBid('Bearer t', { job_id: 'J-1042', price: 36, days: 1 } as never)).rejects.toThrow(
+                'Your offer could not be placed on NEAR: No signing key for agents.patchsmith.testnet',
+            );
+            expect(repo.deleteBid.mock.calls[0]).toEqual([SELLER_USER, 'b1']);
+            expect(agents.dispatch.mock.calls).toHaveLength(0);
+        });
+
+        it('in real mode bids as the seller that can sign, not a mock-only agent name', async () => {
+            caller = SELLER_USER;
+            chain.isMock.mockReturnValue(false);
+            repo.getJobForBidding.mockResolvedValue(open);
+            repo.getMySellers.mockResolvedValue([
+                { id: 'old', kind: 'agent', nearAccountId: 'itsuki.agents.patchsmith.testnet' },
+                { id: SELLER, kind: 'human', nearAccountId: 'agents.patchsmith.testnet' },
+            ]);
+            repo.createBid.mockResolvedValue({ id: 'b1', onchainId: null, onchainTx: null });
+            await service.createBid('Bearer t', { job_id: 'J-1042', price: 36, days: 1 } as never);
+            expect(repo.createBid.mock.calls[0]?.[0]).toMatchObject({ sellerId: SELLER, sellerAccount: 'agents.patchsmith.testnet' });
+            expect(chain.callAs.mock.calls[0]?.slice(0, 3)).toEqual(['owner', 'agents.patchsmith.testnet', 'place_bid']);
         });
 
         it('does not place a re-opened offer twice', async () => {

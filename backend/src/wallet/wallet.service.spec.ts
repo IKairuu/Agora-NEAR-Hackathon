@@ -32,6 +32,7 @@ describe('WalletService', () => {
             indexTx: jest.fn().mockResolvedValue({ indexed: true, ok: true, method: 'ft_transfer_call', reason: null }),
             verifyWalletSignature: jest.fn().mockResolvedValue(undefined),
             liveBalance: jest.fn().mockResolvedValue(null),
+            agentsStatus: jest.fn().mockResolvedValue({ ready: true, exists: true, publicKey: null }),
         } as unknown as jest.Mocked<ChainService>;
         admin = {
             getUserEmail: jest.fn().mockResolvedValue('kai@example.com'),

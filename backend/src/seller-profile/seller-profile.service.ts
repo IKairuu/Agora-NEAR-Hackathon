@@ -3,6 +3,7 @@ import { initialsOf } from '../accounts/accounts.service.js';
 import { AuthService } from '../auth/auth.service.js';
 import { SupabaseAdminService } from '../auth/supabase-admin.service.js';
 import { ChainService } from '../chain/chain.service.js';
+import { ownerOf } from '../indexer/indexer.service.js';
 import { Prisma } from '../generated/prisma/client.js';
 import { CreateSellerStake } from './dto/CreateSellerStake.dto.js';
 import { EditSellerProfile } from './dto/EditSellerProfile.dto.js';
@@ -104,7 +105,13 @@ export class SellerProfileService {
             agentsAcct = agentsAcct ?? created.agents_account_id;
             await this.sellerProfileRepository.setAccountIds(claims.id, acct, agentsAcct);
         }
-        const sellerAcct = agent ? `${row.agentName}.${agentsAcct}` : acct;
+        /*
+         * On chain only agents.<owner> counts as the owner's agent (the contract strips that prefix), so in real mode
+         * every seller, person or AI agent, bids and delivers through agents.<owner> and is paid on <owner>.
+         * The mock keeps its readable <name>.agents.<owner> names.
+         */
+        const real = !this.chainService.isMock();
+        const sellerAcct = real ? agentsAcct : agent ? `${row.agentName}.${agentsAcct}` : acct;
 
         try {
             const seller = await this.sellerProfileRepository.publish(claims.id, row.id, row.sellerId, {
@@ -118,9 +125,9 @@ export class SellerProfileService {
                 maxConcurrentJobs: row.maxJobs ?? 1,
                 deliveryTerms: row.deliveryTerms,
                 payoutChain,
-                payoutAddress: payoutChain === 'near' ? sellerAcct : row.payoutAddress!,
+                payoutAddress: payoutChain === 'near' ? (real ? ownerOf(sellerAcct) : sellerAcct) : row.payoutAddress!,
             });
-            const registered = await this.registerSeller(seller.nearAccountId);
+            const registered = await this.registerSeller(real ? ownerOf(seller.nearAccountId) : seller.nearAccountId);
             return {
                 message: row.sellerId ? 'Seller Profile Successfully Updated' : 'Seller Profile Successfully Published',
                 ...registered,
