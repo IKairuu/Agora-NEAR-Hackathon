@@ -15,7 +15,6 @@ const LABELS: Record<string, string> = {
     deposit: 'Deposit',
     withdraw: 'Withdrawal',
     fund_job: 'Moved to Protected payment',
-    vote: 'Released after 2 of 3 approvals',
     refund_milestone: 'Refunded',
     refund_expired: 'Refunded after the deadline',
     set_mandate: 'Limits saved',
@@ -37,7 +36,8 @@ const LABELS: Record<string, string> = {
 };
 
 export const labelOf = (method: string, args: Record<string, unknown>): string =>
-    method === 'ft_transfer_call' && args['msg'] === 'starter_stake' ? LABELS['starter_stake']!
+    method === 'vote' ? (args['released'] === true ? 'Released after 2 of 3 approvals' : args['approve'] === true ? 'Reviewer approved' : 'Reviewer rejected')
+        : method === 'ft_transfer_call' && args['msg'] === 'starter_stake' ? LABELS['starter_stake']!
         : method === 'ft_transfer_call' && args['msg'] === 'deposit' ? 'Deposit from your NEAR wallet'
             : LABELS[method] ?? method;
 
@@ -101,7 +101,7 @@ export class WalletService {
             chain: this.chainService.walletChainInfo(),
             items: activity.map((t) => {
                 const args = (t.args ?? {}) as Record<string, unknown>;
-                const amount = usdc(args['amount']) ?? (t.job?.agreedPrice !== null && t.job?.agreedPrice !== undefined && ['fund_job', 'vote', 'refund_milestone', 'refund_expired'].includes(t.method) ? Number(t.job.agreedPrice) : null);
+                const amount = usdc(args['amount']) ?? (t.job?.agreedPrice !== null && t.job?.agreedPrice !== undefined && (['fund_job', 'refund_milestone', 'refund_expired'].includes(t.method) || (t.method === 'vote' && args['released'] === true)) ? Number(t.job.agreedPrice) : null);
                 return {
                     id: t.id,
                     method: t.method,
