@@ -162,6 +162,15 @@ export class InternalRepository {
         });
     }
 
+    /** The job's on-chain id and its last vote tx that succeeded on chain. */
+    async getChainRelease(jobId: string) {
+        const [job, vote] = await Promise.all([
+            prisma.job.findUnique({ where: { id: jobId }, select: { onchainId: true } }),
+            prisma.chainTx.findFirst({ where: { jobId, method: 'vote', status: 'success' }, orderBy: { createdAt: 'desc' }, select: { txHash: true } }),
+        ]);
+        return { onchainId: job?.onchainId ?? null, voteTx: vote?.txHash ?? null };
+    }
+
     async getVoteTally(deliveryId: string) {
         return prisma.delivery.findFirst({
             where: { id: deliveryId },

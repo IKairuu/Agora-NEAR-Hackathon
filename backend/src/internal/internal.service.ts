@@ -114,6 +114,16 @@ export class InternalService {
         private readonly reviewsService: ReviewsService,
     ) {}
 
+    /** Marks the job released in the database only if get_job on chain says Released, using the last successful vote tx. */
+    private async mirrorChainRelease(jobId: string): Promise<boolean> {
+        const { onchainId, voteTx } = await this.internalRepository.getChainRelease(jobId);
+        if (onchainId === null) return false;
+        const chainJob = await this.chainService.view<{ stage?: string } | null>('get_job', { job_id: String(onchainId) }).catch(() => null);
+        if (chainJob?.stage !== 'Released') return false;
+        const released = await this.indexer.onChainRelease(jobId, voteTx ?? `chain-release-${onchainId}`).catch(() => null);
+        return released !== null;
+    }
+
     async agentNotify(raw: unknown) {
         const parsed = agentNotifySchema.safeParse(raw);
         if (!parsed.success) throw new BadRequestException(`Invalid agent result: ${parsed.error.issues.map((i) => `${i.path.join('.')} ${i.message}`).join('; ')}`);
@@ -172,12 +182,8 @@ export class InternalService {
                     const count = await this.internalRepository.settleDelivery(tally.id, tally.milestoneId, tally.milestone.job.id, approved);
                     if (count > 0) {
                         actions.push(`delivery ${approved ? 'approved' : 'rejected'}`);
-                        if (approved) {
-                            /* real mode: the 2nd approving vote released the money on chain; mirror it in the database with that tx */
-                            const mock = (process.env['AGORA_CHAIN_MODE'] ?? 'mock') === 'mock';
-                            const voteTx = text(result['voteTx']);
-                            const txHash = mock ? `mock-release-${Date.now()}` : voteTx;
-                            const released = txHash ? await this.indexer.onMockRelease(tally.milestone.job.id, txHash).catch(() => null) : null;
+                        if (approved && (process.env['AGORA_CHAIN_MODE'] ?? 'mock') === 'mock') {
+                            const released = await this.indexer.onMockRelease(tally.milestone.job.id, `mock-release-${Date.now()}`).catch(() => null);
                             if (released) actions.push('released');
                         }
                         const outcome = approved
@@ -187,6 +193,8 @@ export class InternalService {
                         notes.push({ userId: job.buyerId, kind: 'review', title: outcome, body: next, link: `/job?id=${job.ref}` });
                         if (job.seller?.ownerId) notes.push({ userId: job.seller.ownerId, kind: 'review', title: outcome, body: next, link: '/orders' });
                     }
+                    /* real mode: mirror the release only when the contract really released (a later vote report retries it) */
+                    if (approvals >= 2 && (process.env['AGORA_CHAIN_MODE'] ?? 'mock') !== 'mock' && await this.mirrorChainRelease(tally.milestone.job.id)) actions.push('released');
                 }
             }
         } else if (body.role === 'buyer' && body.ok && job) {

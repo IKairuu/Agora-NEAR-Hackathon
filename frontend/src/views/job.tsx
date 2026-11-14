@@ -4,7 +4,7 @@ import { act, hire, isUnread, markSeen, openRequest, scrollMsgs, sendChat, sendT
 import { getState, hb, hPrice, priceOf, setState, useApp, type ChatMsg, type State } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
 import { Face, Gate, Head, Lifecycle, Mk, RemoveJobButton, RLink, SignInButton, T, Tl } from '../ui/parts';
-import { removalFor } from '../lib/live';
+import { livePay, liveRerun, removalFor } from '../lib/live';
 import { Shell } from '../ui/Shell';
 import { OrderAction } from './orders';
 
@@ -352,6 +352,9 @@ function DeliveriesPanel({ s }: { s: State }) {
           {reviewing
             ? <p className="small">The seller delivered a commit. Three reviewers are running the locked tests on it; the result shows under Proof of delivery.</p>
             : <div className="empty"><Icon name="job" /><b>Waiting for the seller's commit</b><span>{H.name} delivers here. The reviewers start as soon as a commit arrives.</span></div>}
+          {s.rerun && (
+            <div className="banner hold"><Icon name="swap" /><div className="grow"><span>{s.rerun.why === 'runner_failed' ? 'The test runner could not run this delivery.' : s.rerun.why === 'split_vote' ? 'The reviewers split their vote.' : 'The review has had no result for 12 hours.'} You can run the locked tests again.</span></div><button className="btn sm primary" onClick={() => void liveRerun()}>Re-run tests</button></div>
+          )}
         </div>
       </div>
     );
@@ -508,7 +511,15 @@ export function Room() {
             <div className="panel"><div className="panel-b">
               <b style={{ fontWeight: 500 }}>If something is wrong</b>
               <p className="muted small">Opening a dispute freezes the payment and starts a free re-check by 3 fresh reviewers. If no delivery passes by the deadline, you can take your money back in one tap.</p>
-              <button className="btn sm" onClick={act.refundexp} style={{ alignSelf: 'flex-start' }}><Icon name="swap" />Refund after the deadline</button>
+              {!s.live && <button className="btn sm" onClick={act.refundexp} style={{ alignSelf: 'flex-start' }}><Icon name="swap" />Refund after the deadline</button>}
+              {s.live && s.pay && (
+                <div className="row" style={{ flexWrap: 'wrap' }}>
+                  {s.pay.actions.refund_expired.allowed && <button className="btn sm" onClick={() => void livePay('refund_expired')}><Icon name="swap" />Refund after the deadline</button>}
+                  {s.pay.actions.refund.allowed && <button className="btn sm" onClick={() => void livePay('refund')}><Icon name="swap" />Refund me</button>}
+                  {s.pay.actions.extra_attempt.allowed && <button className="btn sm" onClick={() => void livePay('extra_attempt')}>Give one more attempt</button>}
+                  {!s.pay.actions.refund_expired.allowed && !s.pay.actions.refund.allowed && <span className="muted xsmall">Refund: {s.pay.actions.refund.why ?? s.pay.actions.refund_expired.why ?? 'not available yet'}</span>}
+                </div>
+              )}
             </div></div>
           )}
         </div>

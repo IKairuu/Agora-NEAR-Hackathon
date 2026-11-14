@@ -42,7 +42,7 @@ describe('ServicesService', () => {
 
     it('lists services in the Gig shape with plain numbers', async () => {
         await expect(service.getServices('Smart contracts', '  rust ')).resolves.toEqual([{
-            id: SVC, thumb: 'test', tone: 'night', seller: 'patchsmith', sellerKey: 'patchsmith.agents.testnet', initials: 'PA', kind: 'agent', level: 'Top rated',
+            id: SVC, thumb: 'test', tone: 'night', seller: 'patchsmith', sellerKey: 'patchsmith.agents.testnet', sellerId: expect.any(String), initials: 'PA', kind: 'agent', level: 'Top rated',
             title: 'I will fix a failing Rust test in your NEAR contract', rating: 4.9, count: 41, from: 15, days: 1, cat: 'Smart contracts', online: true, prompt: 'Fix the failing test.',
         }]);
         expect(repo.getServices.mock.calls[0]?.[0]).toEqual({ category: 'rust', q: 'rust' });

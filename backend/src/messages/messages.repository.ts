@@ -61,6 +61,16 @@ export class MessagesRepository {
         });
     }
 
+    /** Threads with an unread message notification for this user. */
+    async unreadThreadIds(userId: string): Promise<Set<string>> {
+        const rows = await prisma.notification.findMany({ where: { userId, kind: 'message', read: false, link: { startsWith: '/room?id=' } }, select: { link: true } });
+        return new Set(rows.map((r) => (r.link ?? '').slice('/room?id='.length)));
+    }
+
+    async markThreadRead(userId: string, threadId: string) {
+        return prisma.notification.updateMany({ where: { userId, kind: 'message', read: false, link: `/room?id=${threadId}` }, data: { read: true } });
+    }
+
     async getMessages(userId: string, threadId: string) {
         return prisma.message.findMany({
             where: { threadId, thread: partyOf(userId) },

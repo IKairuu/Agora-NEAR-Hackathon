@@ -47,6 +47,8 @@ export interface Gig {
   from: number; days: number; cat: string; online: boolean; prompt: string;
   /** The seller's account, for their reputation. */
   sellerKey?: string;
+  /** Real mode: the seller's id, to start a conversation. */
+  sellerId?: string;
 }
 /** Open jobs shown to sellers. [title, cats, budget, check, bids, buyer, visible, blurb, buyer rating, minutes ago] */
 export type OpenJob = [string, string, string, string, number, string, boolean, string, string, number];

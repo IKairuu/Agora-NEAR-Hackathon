@@ -274,7 +274,7 @@ export function Ask() {
           {GIGS.length
             ? <div className="gig-grid">{GIGS.slice(0, 8).map((g) => <GigCard key={g.id} g={g} />)}</div>
             : <div className="empty"><Icon name="store" /><b>{s.dataReady ? 'No services yet' : 'Loading services…'}</b>{s.dataReady && <span>Sellers' services appear here once they publish them. You can still describe the job above.</span>}</div>}
-          <p className="muted xsmall">Sellers, prices and ratings are sample data for this prototype.</p>
+          {!s.live && <p className="muted xsmall">Sellers, prices and ratings are sample data for this prototype.</p>}
         </div>
       </div>
     </Shell>

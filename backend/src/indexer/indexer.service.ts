@@ -391,9 +391,14 @@ export class IndexerService {
         const fee = this.feeBps();
         const dao = this.dao();
         await this.indexerRepository.recordTx({
-            txHash, signer: 'reviewers', method: 'vote', args: { job_id: jobId, approve: true }, ok: true, error: null, jobKey: { id: jobId },
+            txHash, signer: 'reviewers', method: 'vote', args: { job_id: jobId, approve: true, released: true }, ok: true, error: null, jobKey: { id: jobId },
         });
         return this.indexerRepository.releaseJob({ id: jobId }, txHash, fee, dao);
+    }
+
+    /** Real mode: the contract already released; record it in the database. The vote tx itself was recorded when it was sent. */
+    async onChainRelease(jobId: string, txHash: string) {
+        return this.indexerRepository.releaseJob({ id: jobId }, txHash, this.feeBps(), this.dao());
     }
 
     private async onStakeCall(call: MockCall) {
