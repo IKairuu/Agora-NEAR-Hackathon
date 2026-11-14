@@ -28,6 +28,22 @@ function offerPool(s: State): OfferRow[] {
   }).sort((a, b) => a.price - b.price);
 }
 
+/** The middle value of a list of prices (0 when empty). */
+const medianOf = (xs: number[]): number => { if (!xs.length) return 0; const v = [...xs].sort((a, b) => a - b), m = Math.floor(v.length / 2); return v.length % 2 ? v[m]! : (v[m - 1]! + v[m]!) / 2; };
+
+/**
+ * The price line under the offers. The demo keeps its story; a real job shows only what the API gave:
+ * the fraud and lure agent's reference price for this job (sent with each offer) and the median of the valid offers.
+ */
+function priceCheckText(s: State, valid: OfferRow[]): string {
+  if (!s.live) return `Price check by the fraud and lure agent: usual price 28 to 45 USDC${valid.length >= 3 ? ', median valid offer 35.50' : ''}.`;
+  const ref = (BIDS as { referenceMedian?: number | null }[]).map((b) => b.referenceMedian).find((x): x is number => typeof x === 'number' && x > 0);
+  const med = valid.length >= 2 ? medianOf(valid.map((r) => r.price)) : 0;
+  if (ref) return `Price check by the fraud and lure agent: usual price about ${usd(ref)} USDC${med ? `, median valid offer ${usd(med)}` : ''}.`;
+  if (med) return `Median valid offer ${usd(med)} USDC. The fraud and lure agent checks each price as it arrives.`;
+  return 'The fraud and lure agent checks the price of each offer as it arrives and holds outliers.';
+}
+
 function AgentMsg({ who, t, children }: { who: string; t?: string; children: ReactNode }) {
   return <div className="am"><span className="avatar ag"><Icon name="bot" /></span><div className="am-b"><div className="am-who"><b>{who}</b>{t && <time>{t}</time>}</div>{children}</div></div>;
 }
@@ -177,7 +193,7 @@ function OffersCard() {
       {rows.length ? <ol className="olist2">{rows.map(row)}</ol> : <p className="muted small">No offers yet. Matching sellers usually answer within a few minutes.</p>}
       {!ready && rows.length > 0 && <p className="muted xsmall">Your agent waits for {MIN_OFFERS} valid {MIN_OFFERS === 1 ? 'offer' : 'offers'} before you can choose, so the first fast offer doesn't win by default.</p>}
       <div className="cc-f">
-        <span className="muted xsmall">Price check by the fraud and lure agent: usual price 28 to 45 USDC{valid.length >= 3 ? ', median valid offer 35.50' : ''}.</span>
+        <span className="muted xsmall">{priceCheckText(s, valid)}</span>
         {s.stage < 5 && <button className="lk" onClick={act.postpublic}>None fit? Post it publicly</button>}
       </div>
     </div>
@@ -242,7 +258,9 @@ export function Ask() {
             {s.pendingAsk
               ? <AgentMsg who="Spec writer"><p className="muted">Reading your request and creating the job…</p></AgentMsg>
               : s.live ? <LiveSpecMsg /> : <AgentMsg who="Spec writer" t={s.live ? undefined : '16:02'}><p>I read <span className="mono">{JOB.repo.split('/').pop()}</span> at <span className="mono">{JOB.base}</span>. Here are the tests a seller must make pass. Nothing is sent to anyone until you lock them.</p><SpecCard locked={s.stage >= 2} /></AgentMsg>}
-            {s.stage >= 2 && <AgentMsg who="Buyer agent" t={s.live ? undefined : '16:03'}><p>Tests locked. I sent the job privately to 9 sellers and bidding agents whose skills match. Their offers appear below as they arrive, lowest price first.</p><OffersCard /></AgentMsg>}
+            {s.stage >= 2 && <AgentMsg who="Buyer agent" t={s.live ? undefined : '16:03'}><p>{s.live
+              ? 'Tests locked. I sent the job privately to the sellers and bidding agents whose skills match. Their offers appear below as they arrive, lowest price first.'
+              : 'Tests locked. I sent the job privately to 9 sellers and bidding agents whose skills match. Their offers appear below as they arrive, lowest price first.'}</p><OffersCard /></AgentMsg>}
             {s.stage >= 4 && <AgentMsg who="Buyer agent" t={s.live ? undefined : '16:11'}><p>{s.preNeg ? 'You chose before I negotiated, so the listed price stands.' : <>Three valid offers were in, so I negotiated within your private limit. {agentPick()?.name} came down from {usd(agentPick()?.price ?? 0)} to <b>{usd(agentPick()?.final ?? 0)} USDC</b>, under the 35.50 median, and has the best track record.</>} Choose any offer above. I'll send the hire offer in your chat room and wait for the seller to accept.</p></AgentMsg>}
             {s.stage >= 5 && <AgentMsg who="Transaction agent" t={s.live ? undefined : '16:12'}><p>{H.name} accepted. {usd(hPrice(s))} USDC is in <b>Protected payment</b>, held by the contract until 2 of 3 reviewers pass the tests.</p><div className="cc-acts"><RLink r="chat" className="btn"><Icon name="chat" />Open chat room</RLink><RLink r="room" className="btn"><Icon name="lock" />Protected payment</RLink></div></AgentMsg>}
             {s.followUps.map((f) => (
