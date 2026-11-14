@@ -130,12 +130,16 @@ export class WalletService {
         if (status.exists) {
             throw new ConflictException(`${agents} already exists but AGORA has no key for it. Add the key shown under Wallet with your NEAR wallet, or ask the team to reset it`);
         }
+        /* a brand-new wallet has no NEAR to pay for the setup, so AGORA covers it once */
+        const topUp = await this.chainService.gasTopUp(acct);
         const publicKey = await this.chainService.agentsPublicKey(agents);
         return {
             message: 'Agents Setup Successfully Prepared',
             ready: false,
             acct,
             agents,
+            toppedUp: topUp.toppedUp,
+            topUpTx: topUp.txHash,
             publicKey,
             contract: this.chainService.walletChainInfo().contract,
             methods: AGENT_METHODS,

@@ -253,7 +253,7 @@ export function Wallet() {
             {s.live && s.walletErr && <button className="btn sm" onClick={() => void loadWalletBalances()}>Retry</button>}
             <p className="note">Only you can spend this. Agents can't touch it.</p>
             {needAgents && <>
-              <p className="note"><b>One step left:</b> your agents need their own account, agents.{ME.acct}, to post, fund, bid and deliver on NEAR. It costs 0.25 NEAR and one signature, and its key works only on AGORA.</p>
+              <p className="note"><b>One step left:</b> your agents need their own account, agents.{ME.acct}, to post, fund, bid and deliver on NEAR. It takes one signature, and its key works only on AGORA. No NEAR yet? AGORA covers the fee for your first setup.</p>
               <button className="btn sm primary" disabled={agentsBusy} aria-busy={agentsBusy} onClick={() => { setAgentsBusy(true); void liveEnableAgents().finally(() => setAgentsBusy(false)); }}><Icon name="check" />{agentsBusy ? 'Waiting for your wallet…' : 'Enable agents (1 signature)'}</button>
             </>}
             {s.live && s.walletBal && s.chain?.usdc && s.chain.network === 'testnet' && <button className="btn sm" disabled={faucetBusy} aria-busy={faucetBusy} onClick={() => { setFaucetBusy(true); void liveFaucet().finally(() => setFaucetBusy(false)); }}><Icon name="plus" />{faucetBusy ? 'Waiting for your wallet…' : 'Get 50 test USDC'}</button>}

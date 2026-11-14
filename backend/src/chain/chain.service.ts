@@ -2,7 +2,7 @@ import { BadRequestException, Injectable, Logger, ServiceUnavailableException } 
 import { Account, actions, JsonRpcProvider, KeyPair, KeyPairEd25519, KeyPairSigner, KeyPairString, nearToYocto, teraToGas } from 'near-api-js';
 import { verifyMessage } from 'near-api-js/nep413';
 import { IndexerService, jobKeyOf, jobRefOf, bondJobOf, MockCall, ownerOf, usdcOf } from '../indexer/indexer.service.js';
-import { ChainRepository } from './chain.repository.js';
+import { ChainRepository, GAS_TOPUP } from './chain.repository.js';
 import { mockIdMethods, mockViews } from './mock-state.js';
 
 export type ChainRole = 'owner' | 'transaction_agent' | 'guardian' | 'fraud_oracle' | 'reviewer' | 'platform' | 'dao';
@@ -48,6 +48,10 @@ export const ACCOUNT_NEAR = '0.5';
 export const AGENTS_NEAR = '0.25';
 export const AGENTS_ALLOWANCE_NEAR = '0.25';
 export const STARTER_DEPOSIT_UNITS = 40_000_000n;
+/** A new wallet with less NEAR than this gets one gift of GAS_TOPUP_NEAR before Enable agents; at most GAS_TOPUP_DAILY_CAP a day. */
+export const GAS_TOPUP_MIN_NEAR = '0.4';
+export const GAS_TOPUP_NEAR = '0.4';
+export const GAS_TOPUP_DAILY_CAP = 20;
 /** Everything an agents.<owner> key may call: the buyer's job methods, the seller's bid and delivery, and the guardian's pause. */
 export const AGENT_METHODS = ['post_job', 'accept_offer', 'fund_job', 'refund_milestone', 'grant_attempt', 'rate', 'place_bid', 'submit_delivery', 'open_dispute', 'pause'];
 
@@ -146,6 +150,7 @@ export class ChainService {
     private readonly logger = new Logger(ChainService.name);
     private readonly accounts = new Map<string, Account>();
     private readonly provisioning = new Map<string, Promise<void>>();
+    private readonly toppingUp = new Map<string, Promise<{ toppedUp: boolean; txHash: string | null }>>();
 
     constructor(
         private readonly indexer: IndexerService,
@@ -285,6 +290,46 @@ export class ChainService {
         if (!exists || !publicKey) return { ready: false, exists, publicKey };
         const onChain = await this.rpc().viewAccessKey({ accountId: agentsId, publicKey }).then(() => true).catch(() => false);
         return { ready: onChain, exists, publicKey };
+    }
+
+    /**
+     * A brand-new wallet has no NEAR, so it cannot pay for "Enable agents". The platform sends it a small one-time
+     * gift first: at most once per account ever, and at most GAS_TOPUP_DAILY_CAP a day, recorded in chain_txs.
+     * Returns whether NEAR was sent. Mock mode and wallets that already have enough NEAR get nothing.
+     */
+    async gasTopUp(accountId: string): Promise<{ toppedUp: boolean; txHash: string | null }> {
+        if (this.mode !== 'real') return { toppedUp: false, txHash: null };
+        const running = this.toppingUp.get(accountId);
+        if (running) return running;
+        const job = this.runGasTopUp(accountId).finally(() => this.toppingUp.delete(accountId));
+        this.toppingUp.set(accountId, job);
+        return job;
+    }
+
+    private async runGasTopUp(accountId: string): Promise<{ toppedUp: boolean; txHash: string | null }> {
+        const view = await this.rpc().viewAccount({ accountId }).catch(() => null) as { amount?: bigint | string } | null;
+        if (!view) throw new BadRequestException(`${accountId} does not exist on NEAR ${this.network}`);
+        if (BigInt(view.amount ?? 0) >= nearToYocto(GAS_TOPUP_MIN_NEAR)) return { toppedUp: false, txHash: null };
+        const enough = `Your wallet needs about ${GAS_TOPUP_MIN_NEAR} NEAR to set up agents`;
+        if (await this.chainRepository.hasGasTopUp(accountId)) throw new BadRequestException(`${enough}. AGORA already covered this wallet once, so add NEAR from a faucet or another wallet`);
+        const dayStart = new Date(); dayStart.setUTCHours(0, 0, 0, 0);
+        if ((await this.chainRepository.countGasTopUpsSince(dayStart)) >= GAS_TOPUP_DAILY_CAP) {
+            throw new ServiceUnavailableException(`${enough}. AGORA's free setup gas is used up for today, so add NEAR from a faucet or another wallet`);
+        }
+        const platformId = process.env['AGORA_PLATFORM_ACCOUNT'];
+        if (!platformId) throw new ServiceUnavailableException(`${enough}. AGORA cannot cover it right now (no platform account set)`);
+        const platform = await this.account('platform', platformId);
+        let outcome: TxOutcome;
+        try {
+            const res = await platform.signAndSendTransaction({ receiverId: accountId, actions: [actions.transfer(nearToYocto(GAS_TOPUP_NEAR))], throwOnFailure: false });
+            outcome = parseOutcome(res as unknown as Parameters<typeof parseOutcome>[0]);
+        } catch (e) {
+            throw new ServiceUnavailableException(`${enough}. AGORA could not send it: ${e instanceof Error ? e.message : 'unknown error'}`);
+        }
+        await this.record(platformId, GAS_TOPUP, { account_id: accountId, amount_near: GAS_TOPUP_NEAR }, outcome);
+        if (!outcome.ok) throw new ServiceUnavailableException(`${enough}. AGORA could not send it: ${outcome.error}`);
+        this.logger.log(`Sent ${GAS_TOPUP_NEAR} NEAR setup gas to ${accountId}`);
+        return { toppedUp: true, txHash: outcome.txHash };
     }
 
     /** The public half of the key the server keeps for agents.<owner>, made and saved in Vault on first ask. */

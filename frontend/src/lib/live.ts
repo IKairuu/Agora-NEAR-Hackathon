@@ -849,10 +849,11 @@ export async function liveWalletSendUsdc(to: string, amount: number): Promise<bo
  * (limited to the marketplace's job methods) and keeps it; the wallet creates the account and adds that key.
  */
 export async function liveEnableAgents(): Promise<boolean> {
-  const setup = await api<{ ready: boolean; agents: string; publicKey?: string; contract?: string; methods?: string[]; deposit?: string; allowance?: string }>('/wallet/v1/agents/prepare', { body: {} }).catch(() => null);
+  const setup = await api<{ ready: boolean; agents: string; toppedUp?: boolean; publicKey?: string; contract?: string; methods?: string[]; deposit?: string; allowance?: string }>('/wallet/v1/agents/prepare', { body: {} }).catch(() => null);
   if (!setup) return false;
   if (!setup.ready) {
     if (!setup.publicKey || !setup.contract || !setup.methods || !setup.deposit || !setup.allowance) { toast('The server did not send the agents setup.', 'block'); return false; }
+    if (setup.toppedUp) toast('AGORA covers the fee for your first setup: 0.4 test NEAR was sent to your wallet. Now sign in your wallet.');
     try {
       const hash = await walletCreateAgents(ME.acct, { agents: setup.agents, publicKey: setup.publicKey, contract: setup.contract, methods: setup.methods, deposit: setup.deposit, allowance: setup.allowance });
       toast(`${setup.agents} created (tx ${shortHash(hash)}). Checking it on NEAR…`);
