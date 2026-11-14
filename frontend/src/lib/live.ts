@@ -955,11 +955,19 @@ export async function liveUnpause(): Promise<boolean> {
   return true;
 }
 
-export async function liveWithdraw(): Promise<void> {
-  const amount = Number((window.prompt('Withdraw how many USDC?', '') ?? '').replace(/[^\d.]/g, ''));
-  if (!amount) return;
-  const res = await api('/wallet/v1/withdraw', { body: { amount } }).catch(() => null);
-  if (res) { toast(`${amount.toFixed(2)} USDC withdrawn with your full-access key.`); await refreshAll(false); }
+/**
+ * Mock chain only: Add funds or Withdraw test USDC. Returns null when it worked, or the reason it didn't,
+ * so the dialog can show it and stay open. The balances refresh in the background.
+ */
+export async function liveMockMove(op: 'deposit' | 'withdraw', amount: number): Promise<string | null> {
+  try {
+    await api(op === 'deposit' ? '/wallet/v1/deposit' : '/wallet/v1/withdraw', { body: { amount }, quiet: true });
+  } catch (e) {
+    return e instanceof ApiError && e.status !== 0 ? e.message : 'Could not reach the AGORA server. Try again.';
+  }
+  toast(op === 'deposit' ? `${amount.toFixed(2)} test USDC added.` : `${amount.toFixed(2)} USDC withdrawn with your full-access key.`);
+  void refreshAll(false);
+  return null;
 }
 
 /**
@@ -971,7 +979,7 @@ export async function liveLinkWallet(proof: { account_id: string; public_key: st
   if (!res) return false;
   Object.assign(ME, { acct: res.acct, agents: res.agents });
   toast(`Wallet linked. ${res.acct} is now your AGORA account; your agents still cannot withdraw.`);
-  if (getState().live) await refreshAll(false);
+  if (getState().live) { void refreshAll(false); void loadWalletBalances(); }
   return true;
 }
 
@@ -1007,7 +1015,7 @@ export async function liveWalletMove(op: 'deposit' | 'withdraw', amount: number)
       ? await walletSend(ME.acct, chain.usdc!, [depositCall(chain.contract, amount)])
       : await walletSend(ME.acct, chain.contract, [withdrawCall(amount)]);
     toast(`${amount.toFixed(2)} USDC ${op === 'deposit' ? 'added from' : 'sent back to'} your wallet (tx ${shortHash(hash)}).`);
-    await recordWalletTx(hash);
+    void recordWalletTx(hash);
     return true;
   } catch (e) {
     toast(e instanceof Error ? e.message : 'The wallet did not send it', 'block');
@@ -1071,13 +1079,6 @@ export async function liveFaucet(): Promise<boolean> {
   }
 }
 
-/** Mock chain only: adds test USDC so jobs can be funded. */
-export async function liveAddFunds(): Promise<void> {
-  const amount = Number((window.prompt('Add how many test USDC?', '100') ?? '').replace(/[^\d.]/g, ''));
-  if (!amount) return;
-  const res = await api('/wallet/v1/deposit', { body: { amount } }).catch(() => null);
-  if (res) { toast(`${amount.toFixed(2)} test USDC added.`); await refreshAll(false); }
-}
 
 export async function liveRate(stars: number): Promise<void> {
   const ref = getState().liveJob?.ref;

@@ -435,8 +435,12 @@ span.chip:active { transform: none; }
 @media (max-width: 560px) { .wal-split { grid-template-columns: 1fr; } .wal-split > .earn { border-left: 0; padding-left: 0; border-top: 1px solid var(--color-rule); padding-top: var(--space-sm); } }
 .wal-card .note { font-size: var(--text-xs); color: var(--color-ink-2); margin: var(--space-xs) 0 0; max-width: 32ch; }
 .wal-card .lk.small { margin-top: var(--space-2xs); }
+.wal-card .btn.link-wal { margin-top: var(--space-2xs); }
+.btn .spin { border-color: color-mix(in srgb, currentColor 30%, transparent); border-top-color: currentColor; }
 /* the activity list scrolls inside its panel (about 5 rows) instead of growing the page */
 .wal-activity { max-height: 470px; overflow-y: auto; overscroll-behavior: contain; }
+/* Agent team: the timeline scrolls inside its panel (about 8 rows) instead of growing the page */
+.agent-timeline { max-height: 440px; overflow-y: auto; overscroll-behavior: contain; }
 .wal-acts.two { grid-template-columns: repeat(2, minmax(0, 1fr)); margin-top: auto; padding-top: var(--space-md); }
 .asset { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: var(--space-sm); align-items: center; padding: var(--space-sm) var(--space-md); border-bottom: 1px solid var(--color-rule); }
 .asset:last-child { border-bottom: 0; }
@@ -873,8 +877,13 @@ span.chip:active { transform: none; }
 .prof-edit, .prof-card, .prof-top { overflow: hidden; }
 .cover { position: relative; height: 168px; background: radial-gradient(80% 120% at 100% 0%, var(--color-accent-soft), transparent 60%), repeating-linear-gradient(135deg, var(--color-paper-3) 0 1px, transparent 1px 14px), var(--color-paper-2); background-size: cover; background-position: center; display: flex; align-items: flex-end; justify-content: flex-end; padding: var(--space-sm); border-bottom: 1px solid var(--color-rule); }
 .cover.has { background-repeat: no-repeat; }
+/* the cover button sits on any picture, light or dark, so it is a solid dark pill with white text in both themes */
+.cover .btn.glassy { color: #fff; background: rgb(12 14 13 / 0.78); border-color: rgb(255 255 255 / 0.22); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px); box-shadow: 0 2px 12px rgb(0 0 0 / 0.28); }
+.cover .btn.glassy:hover { background: rgb(12 14 13 / 0.9); }
+.cover .btn.glassy .ic { color: #fff; }
 .pf-row { display: flex; align-items: flex-end; gap: var(--space-md); margin-top: calc(var(--space-2xl) * -1); }
-.pf-row .muted { padding-bottom: var(--space-xs); max-width: 44ch; }
+/* the hint starts just below the cover's bottom edge, beside the lower half of the photo, however many lines it wraps to */
+.pf-row .muted { align-self: flex-start; margin-top: calc(var(--space-2xl) + var(--space-sm)); max-width: 44ch; }
 .pfp { position: relative; width: 96px; height: 96px; border-radius: 50%; background: var(--color-paper-3); box-shadow: 0 0 0 4px var(--color-card); display: grid; place-items: center; font: 600 var(--text-xl)/1 var(--font-display); color: var(--color-ink); flex: none; }
 .pfp img { width: 100%; height: 100%; border-radius: 50%; object-fit: cover; }
 .pfp .pfp-wait { position: absolute; inset: 0; border-radius: 50%; display: grid; place-items: center; background: color-mix(in srgb, var(--color-card) 60%, transparent); }

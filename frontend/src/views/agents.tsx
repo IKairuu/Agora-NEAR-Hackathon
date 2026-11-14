@@ -73,7 +73,7 @@ export function Agents() {
             </>
           )}
         </div></div>}
-        <div className="panel"><div className="panel-h"><h2>Timeline</h2></div><div className="panel-b" style={{ paddingBlock: 4 }}><Feed /></div></div>
+        <div className="panel"><div className="panel-h"><h2>Timeline</h2></div><div className="panel-b agent-timeline" style={{ paddingBlock: 4 }} tabIndex={0} aria-label="Agent timeline"><Feed /></div></div>
       </div>
     </Shell>
   );
@@ -259,7 +259,7 @@ export function Wallet() {
               <button className="btn sm primary" disabled={agentsBusy} aria-busy={agentsBusy} onClick={() => { setAgentsBusy(true); void liveEnableAgents().finally(() => setAgentsBusy(false)); }}><Icon name="check" />{agentsBusy ? 'Waiting for your wallet…' : 'Enable agents (1 signature)'}</button>
             </>}
             {s.live && s.walletBal && s.chain?.usdc && s.chain.network === 'testnet' && <button className="btn sm" disabled={faucetBusy} aria-busy={faucetBusy} onClick={() => { setFaucetBusy(true); void liveFaucet().finally(() => setFaucetBusy(false)); }}><Icon name="plus" />{faucetBusy ? 'Waiting for your wallet…' : 'Get 50 test USDC'}</button>}
-            {s.live && <button className="lk small" onClick={() => setState({ modal: { kind: 'linkwallet' } })}><Icon name="wallet" />{s.walletBal ? 'Link a different wallet' : 'Link your own NEAR wallet'}</button>}
+            {s.live && <button className="btn sm link-wal" onClick={() => setState({ modal: { kind: 'linkwallet' } })}><Icon name="wallet" />{s.walletBal ? 'Link a different wallet' : 'Link your own NEAR wallet'}</button>}
             <div className="wal-acts two">
               <button onClick={act.send}><i><Icon name="up" /></i>Send</button>
               <button onClick={act.receive}><i><Icon name="down" /></i>Receive</button>

@@ -5,7 +5,7 @@ import { finishWalletSignIn, linkedIdsOf, linkErrorText, linkProvider, NO_IDS, t
 import { authConfigured, supabase } from '../lib/supabase';
 import { api } from '../lib/api';
 import type { OwnershipProof } from '../lib/near';
-import { liveMessageSeller, liveReadThread, appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveWithdraw as liveMockWithdraw, walletMode, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveBundle, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
+import { liveMessageSeller, liveReadThread, appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveBundle, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg, type State } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -389,14 +389,14 @@ export const act = {
   send: () => openModal('send'),
   receive: () => openModal('receive'),
   /** Live: real chain mode signs in the user's wallet; mock mode adds test USDC. Demo: explains where real funds come from. */
-  addfunds: () => { if (isLive()) { if (walletMode()) openModal('walletmove', { op: 'deposit' }); else void liveAddFunds(); return; } toast('The demo uses sample money. Sign in with a NEAR wallet to add real testnet USDC from your wallet.', 'hold'); },
+  addfunds: () => { if (isLive()) { openModal('walletmove', { op: 'deposit' }); return; } toast('The demo uses sample money. Sign in with a NEAR wallet to add real testnet USDC from your wallet.', 'hold'); },
   dispute: () => openModal('dispute'),
   unpause: () => openModal('unpause'),
   overcap: () => toast(<><b>Rejected by contract.</b> fund_job 400.00 USDC is over your per-job cap of 50.00. 0 USDC moved.</>, 'block', 5200),
   wrongcat: () => toast(<><b>Rejected by contract.</b> Category "Design" is not on your allowed list.</>, 'block'),
   withdraw: () => toast(<><b>Rejected by NEAR.</b> The agent key has no permission to call withdraw.</>, 'block'),
   deletekey: () => toast('Deleting a key needs your full-access key. You would confirm with Google sign-in here.', 'hold'),
-  withdrawme: () => isLive() ? (walletMode() ? openModal('walletmove', { op: 'withdraw' }) : void liveMockWithdraw()) : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
+  withdrawme: () => isLive() ? openModal('walletmove', { op: 'withdraw' }) : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
   send2: () => { closeModal(); toast('In the prototype nothing is sent. On testnet this is a full-access key transfer.', 'hold'); },
   copyacct: () => { try { void navigator.clipboard.writeText(ME.acct); } catch { /* ignore */ } toast(`Copied ${ME.acct}.`); },
   refundexp: () => toast("After the deadline, refund_expired returns the protected money to you. Anyone can call it, so it can't be blocked.", 'hold', 5200),
