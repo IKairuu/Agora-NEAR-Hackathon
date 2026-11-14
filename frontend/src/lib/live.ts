@@ -451,7 +451,41 @@ subscribe(() => {
   if (raw === askRaw) return;
   askRaw = raw;
   try { localStorage.setItem(askKey(askOwner), raw); } catch { /* storage full or blocked: the chat still works for this visit */ }
+  /* each job also keeps the conversation it came from, so opening it from Job requests brings that chat back */
+  const ref = s.liveJob?.ref;
+  if (s.asked && ref) {
+    const chats = readJobChats(askOwner);
+    chats[ref] = { reqChat: data.reqChat, askText: data.askText, followUps: data.followUps };
+    try { localStorage.setItem(jobChatsKey(askOwner), JSON.stringify(chats)); } catch { /* ignore */ }
+  }
 });
+
+type JobChat = Pick<State, 'reqChat' | 'askText' | 'followUps'>;
+const jobChatsKey = (userId: string) => `agora-jobchats:${userId}`;
+function readJobChats(userId: string): Record<string, JobChat> {
+  try { const raw = localStorage.getItem(jobChatsKey(userId)); return raw ? (JSON.parse(raw) as Record<string, JobChat>) : {}; } catch { return {}; }
+}
+
+/**
+ * Opens one of the account's jobs in the New request chat, with the conversation it started from (kept on this device).
+ * Used by Job requests while the job is still being specified or collecting offers.
+ */
+export async function liveOpenJob(ref: string): Promise<void> {
+  const s = getState();
+  if (s.liveJob?.ref === ref) { setState({ asked: true }); return; }
+  const saved = readJobChats(s.user?.id ?? '')[ref];
+  const card = OTHER_JOBS.find((j) => j.id === ref);
+  Object.assign(JOB, { id: ref, title: card?.title ?? ref, repo: NO_REPO, base: 'main', cat: card?.cat ?? '', plain: saved?.askText ?? '', posted: '', specHash: '' });
+  JOB_BUDGET.label = '';
+  replace(SPEC, [['Tests are being written', 'The spec writer drafts failing tests from your repository', 'Pending']]);
+  replace(BIDS, []); replace(ARRIVE, []);
+  setState({
+    liveJob: { id: '', ref }, asked: true, pendingAsk: false, draft: '',
+    askText: saved?.askText ?? '', followUps: saved?.followUps ?? [], reqChat: saved?.reqChat ?? [],
+    stage: 1, offerSt: '', preNeg: false, declined: [], bidsShown: 0, hire: '', liveSpec: { state: 'loading' }, rerun: null, pay: null,
+  });
+  await refreshAll(false);
+}
 
 interface ChatReply { reply: string; ready: boolean; job: { id: string; ref: string; title: string; text: string; repo: string } | null }
 

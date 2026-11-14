@@ -1,7 +1,7 @@
 import { Fragment, useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import { agentPick, ARRIVE, ATT, BIDS, DONE_JOBS, FILTERS, gigBy, GIGS, HELD, JF, JOB, ME, openJobs, OTHER_JOBS, SELLERS_DIR, usd, type FilterKey, type Gig, type OpenJob, type OtherJob } from '../data/data';
-import { acScroll, act, hire, newRequest, openRequest } from '../store/actions';
-import { JOB_BUDGET, NO_REPO, removalFor } from '../lib/live';
+import { acScroll, act, go, hire, newRequest, openRequest } from '../store/actions';
+import { JOB_BUDGET, NO_REPO, liveOpenJob, removalFor } from '../lib/live';
 import { escrow, free, getState, hb, hPrice, paused, priceOf, sellerLocked, setState, toast, useApp, type SpecDoc, type State } from '../store/store';
 import { Icon } from '../ui/icons';
 import { Face, Feed, feedItems, Gate, RemoveJobButton, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, RLink, SellerReviews, SignInButton, SName, Thumb, useReputation } from '../ui/parts';
@@ -317,17 +317,22 @@ function allJobs(s: State) {
   return { on, done };
 }
 
+/** Live: the account's own job is still being specified or collecting offers, so it opens in the New request chat. */
+const opensInChat = (live: boolean, j: JobView) => live && (j.grp === 'offers' || j.grp === 'waiting');
+const openInChat = (j: JobView) => { void liveOpenJob(j.id); go('ask'); };
+
 function JobBig({ j }: { j: JobView }) {
   const { live } = useApp();
+  const chat = opensInChat(live, j);
   return (
-    <article className="jbig">
+    <article className={`jbig ${chat ? 'clickable' : ''}`} onClick={chat ? (e) => { if (!(e.target as HTMLElement).closest('button, a, summary, details')) openInChat(j); } : undefined}>
       <div className="jb-l">
         <div className="jb-top">
-          <h3>{j.href ? <RLink r={j.href} onClick={j.href === 'ask' ? openRequest : undefined}>{j.title}</RLink> : <button className="as-link" onClick={() => setState({ modal: { kind: 'ojob', props: { id: j.id } } })}>{j.title}</button>}</h3>
+          <h3>{j.href ? <RLink r={j.href} onClick={j.href === 'ask' ? openRequest : undefined}>{j.title}</RLink> : chat ? <button className="as-link" onClick={() => openInChat(j)}>{j.title}</button> : <button className="as-link" onClick={() => setState({ modal: { kind: 'ojob', props: { id: j.id } } })}>{j.title}</button>}</h3>
           <span className={`pill ${j.status[0]}`}>{j.status[1]}</span>
           <RemoveJobButton id={j.id} title={j.title} kind={live ? j.remove ?? removalFor(j.id) : null} />
         </div>
-        <div className="jb-meta"><span>{j.cat}</span><span className="num">Budget {j.budget} USDC</span><span>{j.due}</span>{j.who && <span>Seller: {j.who}</span>}<span className="mono">{j.id}</span></div>
+        <div className="jb-meta"><span>{j.cat}</span><span className="num">{j.budget ? `Budget ${j.budget.replace(/\s*USDC$/i, '')} USDC` : 'No budget set'}</span><span>{j.due}</span>{j.who && <span>Seller: {j.who}</span>}<span className="mono">{j.id}</span></div>
         {j.ev && j.ev.length > 0 && (
           <details className="jb-log"><summary>Activity <span className="tcount">{j.ev.length}</span></summary>
             <ol>{j.ev.map((e, i) => <li key={i}><time>{e[0]}</time><b>{e[1]}</b><span>{e[2]}</span></li>)}</ol>
