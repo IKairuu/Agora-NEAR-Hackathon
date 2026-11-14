@@ -1,9 +1,11 @@
 import type { ReactNode } from 'react';
 import { flushSync } from 'react-dom';
 import { ARRIVE, ATTACK, BIDS, gigBy, JOB, KICKOFF, ME, O_ST, OTHER_JOBS, REPLIES, REVIEWERS, sellerBy, T_MSGS, T_TIME, THREADS, usd, type Order } from '../data/data';
-import { saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
+import { finishWalletSignIn, linkedIdsOf, linkErrorText, linkProvider, NO_IDS, takeLinking, unlinkProvider, sendEmailCode, verifyEmailCode, saveOnboarding, savePending, signOutRemote, startOAuth, takePending, takeUrlError, userOf, type OAuthVia, type Onboarding } from '../lib/auth';
 import { authConfigured, supabase } from '../lib/supabase';
-import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveWithdraw, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
+import { api } from '../lib/api';
+import type { OwnershipProof } from '../lib/near';
+import { appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveWithdraw as liveMockWithdraw, walletMode, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveAttachRepo, liveBundle, liveDeliver, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg, type State } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -156,7 +158,7 @@ export const TOUR: TourStep[] = [
   { r: 'agents', st: 7, t: 'Someone steals the agent key', p: 'The attacker tries to drain the account. The protocol and the contract reject every call, and the guardian pauses the team.', d: <>Click <b>Run the drill</b>.</> },
   { r: 'sell', st: 7, t: 'Become a seller', p: 'Clicking Selling opens a short welcome, then a profile you can fill from LinkedIn, a CV or GitHub. The coding can be done by you or by a coding agent you run.', d: <>Click <b>Let's do this</b>.</>, act: () => setState({ sellStep: 0 }) },
   { r: 'dispute', st: 8, t: 'Disputes are a re-check first', p: "A dispute freezes the payment and 3 fresh reviewers re-run every test for free. Only if that doesn't settle it does the DAO vote, and the side that asks puts down a small bond it gets back if right.", d: <>Press <b>Next</b>.</> },
-  { r: 'wallet', st: 8, t: 'A wallet that stays simple', p: 'One balance, four actions. Buyers can add funds from other chains through NEAR Intents, and agents can never withdraw.', d: <>That's the full loop. Press <b>Finish</b>.</> },
+  { r: 'wallet', st: 8, t: 'A wallet that stays simple', p: 'One balance, four actions. Buyers add USDC from their own NEAR wallet, and agents can never withdraw.', d: <>That's the full loop. Press <b>Finish</b>.</> },
 ];
 export function tourGo(i: number) {
   if (isLive()) { leaveLive(); toast('The demo tour uses sample data. Sign in again afterwards to see your own jobs.', 'hold'); }
@@ -257,11 +259,15 @@ function goRole(r: 'hire' | 'work') {
 export const act = {
   signin: () => openModal('signin'),
   code: () => openModal('code'),
-  resend: () => toast('A new code is on its way. The old one stops working.'),
+  resend: () => {
+    if (!authConfigured) { toast('A new code is on its way. The old one stops working.'); return; }
+    void sendEmailCode(getState().mail).then((err) => toast(err ? `Could not send the code: ${err}` : 'A new code is on its way. The old one stops working.', err ? 'block' : 'ok'));
+  },
   passkey: () => { setState({ signVia: 'passkey' }); toast('Passkey confirmed with your device. Nothing to remember.'); act.walletstep(); },
   walletstep: () => openModal('walletstep'),
   walletpick: () => openModal('walletpick'),
-  walletlinked: () => { setState({ walletLinked: true }); remember({ wallet: true }); toast('Wallet linked. It can fund jobs; your agents still cannot withdraw.'); act.signin2(); },
+  /** `real`: a real wallet was linked and already said so; the demo picker passes a click event, not true. */
+  walletlinked: (real?: unknown) => { setState({ walletLinked: true }); remember({ wallet: true }); if (real !== true) toast('Wallet linked. It can fund jobs; your agents still cannot withdraw.'); act.signin2(); },
   signsell: () => {
     if (getState().stage >= 1) { setState({ sellStep: 0 }); go('sell'); return; }
     setState({ after: 'sell', rolePick: 'work' }); openModal('signin');
@@ -270,6 +276,19 @@ export const act = {
   signVia: (via: string) => {
     if ((via === 'google' || via === 'github') && authConfigured) { void act.oauth(via); return; }
     setState({ signVia: via }); if (via === 'wallet') act.signin2(); else act.walletstep();
+  },
+  /**
+   * Real sign-in with a NEAR wallet alone: the backend checks the signed message, finds the account the wallet is
+   * linked to (or makes one), and returns a one-time token that becomes a Supabase session. Returns an error or null.
+   */
+  walletSignIn: async (proof: OwnershipProof): Promise<string | null> => {
+    const s = getState();
+    savePending({ via: 'wallet', after: s.after, rolePick: s.rolePick, tour: s.tour, draft: s.draft });
+    const res = await api<{ token_hash: string; created: boolean }>('/wallet/v1/sign-in', { body: proof, quiet: true }).catch((e: unknown) => e instanceof Error ? e : new Error('Could not sign in'));
+    if (res instanceof Error) { takePending(); return res.message; }
+    const err = await finishWalletSignIn(res.token_hash);
+    if (err) { takePending(); return err; }
+    return null;
   },
   /** Real Google or GitHub sign-in: remember where the user was, then leave for the provider's own page. */
   oauth: async (via: OAuthVia) => {
@@ -368,18 +387,17 @@ export const act = {
   fund: () => hire(getState().hire || hb(getState()).key),
   send: () => openModal('send'),
   receive: () => openModal('receive'),
-  addfunds: () => { if (isLive()) { void liveAddFunds(); return; } openModal('addfunds'); },
+  /** Live: real chain mode signs in the user's wallet; mock mode adds test USDC. Demo: explains where real funds come from. */
+  addfunds: () => { if (isLive()) { if (walletMode()) openModal('walletmove', { op: 'deposit' }); else void liveAddFunds(); return; } toast('The demo uses sample money. Sign in with a NEAR wallet to add real testnet USDC from your wallet.', 'hold'); },
   dispute: () => openModal('dispute'),
   unpause: () => openModal('unpause'),
   overcap: () => toast(<><b>Rejected by contract.</b> fund_job 400.00 USDC is over your per-job cap of 50.00. 0 USDC moved.</>, 'block', 5200),
   wrongcat: () => toast(<><b>Rejected by contract.</b> Category "Design" is not on your allowed list.</>, 'block'),
   withdraw: () => toast(<><b>Rejected by NEAR.</b> The agent key has no permission to call withdraw.</>, 'block'),
   deletekey: () => toast('Deleting a key needs your full-access key. You would confirm with Google sign-in here.', 'hold'),
-  withdrawme: () => isLive() ? void liveWithdraw() : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
+  withdrawme: () => isLive() ? (walletMode() ? openModal('walletmove', { op: 'withdraw' }) : void liveMockWithdraw()) : toast('Withdrawals need your full-access key. You would confirm with Google sign-in here.', 'hold'),
   send2: () => { closeModal(); toast('In the prototype nothing is sent. On testnet this is a full-access key transfer.', 'hold'); },
   copyacct: () => { try { void navigator.clipboard.writeText(ME.acct); } catch { /* ignore */ } toast(`Copied ${ME.acct}.`); },
-  intents: () => toast('Quote refreshed: 100.00 USDC on Base becomes 99.71 USDC on NEAR.'),
-  intentspay: () => { closeModal(); toast(<><b>Sent through NEAR Intents.</b> In the demo this is the real 1 USDC mainnet payment, with its explorer link in the README.</>, 'ok', 5200); },
   refundexp: () => toast("After the deadline, refund_expired returns the protected money to you. Anyone can call it, so it can't be blocked.", 'hold', 5200),
   baddeliver: () => { if (isLive()) { toast('Deliveries come from your seller. Reviewers run as soon as they submit a commit.', 'hold'); return; } setState((s) => ({ stage: Math.max(s.stage, 6) })); toast(<><b>Delivery rejected.</b> Commit 3b9c2aa edited a locked test. 0 of 3 approved.</>, 'block', 5200); },
   gooddeliver: () => {
@@ -503,7 +521,22 @@ export const act = {
   openGig: (id: string) => { if (isLive()) void liveOpenGig(id); setState({ svc: id }); go('svc'); tourStep(1, 2); },
   /** A seller's name anywhere opens their profile. */
   who: (key: string) => { if (isLive()) void liveWho(key); setState({ who: key }); go('profile'); },
-  ghconnect: () => { setState({ ghLinked: true }); toast('GitHub connected: 14 public repositories found. Reputation still comes only from settled jobs.'); },
+  /** Links Google or GitHub to the signed-in account. In the demo (no real sign-in) GitHub just shows as connected. */
+  linkid: (via: OAuthVia) => {
+    if (!authConfigured || !getState().user) {
+      if (via === 'github') { setState({ ghLinked: true }); toast('GitHub connected: 14 public repositories found. Reputation still comes only from settled jobs.'); }
+      else toast('Sign in first.', 'hold');
+      return;
+    }
+    void linkProvider(via).then((err) => { if (err) toast(err, 'block'); });
+  },
+  unlinkid: (via: OAuthVia) => {
+    void unlinkProvider(via).then((err) => {
+      if (err) { toast(err, 'block'); return; }
+      toast(`${via === 'github' ? 'GitHub' : 'Google'} removed from this account.`);
+    });
+  },
+  ghconnect: () => act.linkid('github'),
   sellstart: () => { if (isLive()) void liveLoadSellProfile(); setState({ sellStep: 1 }); window.scrollTo(0, 0); },
   theme: () => {
     const r = document.documentElement;
@@ -537,13 +570,25 @@ export const act = {
     setState({ nextJob: s.nextJob + 1, extra: [...s.extra, { id: 'J-' + s.nextJob, text: v, t: clock(), posted: false }] });
     acScroll();
   },
-  signMail: (v: string) => {
-    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) { toast('Enter an email address, like you@example.com.', 'hold'); return; }
+  /** Email sign-in: real Supabase one-time code when sign-in is configured, simulated in the prototype. Returns an error or null. */
+  signMail: async (v: string): Promise<string | null> => {
+    if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(v)) return 'Enter an email address, like you@example.com.';
+    if (authConfigured) {
+      const err = await sendEmailCode(v);
+      if (err) return `Could not send the code: ${err}`;
+    }
     setState({ signVia: 'email', mail: v }); act.code();
+    return null;
   },
-  signCode: (v: string) => {
-    if (v.replace(/\D/g, '').length !== 6) { toast('Enter the 6 digits from the email.', 'hold'); return; }
-    act.walletstep();
+  signCode: async (v: string): Promise<string | null> => {
+    const code = v.replace(/\D/g, '');
+    if (code.length < 6 || code.length > 10) return 'Enter the code from the email.';
+    if (!authConfigured) { act.walletstep(); return null; }
+    const s = getState();
+    savePending({ via: 'email', after: s.after, rolePick: s.rolePick, tour: s.tour, draft: s.draft });
+    const err = await verifyEmailCode(s.mail, code);
+    if (err) { takePending(); return err.toLowerCase().includes('expired') || err.toLowerCase().includes('invalid') ? 'That code is wrong or expired. Check the newest email, or resend.' : err; }
+    return null;
   },
 };
 
@@ -552,12 +597,21 @@ export const act = {
  * Call once at startup. Picks up the session Supabase creates after the Google or GitHub redirect,
  * resumes the sign-in flow the user started, and keeps the app signed in across reloads.
  */
+let syncedGithub: string | null | undefined;
 export function initAuth(): () => void {
   const urlError = takeUrlError();
-  if (urlError) { takePending(); toast(`Sign-in was not completed: ${urlError}`, 'block'); }
+  const linking = takeLinking();
+  if (urlError) { takePending(); toast(linking ? linkErrorText(urlError, linking) : `Sign-in was not completed: ${urlError}`, 'block'); }
+  else if (linking) setTimeout(() => { const id = getState().ids[linking]; if (id) toast(`${linking === 'github' ? 'GitHub' : 'Google'} linked: ${id}. It now opens this same account.`); }, 1500);
   if (!supabase) return () => {};
   const { data } = supabase.auth.onAuthStateChange((event, session) => {
-    if (event === 'SIGNED_OUT') { leaveLive(); setState({ user: null }); return; }
+    if (event === 'SIGNED_OUT') { leaveLive(); syncedGithub = undefined; setState({ user: null, ids: NO_IDS, ghLinked: false }); return; }
+    if (session) {
+      const ids = linkedIdsOf(session);
+      setState({ ids, ghLinked: Boolean(ids.github) });
+      /* the seller profile shows the GitHub linked to this account, read by the server from Supabase */
+      if (ids.github !== syncedGithub) { syncedGithub = ids.github; setTimeout(() => { void api('/seller-profile/v1/github', { method: 'POST', quiet: true }).catch(() => null); }, 0); }
+    }
     /* a saved Google or GitHub sign-in whose Supabase session has expired: back to guest */
     if (event === 'INITIAL_SESSION' && !session && getState().user) { setState({ stage: 0, user: null, role: null, signVia: '' }); stopRestoring(); return; }
     if (!session || (event !== 'SIGNED_IN' && event !== 'INITIAL_SESSION')) return;

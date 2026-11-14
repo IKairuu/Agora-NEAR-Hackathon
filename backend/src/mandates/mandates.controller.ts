@@ -21,6 +21,13 @@ export class MandatesController {
         return this.mandatesService.editMandate(auth, body);
     }
 
+    @Post('v1/check')
+    @HttpCode(200)
+    @UseGuards(AuthGuard)
+    checkMandate(@Headers('authorization') auth: string, @Body(ValidationPipe) body: EditMandate) {
+        return this.mandatesService.checkMandate(auth, body);
+    }
+
     @Post('v1/pause')
     @HttpCode(200)
     @UseGuards(AuthGuard)

@@ -7,6 +7,8 @@ import { MandatesRepository } from './mandates.repository.js';
 
 type MandateRow = NonNullable<NonNullable<Awaited<ReturnType<MandatesRepository['getMandate']>>>['mandate']>;
 
+interface ChainMandate { per_job_cap: string; daily_cap: string; new_seller_cap: string; review_timeout_hours: number; categories: string[]; strict: boolean; paused: boolean }
+
 const units = (amount: number): string => String(Math.round(amount * 1_000_000));
 const sameDay = (a: Date | null): boolean => a !== null && a.toISOString().slice(0, 10) === new Date().toISOString().slice(0, 10);
 
@@ -31,10 +33,14 @@ export class MandatesService {
         const authId = await this.authId(token);
         const row = await this.mandatesRepository.getMandate(authId);
         const m = row?.mandate ?? null;
-        const balance = row?.nearAccountId ? await this.mandatesRepository.getBalance(row.nearAccountId) : null;
+        const [balance, onChain] = await Promise.all([
+            row?.nearAccountId ? this.mandatesRepository.getBalance(row.nearAccountId) : null,
+            row?.nearAccountId ? this.chainMandate(row.nearAccountId) : null,
+        ]);
         return {
             ...currentLimits(m),
-            paused: m?.paused ?? false,
+            ...(onChain ?? {}),
+            paused: onChain?.paused ?? m?.paused ?? false,
             pausedBy: m?.pausedBy ?? null,
             pausedAt: m?.pausedAt ?? null,
             usedToday: balance && sameDay(balance.dayStarted) ? Number(balance.spentToday) : 0,
@@ -48,6 +54,24 @@ export class MandatesService {
 
     async editMandate(token: string, body: EditMandate) {
         const authId = await this.authId(token);
+        const { row, next, approved, args } = await this.plan(authId, body);
+        const acct = await this.ensureAccount(authId, row?.nearAccountId ?? null, row?.agentsAccountId ?? null);
+        const tx = await this.chainService.callAs('owner', acct, 'set_mandate', args, '1');
+        return { message: 'Limits Successfully Saved', ...next, approvedSellers: approved, txHash: tx.tx_hash, explorer: tx.explorer_url };
+    }
+
+    /**
+     * Checks new limits the same way as editMandate but signs nothing. Returns the set_mandate arguments,
+     * so the user's own wallet can sign the call (real chain mode, where the server has no key for the account).
+     */
+    async checkMandate(token: string, body: EditMandate) {
+        const authId = await this.authId(token);
+        const { row, next, approved, args } = await this.plan(authId, body);
+        if (!row?.nearAccountId) throw new BadRequestException('Link your NEAR wallet first');
+        return { message: 'Limits Checked', ...next, approvedSellers: approved, signer: row.nearAccountId, contract: this.chainService.walletChainInfo().contract, method: 'set_mandate', args };
+    }
+
+    private async plan(authId: string, body: EditMandate) {
         if (Object.values(body).every((v) => v === undefined)) throw new BadRequestException('Send at least one limit to change');
         const row = await this.mandatesRepository.getMandate(authId);
         const now = currentLimits(row?.mandate ?? null);
@@ -71,8 +95,7 @@ export class MandatesService {
             const missing = body.approved_sellers.filter((a) => !found.includes(a));
             if (missing.length) throw new BadRequestException(`Not a seller: ${missing.join(', ')}`);
         }
-        const acct = await this.ensureAccount(authId, row?.nearAccountId ?? null, row?.agentsAccountId ?? null);
-        const tx = await this.chainService.callAs('owner', acct, 'set_mandate', {
+        const args = {
             per_job_cap: units(next.perJobCap),
             daily_cap: units(next.dailyCap),
             new_seller_cap: units(next.newSellerCap),
@@ -80,8 +103,8 @@ export class MandatesService {
             categories: next.categories,
             strict: next.strict,
             approved_sellers: approved,
-        }, '1');
-        return { message: 'Limits Successfully Saved', ...next, approvedSellers: approved, txHash: tx.tx_hash, explorer: tx.explorer_url };
+        };
+        return { row, next, approved, args };
     }
 
     async pauseAgents(token: string) {
@@ -99,6 +122,25 @@ export class MandatesService {
         if (!row?.mandate?.paused) throw new ConflictException('Your agents are not paused');
         const tx = await this.chainService.callAs('owner', row.nearAccountId!, 'unpause', {}, '1');
         return { message: 'Agents Successfully Unpaused', paused: false, txHash: tx.tx_hash, explorer: tx.explorer_url };
+    }
+
+    /** Real chain mode: the limits as the contract has them (the DB copy can lag behind a wallet-signed change). Null in mock mode or if the read fails. */
+    private async chainMandate(accountId: string) {
+        if (this.chainService.isMock()) return null;
+        try {
+            const c = await this.chainService.view<ChainMandate>('get_mandate', { account_id: accountId });
+            return {
+                perJobCap: Number(c.per_job_cap) / 1_000_000,
+                dailyCap: Number(c.daily_cap) / 1_000_000,
+                newSellerCap: Number(c.new_seller_cap) / 1_000_000,
+                reviewWindowHours: c.review_timeout_hours,
+                categories: c.categories,
+                strict: c.strict,
+                paused: c.paused,
+            };
+        } catch {
+            return null;
+        }
     }
 
     private async ensureAccount(authId: string, acct: string | null, agents: string | null): Promise<string> {

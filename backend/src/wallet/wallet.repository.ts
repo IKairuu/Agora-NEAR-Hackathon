@@ -13,6 +13,33 @@ export class WalletRepository {
         );
     }
 
+    async findAccountOwner(accountId: string, exceptUserId: string) {
+        return prisma.profile.findFirst({
+            where: { id: { not: exceptUserId }, OR: [{ nearAccountId: accountId }, { agentsAccountId: accountId }] },
+            select: { id: true },
+        });
+    }
+
+    async findProfileByAccount(accountId: string) {
+        return prisma.profile.findFirst({ where: { nearAccountId: accountId }, select: { id: true } });
+    }
+
+    async createWalletProfile(userId: string, nearAccountId: string, agentsAccountId: string | null) {
+        return prisma.$transaction(async (tx) =>
+            tx.profile.upsert({
+                where: { id: userId },
+                create: { id: userId, displayName: nearAccountId, nearAccountId, agentsAccountId },
+                update: { nearAccountId, agentsAccountId },
+                select: { id: true },
+            }),
+        );
+    }
+
+    /** The user's seller accounts (for example itsuki.agents.<you>). Job payouts land on these, not on the main account. */
+    async getSellerAccounts(userId: string) {
+        return prisma.seller.findMany({ where: { ownerId: userId }, select: { nearAccountId: true, displayName: true }, orderBy: { createdAt: 'asc' } });
+    }
+
     async getBalance(accountId: string) {
         return prisma.balance.findUnique({ where: { accountId }, select: { available: true, escrowed: true, spentToday: true, dayStarted: true } });
     }

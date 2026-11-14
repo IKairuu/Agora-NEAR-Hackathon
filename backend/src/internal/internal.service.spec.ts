@@ -282,7 +282,7 @@ describe('InternalService', () => {
         const prev = process.env['AGORA_CHAIN_MODE'];
         process.env['AGORA_CHAIN_MODE'] = 'real';
         const res = await service.agentNotify({ role: 'deadline_refund', ok: true, jobId: JOB, result: { method: 'refund_expired', txHash: '8yQkTzFwH5mXbVnP2cRjL7sA4dE9gU3hW6' } });
-        process.env['AGORA_CHAIN_MODE'] = prev;
+        if (prev === undefined) delete process.env['AGORA_CHAIN_MODE']; else process.env['AGORA_CHAIN_MODE'] = prev;
         expect(chain.callAs.mock.calls).toHaveLength(0);
         expect(chain.indexTx.mock.calls[0]).toEqual(['8yQkTzFwH5mXbVnP2cRjL7sA4dE9gU3hW6', 'agora-testnet.testnet']);
         expect(res.actions).toEqual(['indexed', 'expired and refunded', 'notified 2']);

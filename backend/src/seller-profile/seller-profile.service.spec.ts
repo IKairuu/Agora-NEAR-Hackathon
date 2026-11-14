@@ -1,6 +1,7 @@
 jest.mock('../prisma', () => ({ prisma: {} }));
 
 import { AuthService } from '../auth/auth.service';
+import { SupabaseAdminService } from '../auth/supabase-admin.service';
 import { ChainService } from '../chain/chain.service';
 import { Prisma } from '../generated/prisma/client';
 import { SellerProfileRepository, SellerProfileRow } from './seller-profile.repository';
@@ -22,6 +23,7 @@ describe('SellerProfileService', () => {
     let repo: jest.Mocked<SellerProfileRepository>;
     let chain: jest.Mocked<ChainService>;
     let service: SellerProfileService;
+    let admin: jest.Mocked<SupabaseAdminService>;
 
     beforeEach(() => {
         repo = {
@@ -35,7 +37,8 @@ describe('SellerProfileService', () => {
         const auth = {
             getSessionClaims: jest.fn().mockResolvedValue({ id: USER, email: 'team@lumenlabs.example', name: 'Lumen Labs', avatar: '' }),
         } as unknown as AuthService;
-        service = new SellerProfileService(repo, auth, chain);
+        admin = { getGithubLogin: jest.fn().mockResolvedValue('lumen-dev') } as unknown as jest.Mocked<SupabaseAdminService>;
+        service = new SellerProfileService(repo, auth, chain, admin);
         repo.publish.mockResolvedValue({ id: SELLER, nearAccountId: 'lumen.testnet' });
     });
 
@@ -135,5 +138,28 @@ describe('SellerProfileService', () => {
         repo.getSellerAccount.mockResolvedValue(null);
         await expect(service.addStake('Bearer t', { amount: 10 })).rejects.toThrow('Publish your seller profile first');
         await expect(service.returnStake('Bearer t')).rejects.toThrow('Publish your seller profile first');
+    });
+    describe('GitHub', () => {
+        it('saves the login of the GitHub linked to the account', async () => {
+            repo.getProfile.mockResolvedValue(row());
+            repo.saveProfile.mockResolvedValue({ id: PROFILE, step: 4 } as never);
+            await expect(service.syncGithub('Bearer t')).resolves.toEqual({ github: 'lumen-dev' });
+            expect(admin.getGithubLogin).toHaveBeenCalledWith(USER);
+            expect(repo.saveProfile).toHaveBeenCalledWith(USER, 'Lumen Labs', { github_username: 'lumen-dev' });
+        });
+
+        it('clears the login after GitHub is unlinked', async () => {
+            admin.getGithubLogin.mockResolvedValue(null);
+            repo.getProfile.mockResolvedValue(row({ githubUsername: 'old-login' }));
+            repo.saveProfile.mockResolvedValue({ id: PROFILE, step: 4 } as never);
+            await expect(service.syncGithub('Bearer t')).resolves.toEqual({ github: null });
+            expect(repo.saveProfile).toHaveBeenCalledWith(USER, 'Lumen Labs', { github_username: null });
+        });
+
+        it('ignores a GitHub login typed into the profile form', async () => {
+            repo.saveProfile.mockResolvedValue({ id: PROFILE, step: 1 } as never);
+            await service.editProfile('Bearer t', { step: 1, github_username: 'someone-else' } as never);
+            expect(repo.saveProfile.mock.calls[0]![2].github_username).toBeUndefined();
+        });
     });
 });
