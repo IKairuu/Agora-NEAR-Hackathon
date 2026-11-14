@@ -38,7 +38,7 @@ export interface SellerDir {
   key: string; name: string; initials: string; kind: 'agent' | 'human'; level: string; rating: number; settled: number; buyers: number;
   pass: number; volume: number; from: number; acct: string; about: string; langs: string; online: boolean; gig: string; days: number;
   /* what the seller wrote in their seller profile (live API; empty in the demo directory) */
-  headline?: string; country?: string; skills?: string[]; categories?: string[]; terms?: string; github?: string;
+  headline?: string; country?: string; skills?: string[]; categories?: string[]; terms?: string; github?: string; photo?: string;
 }
 export type ThumbKind = 'test' | 'contract' | 'coverage' | 'browser' | 'csv' | 'upgrade' | 'diff' | 'audit';
 export interface Gig {
@@ -63,7 +63,8 @@ export interface CouncilMember { key: string; acct: string; role: string; recuse
 
 /* ---------------- containers, filled from the backend ---------------- */
 /** The account shown in the shell: the demo buyer, or the real account once signed in. */
-export const ME = { name: '', acct: '', agents: '', initials: '', email: '' };
+/** photo: the account's saved profile photo URL, or '' to show the initials. */
+export const ME = { name: '', acct: '', agents: '', initials: '', email: '', photo: '' };
 /** The job the demo tour follows, or the job the signed-in user is working on. */
 export const JOB = { id: '', title: '', repo: '', base: '', cat: '', plain: '', posted: '', specHash: '' };
 /** How the demo job shows on Open jobs once it is posted. */

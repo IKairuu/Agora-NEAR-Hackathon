@@ -3,7 +3,7 @@ import { agentPick, ARRIVE, ATT, BIDS, HELD, JOB, KICKOFF, ME, NEG_LOG, REVIEWER
 import { act, hire, isUnread, markSeen, openRequest, scrollMsgs, sendChat, sendThread, threads, type Thread } from '../store/actions';
 import { getState, hb, hPrice, priceOf, setState, useApp, type ChatMsg, type State } from '../store/store';
 import { Icon, type IconName } from '../ui/icons';
-import { Gate, Head, Lifecycle, Mk, RemoveJobButton, RLink, SignInButton, T, Tl } from '../ui/parts';
+import { Face, Gate, Head, Lifecycle, Mk, RemoveJobButton, RLink, SignInButton, T, Tl } from '../ui/parts';
 import { removalFor } from '../lib/live';
 import { Shell } from '../ui/Shell';
 import { OrderAction } from './orders';
@@ -142,7 +142,7 @@ function Msg({ m, b, sellMode = false }: { m: ChatMsg; b: Who; sellMode?: boolea
   if (m.from === 'them') return <div className="msg them">{av}<div><div className="who">{b.name}</div><div className="bub">{m.text}</div></div></div>;
   if (m.from === 'agent') return <div className="msg bot"><span className="avatar ag"><Icon name="bot" /></span><div><div className="who">{sellMode ? 'Your bidding agent, for you' : 'Your buyer agent, for you'}</div><div className="bub">{m.text}</div></div></div>;
   if (m.from === 'held' || m.from === 'sys') return <div className="sys">{m.text}</div>;
-  return <div className="msg me"><span className="avatar">{ME.initials}</span><div><div className="who">You</div><div className="bub">{m.text}</div></div></div>;
+  return <div className="msg me"><Face photo={ME.photo} initials={ME.initials} /><div><div className="who">You</div><div className="bub">{m.text}</div></div></div>;
 }
 const initials = (t: Thread) => (t.ag ? <Icon name="bot" /> : t.who.slice(0, 2).toUpperCase());
 

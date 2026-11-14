@@ -37,7 +37,7 @@ async function liveApi<T>(path: string, opts: Parameters<typeof api>[1] = {}): P
 let likedBefore: string[] | null = null;
 const replace = <T,>(target: T[], items: T[]) => { target.splice(0, target.length, ...items); };
 
-interface MeView { id: string; name: string; acct: string; agents: string; initials: string; email: string; role: 'hire' | 'work' | null; mode: 'buy' | 'sell'; seller: boolean }
+interface MeView { id: string; name: string; acct: string; agents: string; initials: string; email: string; photo?: string; role: 'hire' | 'work' | null; mode: 'buy' | 'sell'; seller: boolean }
 interface JobView { id: string; uuid: string; title: string; repo: string; base: string; cat: string; plain: string; posted: string; specHash: string; specLocked: boolean; budget: string; stage: string; status: [string, string]; offers: number; remove?: 'delete' | 'cancel' | null }
 
 /* ---- delete or cancel a job: the API says which one a job allows, and checks it again when asked ---- */
@@ -120,7 +120,7 @@ export async function goLive(opts: { keepMode?: boolean } = {}): Promise<void> {
   if (stale(s)) return;
   if (likedBefore === null) likedBefore = getState().liked;
   clearDemo();
-  Object.assign(ME, { name: me.name, acct: me.acct, agents: me.agents, initials: me.initials, email: me.email });
+  Object.assign(ME, { name: me.name, acct: me.acct, agents: me.agents, initials: me.initials, email: me.email, photo: me.photo ?? '' });
   const mode = opts.keepMode ? getState().mode : me.mode === 'sell' ? 'sell' : 'buy';
   /* the account learns a mode kept from this device only if it differs (savedMode = what the server has) */
   savedMode = me.mode === 'sell' ? 'sell' : 'buy';
@@ -149,7 +149,7 @@ export function stopRestoring(): void {
 
 /** Empties every container the demo story fills, so a real account sees only its own data. */
 function clearDemo(): void {
-  Object.assign(ME, { name: '', acct: '', agents: '', initials: '', email: '' });
+  Object.assign(ME, { name: '', acct: '', agents: '', initials: '', email: '', photo: '' });
   Object.assign(JOB, { id: '', title: '', repo: '', base: '', cat: '', plain: '', posted: '', specHash: '' });
   Object.assign(JOB_LISTING, { budget: '', check: '', blurb: '', buyerRating: '' });
   Object.assign(SETTLED, { record: '', title: '', reviewer: '', review: '' });
@@ -206,13 +206,31 @@ async function loadPublicOpenJobs(): Promise<void> {
 }
 
 /** Leaves live mode and puts the demo story back. The market stays: it is the same public data. */
+/**
+ * Saves the account's profile photo (a small data URL the browser already resized), or removes it with ''.
+ * It shows at once in the account menu and the seller profile; the sellers list reloads so buyers see it too.
+ */
+export async function liveSavePhoto(dataUrl: string): Promise<boolean> {
+  try {
+    await api('/me/v1', { method: 'PATCH', body: { avatar: dataUrl }, quiet: true });
+  } catch (e) {
+    toast(e instanceof ApiError && e.status !== 0 ? e.message : 'Could not save your photo. Check your connection and try again.', 'block');
+    return false;
+  }
+  ME.photo = dataUrl;
+  setState({ avatarImg: dataUrl });
+  toast(dataUrl ? 'Profile photo saved.' : 'Profile photo removed.');
+  void loadMarket();
+  return true;
+}
+
 export function leaveLive(): void {
   session++;
   savedMode = null;
   agentsOn = null;
   if (timer) { clearInterval(timer); timer = null; }
   restoreDemo();
-  setState({ restoring: false, sellForm: DEMO_SELL_FORM, sellLoaded: false });
+  setState({ restoring: false, sellForm: DEMO_SELL_FORM, sellLoaded: false, avatarImg: '' });
   setLiveOpenJobs(null);
   if (likedBefore !== null) { setState({ liked: likedBefore }); likedBefore = null; }
   setState((s) => (gigBy(s.svc) ? {} : { svc: GIGS[0]?.id ?? s.svc }));
@@ -468,13 +486,21 @@ export async function liveDiscardAsk(): Promise<void> {
   liveLeaveAsk();
 }
 
-export async function liveAttachRepo(): Promise<void> {
-  const job = getState().liveJob; if (!job?.id) return;
-  const repo = window.prompt('Repository URL (https://github.com/owner/repo)', JOB.repo.startsWith('github.com') ? `https://${JOB.repo}` : '');
-  if (!repo) return;
-  const base = window.prompt('Base commit (leave empty for the latest)', '') ?? '';
-  const res = await api<{ ref: string }>('/requests/v1', { method: 'PATCH', body: { id: job.id, text: getState().askText || JOB.plain, repo_url: repo.trim(), ...(base.trim() ? { base_commit: base.trim() } : {}) } }).catch(() => null);
-  if (res) { toast('Repository attached. The spec writer will read it.'); await refreshAll(false); }
+/** The reason an API call failed, in words the dialog can show. */
+const failReason = (e: unknown): string => (e instanceof ApiError && e.status !== 0 ? e.message : 'Could not reach the AGORA server. Try again.');
+
+/** The repository already on the open request, as an https link, for the dialog to start from. */
+export const currentRepo = (): string => (JOB.repo ? (/^https?:\/\//.test(JOB.repo) ? JOB.repo : `https://${JOB.repo}`) : '');
+
+/** Attaches a repository (and optionally a base commit) to the open request. Returns null when it worked, or why not. */
+export async function liveAttachRepo(repo: string, base: string): Promise<string | null> {
+  const job = getState().liveJob; if (!job?.id) return 'Open a request first.';
+  try {
+    await api<{ ref: string }>('/requests/v1', { method: 'PATCH', quiet: true, body: { id: job.id, text: getState().askText || JOB.plain, repo_url: repo, ...(base ? { base_commit: base } : {}) } });
+  } catch (e) { return failReason(e); }
+  toast('Repository attached. The spec writer will read it.');
+  void refreshAll(false);
+  return null;
 }
 
 export async function liveHire(key: string): Promise<boolean> {
@@ -676,18 +702,17 @@ export async function liveSellerProfile(): Promise<SellerProfileView | null> {
 }
 
 /** Hands in a commit for a funded job. The runner checks it against the locked tests. */
-export async function liveDeliver(ref: string): Promise<void> {
-  const commit = (window.prompt(`Commit hash to deliver for ${ref}`, '') ?? '').trim();
-  if (!commit) return;
-  const repo = (window.prompt('Repository URL (leave empty to use the buyer\'s repository)', '') ?? '').trim();
+export async function liveDeliver(ref: string, commit: string, repo: string): Promise<string | null> {
   const body: Record<string, unknown> = { job_id: ref, commit_sha: commit };
   if (repo) body['repo_url'] = repo;
-  const res = await api<{ attempt: number; attemptsLeft: number; runner: string }>('/deliveries/v1', { body }).catch(() => null);
-  if (!res) return;
+  let res: { attempt: number; attemptsLeft: number; runner: string };
+  try { res = await api<{ attempt: number; attemptsLeft: number; runner: string }>('/deliveries/v1', { body, quiet: true }); }
+  catch (e) { return failReason(e); }
   toast(res.runner === 'queued'
     ? `Delivery ${res.attempt} submitted for ${ref}. The locked tests are running. ${res.attemptsLeft} attempt${res.attemptsLeft === 1 ? '' : 's'} left.`
     : `Delivery ${res.attempt} saved for ${ref}, but the test runner is not reachable right now.`, res.runner === 'queued' ? undefined : 'hold');
-  await refreshAll(false);
+  void refreshAll(false);
+  return null;
 }
 
 async function loadMoney(): Promise<void> {

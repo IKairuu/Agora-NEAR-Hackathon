@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState, type ChangeEvent, type ReactNode } from 'react';
+import { useNavigate } from 'react-router';
 import { CATS, COUNTRIES, DAO_COUNCIL, gigBy, GIGS, ME, O_ST, PAYOUTS, SELL_STEPS, sellerDir, SETTLED, SKILLS, usd } from '../data/data';
-import { act, newRequest } from '../store/actions';
-import { isLive, justPublished, liveDisputeNext, liveLoadDispute, liveLoadSellProfile, liveSaveSellStep, liveSellerProfile, type DisputeView, type SellerProfileView } from '../lib/live';
+import { act, go, newRequest } from '../store/actions';
+import { isLive, justPublished, liveSavePhoto, liveDisputeNext, liveLoadDispute, liveLoadSellProfile, liveSaveSellStep, liveSellerProfile, type DisputeView, type SellerProfileView } from '../lib/live';
 import { getState, hb, hPrice, sellerLocked, setState, toast, useApp, type SellForm, type State } from '../store/store';
 import { Icon, Tile, type IconName } from '../ui/icons';
-import { Gate, Head, levelClass, Review, RLink, SellerReviews, SignInButton, T, Thumb, useReputation } from '../ui/parts';
+import { Face, Gate, Head, levelClass, Review, RLink, SellerReviews, SignInButton, T, Thumb, useReputation } from '../ui/parts';
 import { SellerLock, Shell } from '../ui/Shell';
 
 /* ---------------- a seller's profile: the sellers directory plus their reputation from the backend ---------------- */
@@ -12,6 +13,10 @@ export function Profile() {
   const s = useApp();
   const p = sellerDir(s.who);
   const rep = useReputation(p?.acct);
+  const navigate = useNavigate();
+  /* Back returns to the page the profile was opened from (the seller dashboard, Find services, …);
+     opened directly, with nothing to go back to, it goes to the sellers list */
+  const back = () => { if ((window.history.state as { idx?: number } | null)?.idx) void navigate(-1); else { setState({ exTab: 'sellers' }); go('explore'); } };
   if (!p) return (
     <Shell cur="profile">
       <Head crumbs={<RLink r="explore" onClick={() => setState({ exTab: 'sellers' })}>Sellers</RLink>} title="Seller" />
@@ -29,6 +34,7 @@ export function Profile() {
   return (
     <Shell cur="profile">
       <Head crumbs={<><RLink r="explore" onClick={() => setState({ exTab: 'sellers' })}>Sellers</RLink> / {p.name}</>} title={p.name} actions={<>
+        <button className="btn ghost" onClick={back}><Icon name="back" />Back</button>
         {p.gig && <button className={`btn ${saved ? 'on' : ''}`} onClick={() => act.like(p.gig)} aria-pressed={saved}><Icon name="heart" />{saved ? 'Saved' : 'Save'}</button>}
         <RLink r="chat" className="btn"><Icon name="chat" />Message</RLink>
         <RLink r="ask" className="btn primary" onClick={newRequest}>Invite to a job</RLink>
@@ -36,7 +42,7 @@ export function Profile() {
       <div className="panel prof-top">
         <div className="cover night-cover" aria-hidden="true">{g && <Thumb g={g} />}</div>
         <div className="prof-row">
-          <span className={`avatar xl ${p.kind === 'agent' ? 'ag' : ''}`}>{p.initials}</span>
+          <Face photo={p.photo} initials={p.initials} className={`xl ${p.kind === 'agent' ? 'ag' : ''}`} />
           <div style={{ flex: 1, minWidth: 220, display: 'flex', flexDirection: 'column', gap: 6 }}>
             <div className="row"><span className={`pill ${p.kind === 'agent' ? 'info' : 'acc'}`}>{p.kind === 'agent' ? 'AI agent' : 'Developer'}</span><span className={`lvl ${levelClass(p.level)}`}>{p.level}</span><span className="mono muted xsmall">{p.acct}</span></div>
             {p.headline && p.headline !== p.about && <b>{p.headline}</b>}
@@ -76,7 +82,33 @@ export function Profile() {
 const numberText = (v: string) => { const n = Number(v.replace(/[^\d.]/g, '')); return v.trim() && n > 0 ? n : undefined; };
 const goStep = (n: number) => { if (isLive()) liveSaveSellStep(getState().sellStep); setState({ sellStep: Math.max(0, Math.min(5, n)) }); window.scrollTo(0, 0); };
 
-/** Reads an image file into the store as a data URL (prototype: preview only, nothing is uploaded). */
+/**
+ * Shrinks a picked photo to a square JPEG data URL (cropped from the centre), small enough to save on the account.
+ * Rejects files that are not images or cannot be decoded.
+ */
+function squarePhoto(file: File, size = 256): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!file.type.startsWith('image/')) { reject(new Error('Choose an image file (JPEG, PNG or WebP).')); return; }
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => {
+      const side = Math.min(img.naturalWidth, img.naturalHeight);
+      const c = document.createElement('canvas'); c.width = size; c.height = size;
+      const g = c.getContext('2d');
+      if (!g || !side) { URL.revokeObjectURL(url); reject(new Error('Could not read that image.')); return; }
+      g.fillStyle = '#fff'; g.fillRect(0, 0, size, size);
+      g.drawImage(img, (img.naturalWidth - side) / 2, (img.naturalHeight - side) / 2, side, side, 0, 0, size, size);
+      URL.revokeObjectURL(url);
+      let q = 0.85, out = c.toDataURL('image/jpeg', q);
+      while (out.length > 80_000 && q > 0.4) { q -= 0.15; out = c.toDataURL('image/jpeg', q); }
+      resolve(out);
+    };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('Could not read that image.')); };
+    img.src = url;
+  });
+}
+
+/** Reads an image file into the store as a data URL (the cover is a preview only, nothing is uploaded). */
 function readImage(key: 'coverImg' | 'avatarImg') {
   return (e: ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -100,15 +132,32 @@ function CoverBox({ edit }: { edit?: boolean }) {
   );
 }
 
+/**
+ * The seller's photo. Signed in, a picked photo is resized and saved on the account straight away, so it shows
+ * in the account menu and on the public profile. In the demo it stays a preview.
+ */
 function AvatarBox({ edit }: { edit?: boolean }) {
-  const { avatarImg } = useApp();
+  const { avatarImg, live } = useApp();
   const file = useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = useState(false);
+  const photo = avatarImg || (live ? ME.photo : '');
+  const onPick = async (e: ChangeEvent<HTMLInputElement>) => {
+    const f = e.target.files?.[0];
+    e.target.value = '';
+    if (!f) return;
+    if (!live) { readImage('avatarImg')({ target: { files: [f] } } as unknown as ChangeEvent<HTMLInputElement>); return; }
+    setBusy(true);
+    try { await liveSavePhoto(await squarePhoto(f)); }
+    catch (err) { toast(err instanceof Error ? err.message : 'Could not read that image.', 'block'); }
+    setBusy(false);
+  };
   return (
-    <div className="pfp">
-      {avatarImg ? <img src={avatarImg} alt="Your profile photo" /> : <span>{ME.initials}</span>}
+    <div className={`pfp ${busy ? 'busy' : ''}`} aria-busy={busy}>
+      {photo ? <img src={photo} alt="Your profile photo" /> : <span>{ME.initials}</span>}
+      {busy && <span className="pfp-wait" role="status" aria-label="Saving your photo"><span className="spin" /></span>}
       {edit && <>
-        <button className="cam" onClick={() => file.current?.click()} aria-label="Upload a profile photo"><Icon name="camera" /></button>
-        <input type="file" ref={file} accept="image/*" hidden onChange={readImage('avatarImg')} />
+        <button className="cam" onClick={() => file.current?.click()} disabled={busy} aria-label={photo ? 'Change your profile photo' : 'Upload a profile photo'}><Icon name="camera" /></button>
+        <input type="file" ref={file} accept="image/jpeg,image/png,image/webp" hidden onChange={(e) => void onPick(e)} />
       </>}
     </div>
   );
@@ -208,15 +257,22 @@ export function Sell() {
   const s = useApp();
   /* a real account's saved profile goes into the form once per session, also when the editor is opened directly */
   useEffect(() => { if (s.live && !s.sellLoaded) void liveLoadSellProfile(); }, [s.live, s.sellLoaded]);
+  /* a seller never sees the welcome page: opening the editor starts on the first step */
+  useEffect(() => { if (s.seller && s.sellStep === 0) setState({ sellStep: 1 }); }, [s.seller, s.sellStep]);
   const f = s.sellForm;
   const field = (k: keyof SellForm) => ({ value: f[k], onChange: (e: ChangeEvent<HTMLInputElement | HTMLSelectElement>) => { const v = e.target.value; setState((st) => ({ sellForm: { ...st.sellForm, [k]: v } })); } });
   const eg = (t: string) => (s.live ? `e.g. ${t}` : t);
   if (s.stage < 1) return <Shell cur="sell"><Head title="Become a seller" /><Gate msg="Sign in to become a seller"><SignInButton /></Gate></Shell>;
-  if (s.sellStep === 0) return <Shell cur="sell"><SellLanding /></Shell>;
-  const st = s.sellStep, agent = s.sellCoder === 'agent';
+  /* the welcome page is for new sellers; someone who already sells goes straight to editing their profile */
+  if (s.sellStep === 0 && !s.seller) return <Shell cur="sell"><SellLanding /></Shell>;
+  const st = Math.max(1, s.sellStep), agent = s.sellCoder === 'agent';
+  /* Back from the first step: a seller returns to their dashboard (saving what they typed), a new seller to the welcome page */
+  const back = st === 1 && s.seller
+    ? () => { if (isLive()) liveSaveSellStep(1); setState({ sellStep: 0 }); go('seller'); }
+    : () => goStep(st - 1);
   const nav = (next: boolean, label = 'Continue') => (
     <div className="row" style={{ justifyContent: 'space-between', paddingTop: 8 }}>
-      <button className="btn" onClick={() => goStep(st - 1)}>Back</button>
+      <button className="btn" onClick={back}>{st === 1 && s.seller ? 'Back to dashboard' : 'Back'}</button>
       <button className="btn primary" onClick={next ? () => goStep(st + 1) : act.publishseller}>{label}</button>
     </div>
   );
@@ -288,7 +344,9 @@ export function Sell() {
         <div className="field"><label htmlFor="sl-max">Jobs at once</label><input className="input num" id="sl-max" inputMode="numeric" {...field('max')} placeholder={eg('3')} /></div>
       </div>
       <div className="field"><label htmlFor="sl-terms">Delivery terms</label><input className="input" id="sl-terms" {...field('terms')} placeholder={eg('1 to 2 days, includes one extra edge-case test')} /></div>
-      <div className="banner info"><Icon name="bot" /><div className="grow"><b style={{ fontWeight: 500 }}>Your bidding agent</b><span className="muted">It watches matching jobs and bids inside these rules. Its key can call place_bid and submit_delivery only.</span></div></div>
+      <div className="banner info"><Icon name="bot" /><div className="grow"><b style={{ fontWeight: 500 }}>Your bidding agent</b><span className="muted">{agent
+        ? 'It bids on jobs that match your skills, inside these rules. Its key can call place_bid and submit_delivery only.'
+        : 'It places bids for you on jobs that match your skills, never below your minimum price. You still do the coding and deliver it yourself. Its key can call place_bid and submit_delivery only.'}</span></div></div>
       {nav(true)}
     </div></div>
   );
@@ -373,7 +431,7 @@ function LiveSeller() {
         <div className="stack">
           <div className="panel"><div className="panel-h"><h2>Your seller profile</h2><span className="pill ok"><Icon name="check" />Published</span></div><div className="panel-b">
             <div className="row" style={{ gap: 12, alignItems: 'center' }}>
-              <span className="avatar">{p.initials}</span>
+              <Face photo={ME.photo} initials={p.initials} />
               <div><b>{p.name}</b>{p.headline && <div className="muted small">{p.headline}</div>}</div>
             </div>
             <dl className="kv">

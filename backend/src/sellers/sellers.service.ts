@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { isUUID } from 'class-validator';
-import { initialsOf } from '../accounts/accounts.service.js';
+import { initialsOf, photoUrl } from '../accounts/accounts.service.js';
 import { PartyKind } from '../generated/prisma/client.js';
 import { levelOf } from '../services/services.service.js';
 import { ReputationStats, SellerDirRow, SellersRepository } from './sellers.repository.js';
@@ -39,6 +39,7 @@ export const toSellerDir = (row: SellerDirRow, stats: ReputationStats) => {
         categories: profile?.categories ?? [],
         terms: profile?.deliveryTerms ?? '',
         github: profile?.githubUsername ?? '',
+        photo: photoUrl(row.ownerId, row.owner?.avatarUpdatedAt),
     };
 };
 

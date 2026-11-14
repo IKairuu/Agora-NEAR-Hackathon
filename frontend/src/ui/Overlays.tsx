@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { DONE_JOBS, gigBy, ME, OTHER_JOBS, ROLES, usd, VIA } from '../data/data';
 import { act, go, orderAct, TOUR } from '../store/actions';
-import { liveLinkWallet, liveRemoveJob, liveWalletMove, liveWalletSendUsdc, loadWalletBalances } from '../lib/live';
+import { currentRepo, liveAttachRepo, liveDeliver, liveLinkWallet, liveRemoveJob, liveWalletMove, liveWalletSendUsdc, loadWalletBalances } from '../lib/live';
 import { connectedAccount, disconnectWallet, NEAR_NETWORK, pickWallet, proveOwnership, proveSignIn } from '../lib/near';
 import { closeModal, free, hPrice, setState, toast, useApp, useToasts } from '../store/store';
 import { authConfigured } from '../lib/supabase';
@@ -25,7 +25,7 @@ function Frame({ cls = '', children }: { cls?: string; children: ReactNode }) {
     </div>
   );
 }
-const Cancel = ({ label = 'Cancel' }: { label?: string }) => <button className="btn" data-close="1" onClick={closeModal}>{label}</button>;
+const Cancel = ({ label = 'Cancel' }: { label?: string }) => <button type="button" className="btn" data-close="1" onClick={closeModal}>{label}</button>;
 
 function SignIn() {
   const [mail, setMail] = useState('');
@@ -328,6 +328,74 @@ function Discard({ job }: { job: string }) {
   );
 }
 
+/** "github.com/owner/repo" or "https://…" as an https link; '' when it isn't one. */
+function httpsLink(v: string): string {
+  const t = v.trim().replace(/^http:\/\//i, 'https://');
+  const url = /^https:\/\//i.test(t) ? t : `https://${t}`;
+  try { const u = new URL(url); return u.hostname.includes('.') && u.pathname.length > 1 ? url.replace(/\/+$/, '').replace(/\.git$/, '') : ''; } catch { return ''; }
+}
+const COMMIT = /^[0-9a-f]{7,40}$/i;
+
+/** Buyer: attach the repository the tests run against (and optionally a base commit). */
+function AttachRepo() {
+  const [repo, setRepo] = useState(currentRepo());
+  const [base, setBase] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const go = async (e: FormEvent) => {
+    e.preventDefault();
+    const url = httpsLink(repo), b = base.trim();
+    if (!url) { setErr('Enter a repository link, like https://github.com/owner/repo.'); return; }
+    if (b && !COMMIT.test(b)) { setErr('The base commit must be a git commit hash (7 to 40 letters and digits), or empty for the latest.'); return; }
+    setErr(''); setBusy(true);
+    const fail = await liveAttachRepo(url, b);
+    if (!fail) { closeModal(); return; }
+    setErr(fail); setBusy(false);
+  };
+  return (
+    <Frame>
+      <form className="stack" noValidate onSubmit={(e) => void go(e)}>
+        <h2>Attach your repository</h2>
+        <p className="muted">The spec writer reads it to write the failing tests, and sellers deliver against it.</p>
+        <div className="field"><label htmlFor="ar-repo">Repository link</label><input className="input mono" id="ar-repo" type="url" inputMode="url" autoComplete="off" spellCheck={false} placeholder="https://github.com/owner/repo" value={repo} disabled={busy} onChange={(e) => { setRepo(e.target.value); setErr(''); }} autoFocus /></div>
+        <div className="field"><label htmlFor="ar-base">Base commit <span className="muted">(optional)</span></label><input className="input mono" id="ar-base" autoComplete="off" spellCheck={false} placeholder="Leave empty for the latest commit" value={base} disabled={busy} onChange={(e) => { setBase(e.target.value); setErr(''); }} /></div>
+        {err && <p className="small" role="alert" style={{ color: 'var(--block, #c0392b)' }}>{err}</p>}
+        <div className="acts"><Cancel /><button className="btn primary" type="submit" disabled={busy} aria-busy={busy}>{busy && <span className="spin" aria-hidden="true" />}{busy ? 'Attaching…' : 'Attach repository'}</button></div>
+      </form>
+    </Frame>
+  );
+}
+
+/** Seller: hand in a commit for a funded job. */
+function Deliver({ id }: { id: string }) {
+  const [commit, setCommit] = useState('');
+  const [repo, setRepo] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState('');
+  const go = async (e: FormEvent) => {
+    e.preventDefault();
+    const c = commit.trim(), url = repo.trim() ? httpsLink(repo) : '';
+    if (!COMMIT.test(c)) { setErr('Enter the commit hash to deliver (7 to 40 letters and digits).'); return; }
+    if (repo.trim() && !url) { setErr('Enter a repository link, like https://github.com/you/fork, or leave it empty.'); return; }
+    setErr(''); setBusy(true);
+    const fail = await liveDeliver(id, c, url);
+    if (!fail) { closeModal(); return; }
+    setErr(fail); setBusy(false);
+  };
+  return (
+    <Frame>
+      <form className="stack" noValidate onSubmit={(e) => void go(e)}>
+        <h2>Deliver {id}</h2>
+        <p className="muted">The reviewers run the locked tests on this commit. Payment is released when they pass.</p>
+        <div className="field"><label htmlFor="dl-commit">Commit hash</label><input className="input mono" id="dl-commit" autoComplete="off" spellCheck={false} placeholder="e.g. a41c9e2" value={commit} disabled={busy} onChange={(e) => { setCommit(e.target.value); setErr(''); }} autoFocus /></div>
+        <div className="field"><label htmlFor="dl-repo">Repository link <span className="muted">(optional)</span></label><input className="input mono" id="dl-repo" type="url" inputMode="url" autoComplete="off" spellCheck={false} placeholder="Leave empty to use the buyer's repository" value={repo} disabled={busy} onChange={(e) => { setRepo(e.target.value); setErr(''); }} /><span className="hint">Only if the commit is in your own fork.</span></div>
+        {err && <p className="small" role="alert" style={{ color: 'var(--block, #c0392b)' }}>{err}</p>}
+        <div className="acts"><Cancel /><button className="btn primary" type="submit" disabled={busy} aria-busy={busy}>{busy && <span className="spin" aria-hidden="true" />}{busy ? 'Delivering…' : 'Deliver'}</button></div>
+      </form>
+    </Frame>
+  );
+}
+
 /** Confirm before a draft is deleted or an open job is cancelled. */
 function RemoveJob({ id, kind, title }: { id: string; kind: 'delete' | 'cancel'; title: string }) {
   const [busy, setBusy] = useState(false);
@@ -433,6 +501,8 @@ export function ModalHost() {
     case 'ojob': return <OtherJob id={modal.props?.id ?? ''} />;
     case 'offer': return <Offer id={modal.props?.id ?? ''} />;
     case 'discard': return <Discard job={modal.props?.job ?? ''} />;
+    case 'attachrepo': return <AttachRepo />;
+    case 'deliver': return <Deliver id={modal.props?.ref ?? ''} />;
     case 'removejob': return <RemoveJob id={modal.props?.id ?? ''} kind={modal.props?.kind === 'delete' ? 'delete' : 'cancel'} title={modal.props?.title ?? ''} />;
     default: return null;
   }

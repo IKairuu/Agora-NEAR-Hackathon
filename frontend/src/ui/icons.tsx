@@ -47,6 +47,7 @@ const I = {
   qr: 'M4 4h6v6H4zM14 4h6v6h-6zM4 14h6v6H4zM14 14h2v2h-2zM18 14h2M14 18h2v2M18 18h2v2',
   ext: 'M14 4h6v6M20 4l-9 9M18 14v6H4V6h6',
   arrow: 'M7 17 17 7M9 7h8v8',
+  back: 'M19 12H5M11 6l-6 6 6 6',
   trend: 'm3 17 6-6 4 4 8-8M15 7h6v6',
   bell: 'M6 16V11a6 6 0 0 1 12 0v5l2 2H4zM10 21h4',
   mail: 'M3 6h18v12H3zM3 7l9 6 9-6',

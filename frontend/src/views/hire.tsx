@@ -4,7 +4,7 @@ import { acScroll, act, hire, newRequest, openRequest } from '../store/actions';
 import { JOB_BUDGET, NO_REPO, removalFor } from '../lib/live';
 import { escrow, free, getState, hb, hPrice, paused, priceOf, sellerLocked, setState, toast, useApp, type SpecDoc, type State } from '../store/store';
 import { Icon } from '../ui/icons';
-import { Feed, feedItems, Gate, RemoveJobButton, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, RLink, SellerReviews, SignInButton, SName, Thumb, useReputation } from '../ui/parts';
+import { Face, Feed, feedItems, Gate, RemoveJobButton, GigCard, Head, levelClass, Lifecycle, Mk, Nodes, OtherJobCard, PastJob, RLink, SellerReviews, SignInButton, SName, Thumb, useReputation } from '../ui/parts';
 import { SellerLock, Shell } from '../ui/Shell';
 
 const greeting = () => { const h = new Date().getHours(); return h < 12 ? 'Good morning' : h < 18 ? 'Good afternoon' : 'Good evening'; };
@@ -285,6 +285,15 @@ export const Post = Ask;
 
 /* ---------------- job requests ---------------- */
 interface JobView extends OtherJob { demo?: boolean }
+/**
+ * The budget the buyer gave, as sellers see it. "10" reads "10 USDC"; text like "under 40" is kept.
+ * The demo story keeps its own "under 40".
+ */
+function budgetLabel(s: State): string {
+  if (!s.live) return 'under 40';
+  const b = JOB_BUDGET.label.trim();
+  return !b ? '' : /^d+(.d+)?$/.test(b) ? `${b} USDC` : b;
+}
 /** The demo job as a job request card, or null before it is requested. */
 function demoJob(s: State): JobView | null {
   if (s.stage < 2) return null;
@@ -293,7 +302,7 @@ function demoJob(s: State): JobView | null {
   const st: [string, string] = s.stage >= 8 ? ['block', 'Agents paused'] : s.stage >= 7 ? ['ok', 'Paid'] : s.stage >= 6 ? ['hold', 'Revision requested'] : s.stage >= 5 ? ['acc', 'Payment protected'] : waiting ? ['hold', 'Waiting on seller'] : s.stage >= 4 ? ['info', 'Offer agreed'] : ['info', 'Getting offers'];
   const grp = s.stage >= 7 ? 'done' : s.stage >= 5 ? 'working' : waiting ? 'waiting' : 'offers';
   const ev = feedItems(s).filter((i) => i.who !== 'Account').map((i): [string, string, string] => [i.t.slice(0, 5), i.who, i.txt]);
-  return { id: JOB.id, title: JOB.title, cat: JOB.cat, budget: s.stage >= 5 ? usd(hPrice(s)) : 'under 40', status: st, who: s.stage >= 4 ? hb(s).name : '', due: s.stage >= 7 ? 'Ended today' : 'Due in 2 days', at, grp, ev, href: s.stage >= 5 ? 'room' : s.stage >= 4 ? 'chat' : 'ask', demo: true };
+  return { id: JOB.id, title: JOB.title, cat: JOB.cat, budget: s.stage >= 5 ? usd(hPrice(s)) : budgetLabel(s) || 'Not set', status: st, who: s.stage >= 4 ? hb(s).name : '', due: s.stage >= 7 ? 'Ended today' : 'Due in 2 days', at, grp, ev, href: s.stage >= 5 ? 'room' : s.stage >= 4 ? 'chat' : 'ask', demo: true };
 }
 function allJobs(s: State) {
   const d = demoJob(s);
@@ -382,9 +391,9 @@ export function Dash() {
             <div className="panel-h"><h2>Job requests</h2><div className="r"><RLink r="jobs" className="btn sm">All job requests</RLink></div></div>
             {d && (
               <RLink r={d.href!} className="job-card" onClick={d.href === 'ask' ? openRequest : undefined}>
-                <div className="row"><span className={`pill ${d.status[0]}`}>{d.status[1]}</span><span className="mono muted xsmall">{JOB.id}</span><span className="pill">Demo job</span></div>
+                <div className="row"><span className={`pill ${d.status[0]}`}>{d.status[1]}</span><span className="mono muted xsmall">{JOB.id}</span>{!s.live && <span className="pill">Demo job</span>}</div>
                 <h3>{JOB.title}</h3>
-                <div className="meta"><span>{JOB.cat}</span><span>Budget under 40 USDC</span><span>6 checks locked</span></div>
+                <div className="meta"><span>{JOB.cat}</span><span>{budgetLabel(s) ? `Budget ${/usdc/i.test(budgetLabel(s)) ? budgetLabel(s) : `${budgetLabel(s)} USDC`}` : 'No budget set'}</span>{!s.live && <span>6 checks locked</span>}</div>
                 <Lifecycle />
               </RLink>
             )}
@@ -507,7 +516,7 @@ function SellersList() {
         <thead><tr><th>Seller</th><th>Rating</th><th>Settled jobs</th><th>Tests pass first try</th><th>From</th><th>Languages</th></tr></thead>
         <tbody>{list.map((x) => (
           <tr key={x.key}>
-            <td><div className="sv-who"><span className={`avatar sm ${x.kind === 'agent' ? 'ag' : ''}`}>{x.initials}</span><div><button className="as-link sname" onClick={() => act.who(x.key)}>{x.name}</button><span className="muted xsmall">{x.kind === 'agent' ? 'AI agent' : 'Developer'} · {x.level}{x.online && <> · <span className="on-dot">online</span></>}</span></div></div></td>
+            <td><div className="sv-who"><Face photo={x.photo} initials={x.initials} className={`sm ${x.kind === 'agent' ? 'ag' : ''}`} /><div><button className="as-link sname" onClick={() => act.who(x.key)}>{x.name}</button><span className="muted xsmall">{x.kind === 'agent' ? 'AI agent' : 'Developer'} · {x.level}{x.online && <> · <span className="on-dot">online</span></>}</span></div></div></td>
             <td><span className="rate"><Icon name="star" /><b>{x.rating.toFixed(1)}</b></span></td>
             <td className="num">{x.settled}</td><td className="num">{x.pass}%</td><td className="num">{x.from} USDC</td><td className="muted small">{x.langs}</td>
           </tr>

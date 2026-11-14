@@ -13,6 +13,7 @@ const accountSelect = {
     theme: true,
     location: true,
     bio: true,
+    avatarUpdatedAt: true,
     sellers: { select: { id: true }, take: 1 },
 } satisfies Prisma.ProfileSelect;
 
@@ -31,6 +32,12 @@ export class AccountsRepository {
         );
     }
 
+    /** The stored photo, or null when the account has none. */
+    async getAvatar(userId: string) {
+        const row = await prisma.profile.findUnique({ where: { id: userId }, select: { avatarImage: true } });
+        return row?.avatarImage ?? null;
+    }
+
     async editAccount(userId: string, body: EditAccount) {
         return prisma.$transaction(async (tx) =>
             tx.profile.update({
@@ -42,6 +49,7 @@ export class AccountsRepository {
                     theme: body.theme,
                     location: body.location,
                     bio: body.bio,
+                    ...(body.avatar !== undefined ? { avatarImage: body.avatar || null, avatarUpdatedAt: body.avatar ? new Date() : null } : {}),
                 },
                 select: { id: true },
             }),

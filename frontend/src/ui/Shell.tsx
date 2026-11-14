@@ -4,7 +4,7 @@ import { liveReadNotes } from '../lib/live';
 import { act, newRequest, unreadThreads } from '../store/actions';
 import { escrow, free, hb, hPrice, paused, sellerLocked, setState, useApp } from '../store/store';
 import { Icon, Logo, type IconName } from './icons';
-import { Gate, Head, Pop, RLink, usePop } from './parts';
+import { Face, Gate, Head, Pop, RLink, usePop } from './parts';
 
 /** Initials from a display name, for the avatar while the account's own data is still loading. */
 const initialsOf = (name?: string) => (name ?? '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join('');
@@ -81,11 +81,12 @@ function NoteMenu({ close }: { close: () => void }) {
   return (
     <>
       <div className="ph">Notifications</div>
-      {n.length ? n.map((x) => (
-        <RLink key={x[2]} r={x[4]} className="mi note" role="menuitem" onClick={close}>
+      {/* a fixed-size list: each note is cut to two lines (the full text is in its tooltip) and the list scrolls */}
+      {n.length ? <div className="note-list">{n.map((x, i) => (
+        <RLink key={x[2] + i} r={x[4]} className="mi note" role="menuitem" onClick={close} title={x[2]}>
           <Icon name={x[0]} className={x[1]} /><span><b>{x[2]}</b><span className="muted xsmall">{x[3]}</span></span>
         </RLink>
-      )) : <p className="muted small" style={{ padding: '8px 12px' }}>Nothing yet.</p>}
+      ))}</div> : <p className="muted small" style={{ padding: '8px 12px' }}>Nothing yet.</p>}
     </>
   );
 }
@@ -184,7 +185,7 @@ export function Shell({ cur, children }: { cur: string; children: ReactNode }) {
                 <RLink r="saved" className="btn icon ghost dot-host" aria-label={`Saved, ${s.liked.length}`}><Icon name="heart" />{s.liked.length > 0 && <i className="num-dot">{s.liked.length}</i>}</RLink>
                 <RLink r={s.mode === 'sell' ? 'orders' : 'jobs'} className="btn sm ghost orders">{s.mode === 'sell' ? 'Orders' : 'Job requests'}</RLink>
                 <button ref={meRef} className="me-btn" onClick={meToggle} aria-label="Account menu" aria-haspopup="menu" aria-expanded={meOpen}>
-                  <span className="avatar">{ME.initials || initialsOf(s.user?.name)}</span><i className="online" aria-hidden="true" />
+                  <Face photo={s.restoring ? '' : ME.photo} initials={ME.initials || initialsOf(s.user?.name)} /><i className="online" aria-hidden="true" />
                 </button>
               </>
             ) : <button className="btn primary sm" onClick={act.signin}>Sign in</button>}
