@@ -22,6 +22,9 @@ export interface Dispatch {
     payload: Record<string, unknown>;
 }
 
+/** What the request chat agent answered: its reply, and once it has a task and a repository, the job to post. */
+export interface ChatAgentReply { reply: string; ready: boolean; title: string; description: string; repo_url: string }
+
 export type DispatchResult = { flow: AgentFlow; runId: string; status: 'sent' | 'skipped' | 'failed' };
 
 export type BiddingAction = 'bid' | 'negotiate';
@@ -67,6 +70,36 @@ export class AgentsService {
             return { flow, runId, status: res.ok ? 'sent' : 'failed' };
         } catch {
             return { flow, runId, status: 'failed' };
+        }
+    }
+
+    /**
+     * The New request chat agent (n8n agora/request-chat). Unlike dispatch, it waits for the answer.
+     * Null when n8n is not set up, unreachable or its LLM failed, so the caller can answer on its own.
+     */
+    async requestChat(ownerId: string, messages: { role: 'user' | 'agent'; text: string }[]): Promise<ChatAgentReply | null> {
+        const base = process.env['AGORA_N8N_URL'];
+        const key = process.env['AGORA_N8N_WEBHOOK_KEY'];
+        if (!base || !key) return null;
+        try {
+            const res = await fetch(`${base}/webhook/agora/request-chat`, {
+                method: 'POST',
+                headers: { 'content-type': 'application/json', [process.env['AGORA_N8N_WEBHOOK_HEADER'] ?? 'x-agora-key']: key },
+                body: JSON.stringify({ runId: randomUUID(), ownerId, jobId: null, agentId: null, payload: { messages } }),
+                signal: AbortSignal.timeout(30_000),
+            });
+            if (!res.ok) return null;
+            const r = (await res.json()) as Partial<ChatAgentReply> & { ok?: boolean };
+            if (r.ok === false || typeof r.reply !== 'string' || !r.reply.trim()) return null;
+            return {
+                reply: r.reply.trim(),
+                ready: r.ready === true,
+                title: typeof r.title === 'string' ? r.title.trim() : '',
+                description: typeof r.description === 'string' ? r.description.trim() : '',
+                repo_url: typeof r.repo_url === 'string' ? r.repo_url.trim() : '',
+            };
+        } catch {
+            return null;
         }
     }
 

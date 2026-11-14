@@ -1,0 +1,240 @@
+{
+  "name": "Agora 07b: request chat",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "agora/request-chat",
+        "authentication": "headerAuth",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "bafd08bc-0cf0-4e7e-8ca4-20d757285b8b",
+      "name": "Webhook",
+      "webhookId": "3f5b537f-8e37-4cd7-bb4e-757438a695ce",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.2,
+      "position": [
+        0,
+        0
+      ],
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "dA2tJ7bHduzivKol",
+          "name": "X-Agora-Secret"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Body: { runId, ownerId, payload: { messages: [{ role: 'user' | 'agent', text }] } }\nconst b = $input.first().json.body || {};\nconst msgs = ((b.payload && b.payload.messages) || []).slice(-30)\n  .filter((m) => m && typeof m.text === 'string' && m.text.trim())\n  .map((m) => (m.role === 'agent' ? 'Agent: ' : 'User: ') + m.text.trim().slice(0, 3000));\nif (!msgs.length) throw new Error('No messages');\nconst system = `You are the buyer agent on AGORA, a marketplace where sellers and their AI agents fix code\nand are paid from escrow on NEAR only when locked tests pass.\nTalk with the user like a friendly, normal assistant. Answer greetings, small talk and questions about AGORA\nbriefly (at most 3 sentences). Do not push for a job when the user is only chatting.\nWhen the user wants work done, you need two things before a job can be posted:\n1. A clear description of the change: what is wrong or what to build, and how to tell it is done.\n2. The public GitHub repository link, like https://github.com/owner/repo, written by the user.\nAsk for whatever is missing, one short question at a time. Never invent a repository.\nSet ready to true only when both are known and the user wants the job posted.\nReturn JSON with keys:\nreply (string, what you say to the user),\nready (boolean),\ntitle (string, at most 80 characters, when ready),\ndescription (string, the full job description gathered from the whole conversation, when ready),\nrepo_url (string, the repository link the user gave, or empty).`;\nconst user = `Conversation so far, oldest first. Answer the last User message.\n<untrusted>\n${msgs.join('\\n')}\n</untrusted>`;\nreturn [{ json: { provider: 'general', system, user, required: ['reply', 'ready'], maxTokens: 700,\n  ownerId: b.ownerId || 'platform', workflow: 'request-chat', softFail: true } }];"
+      },
+      "id": "7ff136e3-198e-4cec-89ea-36d92bc2cd4c",
+      "name": "Build prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        224,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "GgJgGRBgpwaXrfGx",
+          "mode": "list",
+          "cachedResultUrl": "/workflow/GgJgGRBgpwaXrfGx",
+          "cachedResultName": "Agora lib: llm-json"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "provider": "={{ $json.provider }}",
+            "system": "={{ $json.system }}",
+            "user": "={{ $json.user }}",
+            "required": "={{ $json.required }}",
+            "maxTokens": "={{ $json.maxTokens }}",
+            "ownerId": "={{ $json.ownerId }}",
+            "workflow": "={{ $json.workflow }}",
+            "softFail": "={{ $json.softFail }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "provider",
+              "displayName": "provider",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "system",
+              "displayName": "system",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "user",
+              "displayName": "user",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "required",
+              "displayName": "required",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "array",
+              "removed": false
+            },
+            {
+              "id": "maxTokens",
+              "displayName": "maxTokens",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "number",
+              "removed": false
+            },
+            {
+              "id": "ownerId",
+              "displayName": "ownerId",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "workflow",
+              "displayName": "workflow",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "string",
+              "removed": false
+            },
+            {
+              "id": "softFail",
+              "displayName": "softFail",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "canBeUsedToMatch": true,
+              "type": "boolean",
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "id": "75c39411-166a-4469-a937-d8f688e19ca7",
+      "name": "Ask LLM",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.4,
+      "position": [
+        448,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const r = $input.first().json || {};\nconst d = r.ok ? r.data : null;\nif (!d || typeof d.reply !== 'string') return [{ json: { ok: false, error: r.error || 'no reply' } }];\nreturn [{ json: { ok: true, reply: d.reply, ready: d.ready === true || d.ready === 'true',\n  title: String(d.title || ''), description: String(d.description || ''), repo_url: String(d.repo_url || '') } }];"
+      },
+      "id": "98e032d6-417a-4f18-a014-888ca060df9c",
+      "name": "Shape reply",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "firstIncomingItem",
+        "options": {}
+      },
+      "id": "48ee066a-0f7f-438a-8876-fbd23085bd56",
+      "name": "Respond",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        896,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "Build prompt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build prompt": {
+      "main": [
+        [
+          {
+            "node": "Ask LLM",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ask LLM": {
+      "main": [
+        [
+          {
+            "node": "Shape reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Shape reply": {
+      "main": [
+        [
+          {
+            "node": "Respond",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "tags": []
+}

@@ -217,14 +217,14 @@ function endTour(finished: boolean) {
  */
 export function resetRequest(keepDraft = false) {
   setState((s) => ({
-    asked: false, askText: '', draft: keepDraft ? s.draft : '', extra: [], bidsShown: 0, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
+    asked: false, askText: '', draft: keepDraft ? s.draft : '', extra: [], bidsShown: 0, pendingAsk: false, followUps: [], reqChat: [], liveSpec: { state: 'loading' },
     offerSt: '', preNeg: false, declined: [], streamId: s.streamId + 1,
   }));
 }
 /** New request from anywhere: the empty composer. The earlier job keeps its state and stays in Job requests. */
 export function newRequest() {
   if (getState().tour >= 0) return; /* the tour drives this page itself */
-  setState({ asked: false, draft: '', extra: [], followUps: [] });
+  setState({ asked: false, draft: '', extra: [], followUps: [], reqChat: [] });
 }
 /** Reopens the current job's conversation on New request, from its card or a "Back to the offers" link. */
 export function openRequest() {
