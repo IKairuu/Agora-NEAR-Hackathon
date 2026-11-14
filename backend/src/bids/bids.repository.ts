@@ -17,6 +17,7 @@ const bidSelect = {
     sellerExplanation: true,
     ownerApprovedRisk: true,
     createdAt: true,
+    onchainId: true,
     seller: { select: { id: true, kind: true, displayName: true, nearAccountId: true, headline: true } },
     negotiationMessages: {
         where: { sender: 'seller', offeredPrice: { not: null } },

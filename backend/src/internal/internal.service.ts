@@ -1,8 +1,8 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { z } from 'zod';
 import { AgentsService } from '../agents/agents.service.js';
-import { chainBidId, chainJobId, ChainService } from '../chain/chain.service.js';
-import { IndexerService } from '../indexer/indexer.service.js';
+import { chainBidId, chainIdOf, chainJobId, ChainService, usdcUnits } from '../chain/chain.service.js';
+import { IndexerService, ownerOf } from '../indexer/indexer.service.js';
 import { ReviewsService } from '../reviews/reviews.service.js';
 import { InternalRepository, NotificationInput } from './internal.repository.js';
 
@@ -275,9 +275,56 @@ export class InternalService {
             actions.push(`buyer ${(await this.agentsService.dispatchBuyer(job.id)).status}`);
             return;
         }
+        if (!this.chainService.isMock() && bid.onchainId === null) {
+            /* the bidding flow only writes the bid row; on a real chain the backend places it with the seller's agents key */
+            const days = Math.max(1, Math.round(amount(result['etaDays']) ?? amount(result['days']) ?? bid.deliveryDays ?? 1));
+            const placed = await this.placeAgentBid(bid, job, price, days);
+            if (!placed.ok) {
+                await this.internalRepository.withdrawAgentBid(bid.id, `Not placed on NEAR: ${placed.reason}`);
+                actions.push(`bid withdrawn: ${placed.reason}`);
+                notes.push({ userId: bid.seller.ownerId, kind: 'held', title: `Your agent's bid on ${job.ref} did not reach NEAR`, body: placed.reason, link: '/orders' });
+                return;
+            }
+            actions.push(`bid on chain ${placed.txHash}`);
+        }
         await this.agentsService.dispatch('fraud_lure', { ownerId: job.buyerId, jobId: job.id, payload: { subjectType: 'bid', subjectId: bid.id } });
         actions.push('bid checks started');
         notes.push({ userId: bid.seller.ownerId, kind: 'offer', title: `Your agent bid on ${job.ref}`, body: `${usdc(price)}. The fraud and price checks run before the buyer sees it.`, link: '/orders' });
+    }
+
+    /**
+     * place_bid for an AI agent's bid, signed by agents.<owner> (the only account the contract maps to the owner).
+     * A seller who was never registered on chain is registered by the platform and the bid is tried once more.
+     */
+    private async placeAgentBid(
+        bid: NonNullable<Awaited<ReturnType<InternalRepository['getAgentBid']>>>,
+        job: NotifyJob,
+        price: number,
+        days: number,
+    ): Promise<{ ok: true; txHash: string } | { ok: false; reason: string }> {
+        if (job.onchainId === null || job.onchainId === undefined) return { ok: false, reason: 'the job is not on NEAR yet' };
+        const acct = bid.seller.nearAccountId;
+        const signer = acct.startsWith('agents.') ? acct : bid.seller.owner.agentsAccountId ?? '';
+        if (!signer.startsWith('agents.')) return { ok: false, reason: 'the seller has no agents account to sign with' };
+        const args = { job_id: job.onchainId.toString(), price: usdcUnits(price), days };
+        const place = () => this.chainService.callAs('owner', signer, 'place_bid', args);
+        try {
+            let tx;
+            try {
+                tx = await place();
+            } catch (e) {
+                if (!/Not a registered seller/i.test(e instanceof Error ? e.message : '')) throw e;
+                const platform = process.env['AGORA_PLATFORM_ACCOUNT'] ?? 'agora-testnet.testnet';
+                await this.chainService.callAs('platform', platform, 'register_seller', { account_id: ownerOf(signer) }, '1');
+                tx = await place();
+            }
+            const onchainId = chainIdOf(tx.result);
+            if (onchainId === null) return { ok: false, reason: 'place_bid returned no bid id' };
+            await this.internalRepository.setAgentBidOnchain(bid.id, onchainId, tx.tx_hash);
+            return { ok: true, txHash: tx.tx_hash };
+        } catch (e) {
+            return { ok: false, reason: e instanceof Error ? e.message : 'place_bid failed' };
+        }
     }
 
     private async onGuardian(ok: boolean, error: string | null, result: Record<string, unknown>, actions: string[], notes: NotificationInput[]) {

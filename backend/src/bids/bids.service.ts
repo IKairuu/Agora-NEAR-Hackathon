@@ -114,7 +114,12 @@ export class BidsService {
         const authId = await this.authId(token);
         const owned = await this.bidsRepository.getOwnedJob(authId, this.jobKey(job));
         if (!owned) throw new NotFoundException('Job not found');
-        const rows = await this.bidsRepository.getBids(owned.id);
+        /*
+         * In real mode only offers that reached NEAR can be hired. AI agent bids written straight to the database by
+         * the bidding flow have no on-chain bid, so the buyer does not see them instead of failing at funding.
+         */
+        const all = await this.bidsRepository.getBids(owned.id);
+        const rows = this.chainService.isMock() ? all : all.filter((r) => r.onchainId !== null);
         const reps = await this.bidsRepository.getReputations([...new Set(rows.map((r) => r.seller.nearAccountId))]);
         const repOf = new Map(reps.map((r) => [r.accountId, r]));
         const offers = rows
