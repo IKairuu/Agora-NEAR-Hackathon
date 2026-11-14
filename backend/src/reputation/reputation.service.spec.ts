@@ -9,8 +9,8 @@ import { ReputationService } from './reputation.service';
 const BUYER = '0f9b6c1e-4a2d-4c8e-9b1a-7d3e5f6a8b90';
 const SELLER_USER = '1a2b3c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d';
 const job = (over: object = {}) => ({
-    id: 'j1', ref: 'J-1042', status: 'released', buyerId: BUYER, buyer: { nearAccountId: 'lumen.testnet' },
-    seller: { ownerId: SELLER_USER, nearAccountId: 'patchsmith.testnet' }, ratings: [], ...over,
+    id: 'j1', ref: 'J-1042', status: 'released', buyerId: BUYER, onchainId: 42n, buyer: { nearAccountId: 'lumen.testnet', agentsAccountId: 'agents.lumen.testnet' },
+    seller: { ownerId: SELLER_USER, nearAccountId: 'patchsmith.testnet', owner: { agentsAccountId: 'agents.patchsmith.testnet' } }, ratings: [], ...over,
 });
 
 describe('ReputationService', () => {
@@ -53,14 +53,14 @@ describe('ReputationService', () => {
 
     it('lets the buyer rate the seller through the contract', async () => {
         await expect(service.createRating('Bearer t', { job_id: 'J-1042', stars: 5, comment: ' Great fix ' })).resolves.toMatchObject({ message: 'Rating Successfully Saved', ratee: 'patchsmith.testnet' });
-        expect(chain.callAs.mock.calls[0]).toEqual(['owner', 'lumen.testnet', 'rate', { job_id: 'J-1042', stars: 5 }]);
+        expect(chain.callAs.mock.calls[0]).toEqual(['owner', 'agents.lumen.testnet', 'rate', { job_id: '42', stars: 5 }]);
         expect(repo.createRating.mock.calls[0]?.[0]).toMatchObject({ raterId: BUYER, rateeAccount: 'patchsmith.testnet', rateeUserId: SELLER_USER, comment: 'Great fix', ratingTx: 'mock-rate-1' });
     });
 
     it('lets the seller rate the buyer', async () => {
         caller = SELLER_USER;
         await service.createRating('Bearer t', { job_id: 'J-1042', stars: 4 } as never);
-        expect(chain.callAs.mock.calls[0]).toEqual(['owner', 'patchsmith.testnet', 'rate', { job_id: 'J-1042', stars: 4 }]);
+        expect(chain.callAs.mock.calls[0]).toEqual(['owner', 'agents.patchsmith.testnet', 'rate', { job_id: '42', stars: 4 }]);
         expect(repo.createRating.mock.calls[0]?.[0]).toMatchObject({ rateeAccount: 'lumen.testnet', rateeUserId: BUYER });
     });
 
@@ -68,6 +68,7 @@ describe('ReputationService', () => {
         [{ status: 'delivered' }, 'once the job is paid'],
         [{ ratings: [{ id: 'r0' }] }, 'already rated'],
         [{ buyer: { nearAccountId: null } }, 'need a NEAR account'],
+        [{ buyer: { nearAccountId: 'lumen.testnet', agentsAccountId: null } }, 'agents account'],
     ])('refuses a rating it should not save %#', async (over, msg) => {
         repo.getRatingTarget.mockResolvedValue(job(over) as never);
         await expect(service.createRating('Bearer t', { job_id: 'J-1042', stars: 5 } as never)).rejects.toThrow(msg);

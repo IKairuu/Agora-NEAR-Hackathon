@@ -34,8 +34,8 @@ export class ReputationRepository {
             where: { ...key, OR: [{ buyerId: userId }, { seller: { ownerId: userId } }] },
             select: {
                 id: true, ref: true, onchainId: true, status: true, buyerId: true,
-                buyer: { select: { nearAccountId: true } },
-                seller: { select: { ownerId: true, nearAccountId: true } },
+                buyer: { select: { nearAccountId: true, agentsAccountId: true } },
+                seller: { select: { ownerId: true, nearAccountId: true, owner: { select: { agentsAccountId: true } } } },
                 ratings: { where: { raterId: userId }, select: { id: true } },
             },
         });
