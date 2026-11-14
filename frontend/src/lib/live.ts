@@ -1,6 +1,6 @@
 import { ARRIVE, BIDS, DAO_COUNCIL, DONE_JOBS, NEG_LOG, SETTLED, GIGS, HELD, JOB, JOB_LISTING, KICKOFF, ME, OPEN_JOBS, OTHER_JOBS, REPLIES, REVIEWERS, SELLERS_DIR, SPEC, T_MSGS, T_TIME, THREADS, gigBy, liveOpenRef, setLiveOpenJobs, type Bid, type DemoData, type Gig, type OpenJob, type Order, type OtherJob, type SellerDir } from '../data/data';
 import type { ChatMsg } from '../store/store';
-import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type SellForm, type LiveNote, type LiveSpec, type SpecDoc, type Limits, type WalletItem } from '../store/store';
+import { DEMO_SELL_FORM, EMPTY_SELL_FORM, getState, setState, subscribe, toast, type FollowUp, type State, type SellForm, type LiveNote, type LiveSpec, type SpecDoc, type Limits, type WalletItem } from '../store/store';
 import type { Thread } from '../store/actions';
 import { api, ApiError } from './api';
 import { depositCall, mandateCall, pauseCall, sendCalls, unpauseCall, walletBalances, walletCreateAgents, walletSend, withdrawCall, type WalletCall } from './near';
@@ -276,6 +276,10 @@ async function loadCurrentJob(): Promise<void> {
   if (stage >= 2) await loadOffers(ref);
   /* also after a rejected attempt sends the job back to Protected, so the last votes stay visible */
   if (stage >= 4) await loadReviews(ref);
+  else setState({ rerun: null });
+  const pay = stage >= 5 ? await liveApi<PayView>(`/payments/v1?job=${ref}`, { quiet: true }).catch(() => null) : null;
+  if (stale(sid)) return;
+  setState({ pay });
   const offer = stage >= 2 ? await liveApi<HireOfferView>(`/negotiations/v1/offer?job=${ref}`, { quiet: true }).catch(() => null) : null;
   if (stale(sid)) return;
   setState((s) => {
@@ -294,14 +298,55 @@ async function loadCurrentJob(): Promise<void> {
 interface ReviewPanelView {
   deliveryId: string | null;
   reviewers: { id: string; model: string; att: string; state: number }[];
+  canRerun?: boolean;
+  rerunWhy?: string | null;
 }
+type PayView = NonNullable<State['pay']>;
 
 async function loadReviews(ref: string): Promise<void> {
   const res = await liveApi<ReviewPanelView>(`/reviews/v1?job=${ref}`, { quiet: true }).catch(() => null);
-  if (!res?.deliveryId) return;
+  if (!res?.deliveryId) { setState({ rerun: null }); return; }
+  setState({ rerun: res.canRerun ? { id: res.deliveryId, why: res.rerunWhy ?? null } : null });
   replace(REVIEWERS, res.reviewers.map((r) => ({ id: r.id, model: r.model, att: r.att })));
   const votes = res.reviewers.map((r) => r.state);
   setState({ votes, voting: votes.includes(1) });
+}
+
+const RERUN_DONE: Record<string, string> = {
+  runner_failed: 'The tests are running again.',
+  split_vote: 'A new review round started with fresh reviewers.',
+  timeout: 'The stalled review started again.',
+};
+
+/** Runs the locked tests again on the followed job's delivery (runner failed, split vote, or no result for 12 hours). */
+export async function liveRerun(): Promise<void> {
+  const r = getState().rerun;
+  if (!r) return;
+  const res = await api<{ runner: string; why: string }>('/reviews/v1/rerun', { body: { delivery_id: r.id } }).catch(() => null);
+  if (!res) return;
+  toast(res.runner === 'queued' ? (RERUN_DONE[res.why] ?? 'The review started again.') : 'Saved, but the test runner is still not reachable. Try again in a minute.', res.runner === 'queued' ? undefined : 'hold');
+  await refreshAll(false);
+}
+
+const PAY_PATH = { refund: '/payments/v1/refund', extra_attempt: '/payments/v1/extra-attempt', refund_expired: '/payments/v1/refund-expired' } as const;
+const PAY_DONE = { refund: 'Refunded. The protected USDC is back in your agent budget.', extra_attempt: 'The seller has one more attempt.', refund_expired: 'Refunded after the deadline. The USDC is back in your agent budget.' } as const;
+
+/** Buyer actions on the protected payment of the followed job. Each one is a contract call checked on chain. */
+export async function livePay(kind: keyof typeof PAY_PATH): Promise<void> {
+  const ref = getState().liveJob?.ref;
+  if (!ref) return;
+  const res = await api(PAY_PATH[kind], { body: { job_id: ref } }).catch(() => null);
+  if (!res) return;
+  toast(PAY_DONE[kind]);
+  await refreshAll(false);
+}
+
+/** Starts (or continues) a conversation with a service's seller and returns the thread id. */
+export async function liveMessageSeller(sellerId: string, title: string): Promise<string | null> {
+  const res = await api<{ id: string }>('/threads/v1', { body: { seller_id: sellerId, title: title.slice(0, 140), text: `Hi! I'm interested in "${title}". Can we talk about it?` } }).catch(() => null);
+  if (!res) return null;
+  await loadThreads();
+  return res.id;
 }
 
 /** Downloads the evidence bundle for the followed job. */

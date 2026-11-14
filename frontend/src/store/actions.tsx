@@ -5,7 +5,7 @@ import { finishWalletSignIn, linkedIdsOf, linkErrorText, linkProvider, NO_IDS, t
 import { authConfigured, supabase } from '../lib/supabase';
 import { api } from '../lib/api';
 import type { OwnershipProof } from '../lib/near';
-import { liveReadThread, appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveWithdraw as liveMockWithdraw, walletMode, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveBundle, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
+import { liveMessageSeller, liveReadThread, appDataLoaded, beginRestoring, demoLoaded, goLive, isLive, leaveLive, stopRestoring, liveAddFunds, liveWithdraw as liveMockWithdraw, walletMode, liveDiscardAsk, liveLeaveAsk, liveDisputeNext, liveOpenDispute, liveBundle, livePause, liveRate, liveSaveMandate, liveUnpause, liveHire, liveKeepWait, liveLike, liveOpenGig, liveWho, liveLoadSellProfile, liveLockSpec, liveOrderAccept, liveOrderDecline, livePlaceBid, livePostPublic, livePublishSeller, liveRequestService, liveRole, liveSendOffer, liveSendThread, liveSend } from '../lib/live';
 import { closeModal, getState, hb, hPrice, openModal, setState, storage, toast, type ChatMsg, type State } from './store';
 
 /* ---------------- navigation ---------------- */
@@ -485,6 +485,11 @@ export const act = {
   },
   msgsvc: () => {
     const s = getState(); const gg = gigBy(s.svc); if (!gg) return;
+    if (isLive()) {
+      if (!gg.sellerId) { toast('This seller can not be messaged yet.', 'hold'); return; }
+      void liveMessageSeller(gg.sellerId, gg.title).then((id) => { if (id) { setState({ thread: id, inboxF: 'buy' }); go('chat'); } });
+      return;
+    }
     const k = BIDS.find((b) => b.name === gg.seller)?.key;
     if (k && s.stage >= 5 && k === s.hire) { setState({ thread: 'demo' }); go('chat'); return; }
     toast(`Message sent to ${gg.seller}. Replies arrive in Messages.`);

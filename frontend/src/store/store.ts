@@ -82,6 +82,10 @@ export interface State {
   /** The job the New request, chat and room screens follow in live mode. */
   liveJob: { id: string; ref: string } | null;
   liveThreads: Thread[];
+  /** Real mode: the followed job's delivery when its tests can be run again (runner failed, split vote, stalled). */
+  rerun: { id: string; why: string | null } | null;
+  /** Real mode: what the buyer can do with the protected payment, from GET /payments/v1. */
+  pay: { attemptsLeft: number; actions: Record<'refund' | 'extra_attempt' | 'refund_expired', { allowed: boolean; why: string | null }> } | null;
   notes: { unread: number; items: LiveNote[] };
   /** Live balances and pause state from the wallet and limits API. */
   money: { available: number; escrowed: number; usedToday: number; agentsReady?: boolean; paused: boolean; earned?: number; earnings?: { acct: string; name: string; available: number }[] } | null;
@@ -138,7 +142,7 @@ const initialState: State = {
   who: '', oj: 0, exTab: 'services', ssort: 'rating', fromHero: '',
   stars: 0, dReason: '', mail: '', walletLinked: false,
   user: saved?.user ?? null,
-  live: false, liveJob: null, liveThreads: [], notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null, walletErr: false, walletItems: [], limits: null,
+  live: false, liveJob: null, liveThreads: [], rerun: null, pay: null, notes: { unread: 0, items: [] }, money: null, chain: null, walletBal: null, walletErr: false, walletItems: [], limits: null,
   modal: null, dataReady: false, restoring: !!saved?.user && authConfigured, pendingAsk: false, followUps: [], liveSpec: { state: 'loading' },
   sellForm: DEMO_SELL_FORM, sellLoaded: false,
 };

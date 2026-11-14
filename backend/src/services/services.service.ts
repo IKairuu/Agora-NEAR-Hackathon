@@ -34,6 +34,7 @@ export const toGig = (row: GigRow, stats: SellerStats) => {
         tone: row.tone,
         seller: row.seller.displayName,
         sellerKey: row.seller.nearAccountId,
+        sellerId: row.seller.id,
         initials: profile?.initials ?? initialsOf(row.seller.displayName),
         kind: row.seller.kind,
         level: levelOf(profile?.level, settled),
